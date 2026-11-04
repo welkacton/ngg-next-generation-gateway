@@ -616,3 +616,25 @@ curl -X PUT -H "$H" -H 'Content-Type: application/json' \
   -d '{"type":"DOMAIN-SUFFIX","value":".example.com","action":"PROXY","core_id":"mihomo","priority":50,"enabled":true}' \
   "$BASE/network/rules/r-example"
 ```
+
+### 整份内核原生配置端点（追加）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/nodes/templates` | 内置示例模板：`3x-ui-default` / `native-xray` / `remnawave-xray`，返回 `{id,name,kernel,content}` |
+| `POST` | `/api/v1/nodes/parse` | body `{kernel,content}` → 解析整份 Xray/sing-box JSON 或 Mihomo YAML；返回 `nodes` / `routing` / `detected` / `warnings`，只读不落库 |
+| `POST` | `/api/v1/nodes/from-native` | 同上解析后把节点合并进节点库（Fail-Closed） |
+| `GET` | `/api/v1/cores/{id}/config` | 读取内核当前有效配置（完整 JSON/YAML） |
+| `POST` | `/api/v1/cores/{id}/config/validate` | 调用内核自身校验器，不写文件 |
+| `PUT` | `/api/v1/cores/{id}/config` | **备份 → 原生校验 → 通过才替换**；失败保留原配置，响应含 `backup` |
+
+- `content` 支持 `@long-text:"..."` 与 `<long_text_quote>...</long_text_quote>` 包裹，后端自动剥离。
+- 解析时 `vless` + `mlkem768x25519plus...` → `mlkem-hybrid`，`freedom` → `direct`，`blackhole` → `reject`，
+  `socks` → `socks5`；`inboundTag` / `outboundTag` 支持数组；`domain` / `ip` 条件保留在 `routing[].matchers`。
+- 无法映射到协议目录的条目会被跳过并写入 `warnings`，不伪装成功。
+- 现场验收脚本：`node scripts/e2e-native.js`（需服务运行）。
+
+```bash
+curl -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"kernel":"xray-core","content":"{\"inbounds\":[...]}"}' "$BASE/nodes/parse"
+```

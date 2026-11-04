@@ -157,8 +157,9 @@ NGG_TEST_MIHOMO_BINARY=/abs/path/to/mihomo \
 NGG_TEST_ARCHIVE=/abs/path/to/mihomo.zip \
   go test ./... -count=1       # 额外启用真实二进制集成测试
 
-node scripts/e2e-verify.js     # Phase 1 端到端
-node bin/_verify/e2e_stage5.js # Stage 3~5 现场 API 验收（需服务运行）
+node scripts/e2e-verify.js    # Phase 1 端到端
+node scripts/e2e-stage5.js    # Stage 3~5 现场 API 验收（需服务运行）
+node scripts/e2e-native.js    # 整份原生配置解析 / 校验 / 应用（需服务运行）
 ```
 
 ## 开源与许可
