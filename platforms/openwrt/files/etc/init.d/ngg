@@ -1,0 +1,127 @@
+#!/bin/sh /etc/rc.common
+# NGG OpenWrt procd init 脚本（骨架，真实可执行结构）。
+#
+# 前提（由 ipk 安装步骤提供，本骨架不打包二进制）：
+#   /usr/bin/nggd          由 platforms/build.sh 交叉编译出的 nggd（linux/* 目标）
+#   /usr/share/ngg/web      Web UI 静态文件（仓库 web/dist）
+#   内核二进制与描述文件    由管理员自行安装
+# 本脚本读取 /etc/config/ngg，首次启动时生成 /etc/ngg/ngg.yaml（仅当不存在时），
+# 然后以 procd 实例方式拉起 nggd。nggd 会把自动生成的 API Token 写回该 YAML，
+# 因此脚本绝不覆盖已存在的配置文件，避免每次重启都丢失 Token。
+
+START=95
+STOP=10
+USE_PROCD=1
+
+PROG=/usr/bin/nggd
+PID_FILE=/var/run/nggd.pid
+
+# 把 UCI 的 1/0 转成 YAML 的 true/false
+yaml_bool() {
+    case "$1" in
+        1|true|yes|on|enabled) echo "true" ;;
+        *)                    echo "false" ;;
+    esac
+}
+
+# 仅当目标 YAML 不存在时生成；字段对齐 configs/ngg.example.yaml
+# 的 server / storage / cores / network 概念。
+prepare_config() {
+    [ -f "$config_file" ] && return 0
+    mkdir -p "$(dirname "$config_file")"
+
+    cat > "$config_file" <<EOF
+# 由 /etc/init.d/ngg 首次启动生成；后续由 nggd 自行写回自动生成的 token。
+server:
+    listen: ${listen}
+    port: ${port}
+    token: "${token}"
+    web_dir: ${web_dir}
+storage:
+    dir: ${storage_dir}
+cores:
+    descriptor_dir: ${descriptor_dir}
+    port_base: ${port_base}
+    port_stride: ${port_stride}
+network:
+    enabled: $(yaml_bool "$net_enabled")
+    fail_closed: $(yaml_bool "$fail_closed")
+    default_core: "${default_core}"
+    ingress:
+        enabled: true
+        listen: ${ingress_listen}
+        port: ${ingress_port}
+    dns:
+        enabled: true
+        listen: ${dns_listen}
+        port: ${dns_port}
+EOF
+    chmod 600 "$config_file"
+}
+
+start_service() {
+    config_load ngg
+
+    local enabled config_file listen port token web_dir storage_dir
+    local descriptor_dir port_base port_stride
+    local net_enabled fail_closed default_core ingress_listen ingress_port
+    local dns_listen dns_port tun
+
+    config_get_bool enabled main enabled 1
+    [ "$enabled" -eq 0 ] && return 0
+
+    config_get config_file  main config_file  '/etc/ngg/ngg.yaml'
+    config_get listen       main listen       '127.0.0.1'
+    config_get port         main port         '9090'
+    config_get token        main token        ''
+    config_get web_dir      main web_dir      '/usr/share/ngg/web'
+    config_get storage_dir  main storage_dir  '/etc/ngg/data'
+    config_get descriptor_dir main descriptor_dir '/etc/ngg/cores.d'
+    config_get port_base    main port_base    '17890'
+    config_get port_stride  main port_stride  '10'
+
+    config_get_bool net_enabled   network enabled 1
+    config_get_bool fail_closed   network fail_closed 1
+    config_get      default_core  network default_core 'mihomo'
+    config_get      ingress_listen network ingress_listen '127.0.0.1'
+    config_get      ingress_port  network ingress_port  '18080'
+    config_get      dns_listen    network dns_listen    '127.0.0.1'
+    config_get      dns_port      network dns_port      '18053'
+    config_get_bool tun           network tun 1
+
+    # Linux 统一 TUN 需要 /dev/net/tun 与 CAP_NET_ADMIN；缺失时给出明确提示，
+    # 但不阻止服务启动（可退化为 userspace SOCKS5/HTTP CONNECT 入口）。
+    if [ "$tun" -eq 1 ] && [ ! -e /dev/net/tun ]; then
+        logger -t ngg "warning: /dev/net/tun 不存在，统一 TUN 不可用，请检查 kmod-tun 与 CAP_NET_ADMIN"
+    fi
+
+    if [ ! -x "$PROG" ]; then
+        logger -t ngg "error: $PROG 不存在或不可执行，请先安装 nggd 二进制"
+        return 1
+    fi
+
+    mkdir -p "$storage_dir" "$descriptor_dir" "$(dirname "$config_file")"
+    prepare_config
+
+    procd_open_instance
+    procd_set_param command "$PROG" -config "$config_file"
+    # UCI 中显式设置 token 时通过环境变量覆盖（config.Load 支持 NGG_TOKEN）。
+    if [ -n "$token" ]; then
+        procd_set_param env "NGG_TOKEN=$token"
+    fi
+    procd_set_param respawn 3600 5 5
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param pidfile "$PID_FILE"
+    procd_set_param file "$config_file"
+    procd_close_instance
+}
+
+service_triggers() {
+    procd_add_reload_trigger "ngg"
+}
+
+reload_service() {
+    stop
+    start
+}

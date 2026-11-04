@@ -1,0 +1,237 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei',
+    'PingFang SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  min-height: 100%;
+}
+
+body {
+  background: #0f1419;
+  color: #e6edf3;
+}
+
+.page {
+  padding: 20px 24px 40px;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.page-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #8795a1;
+}
+
+.section-gap {
+  margin-bottom: 18px;
+}
+
+.mono {
+  font-family: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New',
+    monospace;
+}
+
+/* 配置编辑器：等宽字体，不引入 Monaco。 */
+.code-editor .n-input__textarea-el {
+  font-family: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New',
+    monospace !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  tab-size: 2;
+}
+
+.output-block {
+  margin: 0;
+  padding: 12px 14px;
+  background: #0c1116;
+  border: 1px solid #2b343e;
+  border-radius: 6px;
+  color: #b9c5cf;
+  font-family: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New',
+    monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* 实时日志视图 */
+.log-view {
+  height: calc(100vh - 320px);
+  min-height: 320px;
+  overflow: auto;
+  background: #0b1015;
+  border: 1px solid #2b343e;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New',
+    monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-meta {
+  color: #5d6b78;
+  margin-right: 10px;
+  user-select: none;
+}
+
+.log-stream {
+  display: inline-block;
+  min-width: 54px;
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.log-stdout {
+  color: #cdd7e0;
+}
+.log-stderr {
+  color: #e88080;
+}
+.log-ngg {
+  color: #36adcb;
+}
+.log-other {
+  color: #a5b1bc;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.hint {
+  font-size: 12.5px;
+  color: #8795a1;
+  line-height: 1.7;
+}
+
+.kv-label {
+  color: #8795a1;
+  font-size: 12.5px;
+  margin-bottom: 2px;
+}
+
+.kv-value {
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.cap-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px 14px;
+}
+
+.brand-logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #36adcb, #2a6f8f);
+  box-shadow: 0 0 14px rgba(54, 173, 203, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #06212b;
+  font-weight: 800;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.brand-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+}
+
+.brand-sub {
+  font-size: 11px;
+  color: #6d7b88;
+  margin-top: 2px;
+}
+
+.sider-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 18px;
+  font-size: 11px;
+  color: #6d7b88;
+  border-top: 1px solid #212a33;
+  line-height: 1.6;
+}
+
+.app-header {
+  height: 56px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #212a33;
+}
+
+.app-header-title {
+  font-size: 14px;
+  color: #b9c5cf;
+}
+
+.ws-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.ws-on {
+  background: #3fb984;
+  box-shadow: 0 0 8px #3fb984;
+}
+.ws-off {
+  background: #e88080;
+  box-shadow: 0 0 8px #e88080;
+}

@@ -1,0 +1,525 @@
+# NGG Stage 2~5 — REST API 文档（新增端点）
+
+> **适用版本**：Phase 1 + Stage 2~5 当前实现
+> **对应源码**：`internal/api/network.go`、`internal/api/stage45.go`、`internal/api/server.go`（`routes()` 第 96~140 行）、`internal/engine/stage45.go`、`internal/api/handlers.go`
+> **配套文档**：`02-api.md`（Phase 1 的 32 个端点）、`07-stage2-network-engine.md`（Stage 2 设计）、`08-stage3-5-features.md`（Stage 3~5 能力）
+> **文档状态**：以下 **40 个端点**均为 `server.go` 中实际注册的路由；请求体 / 响应体字段、HTTP 状态码、错误码全部以代码为准。
+
+---
+
+## 1. 通用约定
+
+### 1.1 基址与鉴权
+
+- Base URL：`http://127.0.0.1:9090/api/v1`（`server.listen` / `server.port` 可配，默认仅回环）。
+- 所有 `/api/` 路由由 `middleware` 双重校验：**socket 绑定回环地址** + `RemoteAddr` 必须回环；非本机 → `403 FORBIDDEN: NGG control API is local-only`。
+- 请求头 `Authorization: Bearer <token>`；缺失 / 错误 → `401 UNAUTHORIZED: missing or invalid API token`。
+- Token 首次启动自动生成并写入 `configs/ngg.yaml`（0600），可用 `NGG_TOKEN` 覆盖。
+
+### 1.2 统一错误格式
+
+所有错误响应是**单字段对象**（`server.go:writeErr`）：
+
+```json
+{ "error": "ERROR_CODE: 人类可读描述" }
+```
+
+`ERROR_CODE` 由 `errorCodeFor(status, msg)` 从**真实失败文本**推导，不按端点硬编码。本批端点实际会出现的映射：
+
+| 触发条件 | HTTP | `ERROR_CODE` |
+| --- | --- | --- |
+| 缺 / 错 Token | `401` | `UNAUTHORIZED` |
+| 非回环来源 | `403` | `FORBIDDEN` |
+| JSON 解析失败、缺必填字段（`path` / `name`） | `400` | `INVALID_ARGUMENT` |
+| 规则 / 配置 / 插件 / 链路 / 租户业务校验失败 | `422` | `CONFIG_INVALID` |
+| DNS 上游查询 / 域名被策略阻断 | `502` | `CORE_EXEC_FAILED` |
+| 错误文本含 `not registered` 或 `not found` | `404` | `CORE_NOT_FOUND` |
+| 其它 `404`（如 `unknown ... action`、`failed to load`） | `404` | `NOT_FOUND` |
+| 重复启动（文本含 `already running`） | `409` | `ALREADY_RUNNING` |
+| 其它 `409`（资源冲突、监听失败、引擎未初始化） | `409` | `STATE_CONFLICT` |
+| 网络引擎未初始化（`503 ServiceUnavailable`） | `503` | `INTERNAL_ERROR` |
+| 自检启动失败 / mkdir 失败 / panic | `500` | `INTERNAL_ERROR` |
+| 无健康 WAN 链路（`503`） | `503` | `INTERNAL_ERROR` |
+
+> `503` 不在 `errorCodeFor` 的 status 分支内，落到 `default → INTERNAL_ERROR`，这是**代码的实际行为**。错误文本若额外含 `not found` 等关键词，会优先命中对应前缀（例如 `rule X not found` 得到 `CORE_NOT_FOUND`）。
+
+### 1.3 通用成功结构
+
+`writeOK(w, msg)` 返回 `contracts.OperationResult`：`{"ok":true,"message":"..."}`（`data` 省略）。`writeJSON(w, 200, v)` 直接序列化对象 / 数组。
+
+### 1.4 端点分组
+
+| 组 | 端点数 | 小节 |
+| --- | --- | --- |
+| Stage 2~3 网络引擎 | 17 | §2 |
+| Stage 4 阶段状态 / 协议 / 后量子 / 插件 | 13 | §3 |
+| Stage 5 SD-WAN / 多租户 / 跨平台 | 10 | §4 |
+| **合计** | **40** | — |
+
+---
+
+## 2. Stage 2~3 网络引擎端点（17 个）
+
+### `GET /api/v1/network/status`
+
+- 请求体：无。
+- 响应 `200`：`engine.NetworkStatus()` → 若 `network==nil` 返回 `{"running":false,"stage":1}`；否则 `netengine.Engine.Status()`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `running` / `stage` | 运行态 / 固定 `2` |
+| `fail_closed` / `failover` | 配置开关 |
+| `ingress` | `{enabled, address, protocols:["socks5","socks4a","http-connect","http-absolute"]}` |
+| `tun` | `{configured(=TUN.AutoRoute), active, name, mtu, stats}`；`stats` 为 `TunStats{BytesIn,BytesOut,PacketsIn,PacketsOut,Sessions,Since}` |
+| `dns` | `dnsEngine.Status()` 见 §2.11 |
+| `rules` / `sessions` / `plugins` | 规则数 / 会话数 / 启用插件数 |
+| `endpoints` | `[]{core_id, kind, address, healthy, error?}`（真实健康探测） |
+| `healthy` | 健康内核 ID 数组（真实拨号） |
+| `resources` | `ResourceManager.Snapshot()`：`kind -> ["key=owner", ...]` |
+| `metrics` | `Metrics.Snapshot()`：`connections, active, bytes_in, bytes_out, direct, proxied, dropped, dns_queries, dns_cache_hits, rule_matches, kernel_errors, failovers, tun_packets_in, tun_packets_out, uptime_sec` |
+
+- 错误：仅通用 `401` / `403`。
+
+### `POST /api/v1/network/start`
+
+- 请求体：无。
+- 响应 `200`：`{"ok":true,"message":"NGG unified network engine started"}`。
+- 错误：`409 ALREADY_RUNNING`（重复 start，`ErrAlreadyRunning` 文本含 `already running`）；`409 STATE_CONFLICT`（资源预留冲突、DNS / ingress 监听失败、引擎未初始化）。
+
+### `POST /api/v1/network/stop`
+
+- 请求体：无。
+- 响应 `200`：`{"ok":true,"message":"NGG unified network engine stopped"}`（`Stop()` 在未运行时返回 `nil`，仍为 200）。
+- 错误：`409 STATE_CONFLICT`（停止过程出错）。
+
+### `GET /api/v1/network/config`
+
+- 请求体：无。
+- 响应 `200`：`netengine.Config`（`json` tag）：
+
+| 字段 | 子字段 |
+| --- | --- |
+| `enabled` / `fail_closed` / `failover` | bool |
+| `ingress` | `enabled, listen, port, auth_user, auth_pass` |
+| `tun` | **`Name, MTU, IPv4, IPv6, AutoRoute, StrictRoute`**（`TunConfig` 无 `json` tag，序列化为 Go 导出字段名，首字母大写） |
+| `dns` | `enabled, listen, port, upstreams, cache_ttl, hosts, block` |
+| `egress` | `interface, local_addr, mark, bypass_tun` |
+| `default_core` / `direct_on_failure` | string / bool |
+
+- 错误：`503 INTERNAL_ERROR`（`network engine not initialized`）。
+
+### `PUT /api/v1/network/config`
+
+- 请求体（字段均可选，指针类型，未提供则不改）：
+
+```json
+{
+  "fail_closed": true,
+  "failover": true,
+  "default_core": "mihomo",
+  "direct_on_failure": false,
+  "egress_mark": 20039,
+  "bypass_tun": true
+}
+```
+
+- 响应 `200`：`{"ok":true,"changed":["fail_closed",...],"requires_restart":["egress.mark","egress.bypass_tun"],"config":{...完整 Config...}}`。`egress_mark` / `bypass_tun` 的改动会进入 `requires_restart`（需重启网络引擎生效）。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`503 INTERNAL_ERROR`（引擎未初始化）。
+
+### `GET /api/v1/network/rules`
+
+- 请求体：无。
+- 响应 `200`：`{"rules":[Rule...],"default_action":"DIRECT","default_core":"..."}`。`Rule` 字段：`id, type, value, action, core_id, chain, tenant_id, priority, enabled, comment`。
+- 错误：`503 INTERNAL_ERROR`（引擎未初始化）。
+
+### `POST /api/v1/network/rules`
+
+- 请求体：单个 `Rule` 对象。
+
+```json
+{ "id":"r-example", "type":"DOMAIN-SUFFIX", "value":".example.com",
+  "action":"PROXY", "core_id":"mihomo", "priority":50, "enabled":true, "comment":"demo" }
+```
+
+- 响应 `200`：`{"ok":true,"rule":{...}}`。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`422 CONFIG_INVALID`（`Validate()` 失败：缺 `id`、重复 ID、未知 `type` / `action`、`PROXY` 缺 `core_id` 与 `chain`、非法正则、非法 CIDR）；`503 INTERNAL_ERROR`。
+- 类型 / 动作枚举见 `08-stage3-5-features.md` §1（10 种类型、4 种动作）。
+
+### `PUT /api/v1/network/rules`
+
+- 请求体（**Fail-Closed 全量替换**：全部规则校验通过才生效）：
+
+```json
+{ "rules":[ { "id":"r1","type":"MATCH","action":"PROXY","core_id":"mihomo","priority":10,"enabled":true } ],
+  "default_action":"DIRECT", "default_core":"mihomo" }
+```
+
+- 响应 `200`：`{"ok":true,"count":1}`。
+- 错误：`400 INVALID_ARGUMENT`；`422 CONFIG_INVALID`（任一规则非法或 ID 重复，原子拒绝）；`503 INTERNAL_ERROR`。
+
+### `DELETE /api/v1/network/rules/{id}`
+
+- 路径参数：`id`（`r.PathValue("id")`）。
+- 响应 `200`：`{"ok":true,"message":"rule removed"}`。
+- 错误：`404 CORE_NOT_FOUND`（`rule <id> not found` 含 `not found`）；`503 INTERNAL_ERROR`。
+
+### `POST /api/v1/network/rules/load`
+
+- 请求体：`{"path":"/abs/or/relative/rules.yaml"}`（`.yaml` / `.yml` / `.json`）。
+- 响应 `200`：`{"ok":true,"loaded":4,"path":"..."}`（返回 `RuleFile` 中的规则数）。
+- 错误：`400 INVALID_ARGUMENT`（`path` 缺失或 JSON 非法）；`422 CONFIG_INVALID`（读文件 / YAML 解析 / 规则校验失败）。
+
+### `GET /api/v1/network/dns`
+
+- 请求体：无。
+- 响应 `200`：`dnsEngine.Status()` → `{enabled, running, listen, port, upstreams, hosts, blocked, cache_entries}`（`hosts` / `blocked` / `cache_entries` 为条目数）。
+- 错误：仅通用 `401` / `403`。
+
+### `POST /api/v1/network/dns/resolve`
+
+- 请求体：`{"name":"www.example.com","type":"A"}`（`type` 可省略，缺省 `"A"`；可填 `"AAAA"`）。
+- 响应 `200`：`{"ok":true,"name":"...","type":"A","answers":["93.184.216.34"]}`。
+- 错误：`400 INVALID_ARGUMENT`（`name` 缺失 / JSON 非法）；`502 CORE_EXEC_FAILED`（上游查询失败或 `domain X blocked by NGG DNS policy`）。
+
+### `POST /api/v1/network/dns/hosts`
+
+- 请求体：`{"hosts":{"internal.test":"10.0.0.9"},"block":["ads.example"]}`（两个字段均可省）。
+- 响应 `200`：`{"ok":true,"hosts":1,"block_added":1}`（会清空 DNS 缓存）。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）。
+
+### `GET /api/v1/network/sessions`
+
+- 请求体：无。响应 `200`：`SessionManager.List(200)` → `[]SessionRec`（最多 200 条）。
+- `SessionRec` **无 `json` tag**，字段为 Go 导出名：`Session`（内含 `ID, Network, Src, Dst, Domain, Rule, CoreID, CreatedAt, FailClosed, TenantID, Tags`）、`TenantID`、`Tags`、`BytesIn`、`BytesOut`、`State`（`establishing|active|closed|failed`）、`LastError`。
+- 错误：仅通用 `401` / `403`。
+
+### `GET /api/v1/network/endpoints`
+
+- 请求体：无。响应 `200`：`CoreBridge.Endpoints()` → `[]{core_id, kind, address, healthy, error?}`；`kind ∈ socks5|http-connect|mixed|transparent`，`healthy` 来自真实 TCP 拨号。
+- 错误：仅通用 `401` / `403`。
+
+### `POST /api/v1/network/selftest`
+
+- 请求体（可空 body；`ContentLength>0` 才解析）：`{"core_id":"mihomo"}`（`core_id` 为空表示走 DIRECT 路径自检）。服务端 30s 超时。
+- 响应 `200`（成功）：
+
+```json
+{ "ok":true, "target":"127.0.0.1:54321", "proxy":"127.0.0.1:18080",
+  "core_id":"mihomo", "bytes":78, "latency_ms":1.037,
+  "path":"NGG ingress -> mihomo -> echo", "echo":"NGG-SELFTEST:...", "sessions":1 }
+```
+
+- 响应 `200`（自检判定失败，HTTP 仍为 200）：`{"ok":false,"target":...,"proxy":...,"core_id":...,"error":...,"fail_closed":true}`（SOCKS5 拨号失败）或 `{"ok":false,"error":"echo payload mismatch","got":...,"want":...}`。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`500 INTERNAL_ERROR`（echo server 启动 / 写 / 读失败、ingress 未监听、临时规则安装失败）。
+- **真实自检**：起本地 echo server → 经 NGG 入口 + 选定内核 → 校验字节逐字回显，绝不伪造成功。实测 `latency_ms≈1.04`、`bytes_out=156`。
+
+### `POST /api/v1/network/packettest`
+
+- 请求体：无。内部用 `syntheticDNSPacket()` 构造真实 IPv4/UDP/53 包喂给 `PacketProcessor`。
+- 响应 `200`：
+
+```json
+{ "action":"dns", "parse_error":"<nil>",
+  "packet": { "version":4, "protocol":"udp", "src":"10.89.0.2",
+              "dst":"10.89.0.1", "src_port":12345, "dst_port":53, "is_dns":true } }
+```
+
+- 错误：`400 INVALID_ARGUMENT`（`Process()` 返回错误，例如目标端口被登记为保护端口时回环被拒）。
+
+---
+
+## 3. Stage 4 端点（13 个）
+
+### `GET /api/v1/stages`
+
+- 请求体：无。响应 `200`：`engine.Stages()`（下列数值为**新引擎初始态的示例值**，实际值由运行时注册表 / 规则 / 插件 / 租户 / 链路数量决定）：
+
+```json
+{
+  "stage1": { "name":"统一管理中心 / 多内核引擎", "status":"complete", "kernels":3 },
+  "stage2": { "name":"统一 TUN / 会话 / Packet Processor / Dispatcher / Core Bridge",
+              "status":"implemented",
+              "note":"Linux TUN requires CAP_NET_ADMIN; userspace ingress is fully active on all platforms",
+              "active":true },
+  "stage3": { "name":"统一规则引擎 / DNS / 出入口策略", "status":"implemented", "rules":4 },
+  "stage4": { "name":"VPN 协议中心 / 后量子 / 插件运行时", "status":"implemented", "protocols":16, "plugins":0 },
+  "stage5": { "name":"SD-WAN / 多租户 / 跨平台骨架", "status":"implemented", "tenants":1, "links":0 }
+}
+```
+
+- 错误：仅通用 `401` / `403`。
+
+### `GET /api/v1/protocols`
+
+- 查询参数：`category`（可选；`vpn` / `encrypted-proxy` / `post-quantum`；空则返回全部）。
+- 响应 `200`：`[]Spec`（按 ID 排序，内置 16 个）。`Spec` 字段：`id, name, category, transport, default_port, ports, kernels, features, pq_capable, requires_root, description, enabled`。
+- 错误：仅通用 `401` / `403`。
+
+### `GET /api/v1/protocols/{id}`
+
+- 路径参数：`id`。响应 `200`：`Spec`。
+- 错误：`404 CORE_NOT_FOUND`（`protocol <id> not found`）。
+
+### `POST /api/v1/protocols/{id}/enable`
+
+- 请求体：`{"enabled":true}`。
+- 响应 `200`：`{"ok":true,"protocol":{...Spec...}}`。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`404 CORE_NOT_FOUND`（`protocol "<id>" not registered` 含 `not registered`）。
+
+### `POST /api/v1/protocols/{id}/config`
+
+- 请求体：`{"kernel":"sing-box","params":{"server":"198.51.100.1","port":51820,"private_key":"...","peer_public_key":"..."}}`。
+- 响应 `200`：`{"ok":true,"protocol":"wireguard","kernel":"sing-box","format":"json","content":"{...}","validated":true}`（`format ∈ json|yaml|conf`，`content` 为**真实生成且经格式校验**的内核原生配置）。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法 / `no config generator for protocol "<id>" on kernel "<kernel>"`）；`422 CONFIG_INVALID`（`ValidateConfig` 解析失败）。
+- **能力边界**：只生成配置片段并做格式校验，**不重写内核协议栈、不执行握手**。
+
+### `GET /api/v1/pq/status`
+
+- 响应 `200`：
+
+```json
+{ "suite":"NGG-HYBRID-X25519-MLKEM768-HKDFSHA256-AES256GCM",
+  "mlkem":"ML-KEM-768 (FIPS 203, crypto/mlkem)", "classical":"X25519 (crypto/ecdh)",
+  "kdf":"HKDF-SHA256", "aead":"AES-256-GCM", "key_bytes":32,
+  "implemented":true, "go_version":"go1.27.3",
+  "note":"用于 NGG 节点间控制信道；内核数据面协议仍由各内核自行实现" }
+```
+
+- 错误：仅通用 `401` / `403`。
+
+### `POST /api/v1/pq/selftest`
+
+- 请求体：无。响应 `200`：`pq.SelfTest()` → `{ok, suite, mlkem, classical, kem, aead, encapsulation_key_bytes, ciphertext_bytes, key_bytes}`（`ciphertext_bytes=1088`，`key_bytes=32`）。真实 `net.Pipe()` 混合握手 + AES-256-GCM 往返。
+- 错误：`500 INTERNAL_ERROR`（握手 / 加解密失败）。
+
+### `GET /api/v1/plugins`
+
+- 响应 `200`：`[]Plugin` → `{manifest, loaded, error?}`。`Manifest` 字段：`id, name, kind, source, hooks, permissions, enabled, description`。
+- 错误：仅通用 `401` / `403`。
+
+### `POST /api/v1/plugins`
+
+- 请求体：`Manifest` 对象。
+
+```json
+{ "id":"route-js", "name":"Route by domain", "kind":"javascript",
+  "source":"var result={}; if(ngg.input.domain.indexOf('example')>=0){result.core_id='sing-box';}",
+  "hooks":["session","dns"], "permissions":["decision:write","log"],
+  "enabled":true, "description":"demo" }
+```
+
+- 响应 `200`：`{"ok":true,"plugin":{...Manifest...},"loaded":true}`。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`422 CONFIG_INVALID`（编译失败：缺 `id`、缺 `source`、非法 JS、未知 `kind`、WASM 魔数缺失 / 未导出 `ngg_hook()`）。失败插件仍入库但 `loaded=false` 并带 `error`，通过 `GET /plugins` 可查。
+
+### `POST /api/v1/plugins/reload`
+
+- 请求体：无。扫描 `<storage.dir>/plugins.d` 下的 `*.yaml|*.yml|*.json` manifest。
+- 响应 `200`：`{"loaded":2,"problems":["bad.yaml: ..."],"dir":"data/plugins.d"}`。
+- 错误：仅通用 `401` / `403`（目录不存在时 `loaded=0`，不报错）。
+
+### `POST /api/v1/plugins/{id}/enable`
+
+- 请求体：`{"enabled":true}`。
+- 响应 `200`：`{"ok":true,"plugin":{...Manifest...}}`。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`404 CORE_NOT_FOUND`（`plugin "<id>" not found`）；`404 NOT_FOUND`（`plugin "<id>" failed to load: ...`，即加载失败的插件不可启用）。
+
+### `POST /api/v1/plugins/{id}/test`
+
+- 请求体：`{"input":{"domain":"www.example.com","hook":"session","core_id":"mihomo"}}`（`input` 可省，缺省 `{"domain":"example.com","hook":"session","core_id":"mihomo"}`）。
+- 响应 `200`：`{"ok":true,"result":{...}}`（`result` 为插件可写的 `core_id` / `direct` / `block` / `tags` 合并结果）。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`422 CONFIG_INVALID`（插件 hook 执行出错）。
+
+### `DELETE /api/v1/plugins/{id}`
+
+- 响应 `200`：`{"ok":true,"message":"plugin removed"}`（同时关闭 WASM runtime）。
+- 错误：`404 CORE_NOT_FOUND`（`plugin "<id>" not found`）；`404 NOT_FOUND`（`unknown plugin action`）。
+
+---
+
+## 4. Stage 5 端点（10 个）
+
+### `GET /api/v1/sdwan/status`
+
+- 响应 `200`：`{"policy":"lowest-latency","active":"wan1","running":true,"switches":1,"interval_ms":3000,"links":[...]}`（`links` 为 `[]Link`）。
+- 错误：仅通用 `401` / `403`。
+
+### `GET /api/v1/sdwan/links`
+
+- 响应 `200`：`[]Link`。`Link` 字段：`id, name, interface, gateway, probe_target, weight, cost, priority, enabled, healthy, rtt_ms, loss_pct, probes, failures`。
+- 错误：仅通用 `401` / `403`。
+
+### `POST /api/v1/sdwan/links`
+
+- 请求体：`Link` 对象（`id` 与 `probe_target` 必填；`weight<=0` 自动置 1）。
+
+```json
+{ "id":"wan1", "name":"Primary", "interface":"eth0", "gateway":"192.0.2.1",
+  "probe_target":"198.51.100.1:443", "weight":10, "cost":1, "priority":10, "enabled":true }
+```
+
+- 响应 `200`：`{"ok":true,"link":{...Link...}}`。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`422 CONFIG_INVALID`（`link needs id and probe_target`）。
+
+### `DELETE /api/v1/sdwan/links/{id}`
+
+- 响应 `200`：`{"ok":true,"message":"link removed"}`。
+- 错误：`404 CORE_NOT_FOUND`（`link not found` 含 `not found`）。
+
+### `POST /api/v1/sdwan/{action}`
+
+`action` 由 `r.PathValue("action")` 取得，四种取值：
+
+| `action` | 请求体 | 响应 `200` |
+| --- | --- | --- |
+| `start` | 无 | `{"ok":true,"message":"SD-WAN probing started"}` |
+| `stop` | 无 | `{"ok":true,"message":"SD-WAN probing stopped"}` |
+| `failover` | 无 | `{"ok":true,"active":{...Link...}}`（`ForceFailover` 立即置当前链路不健康并重选） |
+| `policy` | `{"policy":"weighted"}` | `{"ok":true,"policy":"weighted"}` |
+
+- `policy` 枚举：`lowest-latency`（默认）、`weighted`、`priority`、`failover`。
+- 错误：`400 INVALID_ARGUMENT`（`policy` 的 JSON 非法）；`404 NOT_FOUND`（`unknown SD-WAN action: <action>`）；`503 INTERNAL_ERROR`（`failover` 时 `no healthy WAN link available (fail-closed)`）。
+
+### `GET /api/v1/tenants`
+
+- 响应 `200`：`[]Tenant`。字段：`id, name, enabled, max_sessions, quota_bytes, used_bytes, allowed_cores, allowed_protocols, default_core, rule_set_tag`。默认含 `default` 租户。
+- 错误：仅通用 `401` / `403`。
+
+### `POST /api/v1/tenants`
+
+- 请求体：`Tenant` 对象（`id` 必填；`max_sessions<=0` 自动置 1000）。
+
+```json
+{ "id":"acme", "name":"Acme", "enabled":true, "max_sessions":1000,
+  "quota_bytes":1073741824, "allowed_cores":["mihomo"],
+  "allowed_protocols":["shadowsocks"], "default_core":"mihomo", "rule_set_tag":"acme" }
+```
+
+- 响应 `200`：`{"ok":true,"tenant":{...Tenant...}}`。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`422 CONFIG_INVALID`（`tenant id is required`）。
+
+### `DELETE /api/v1/tenants/{id}`
+
+- 响应 `200`：`{"ok":true,"message":"tenant removed"}`。
+- 错误：`404 CORE_NOT_FOUND`（`tenant not found or protected`，含 `not found`；删除 `default` 同样走此路径）。
+
+### `GET /api/v1/platforms`
+
+- 响应 `200`：
+
+```json
+{ "host":"windows/amd64", "go":"go1.27.3",
+  "targets":["linux/amd64","linux/arm64","linux/386","linux/arm","linux/mipsle",
+             "windows/amd64","windows/arm64","darwin/amd64","darwin/arm64",
+             "freebsd/amd64","android/arm64","ios/arm64"],
+  "clients":["Android","iOS","iPadOS","HarmonyOS","Windows","macOS","Linux","Android TV","OpenWrt / 软路由"],
+  "note":"纯 Go 核心 + gomobile 绑定；原生 UI 客户端为骨架，需各平台 SDK 打包" }
+```
+
+- 错误：仅通用 `401` / `403`。`note` 为**如实能力边界**：原生 UI 客户端仍是骨架。
+
+### `POST /api/v1/platforms/build`
+
+- 请求体（可空 body）：`{"targets":["linux/amd64","linux/arm64"]}`；缺省时编译 4 个目标 `linux/amd64, linux/arm64, windows/amd64, darwin/arm64`。
+- 响应 `200`：
+
+```json
+{ "ok":true, "results":[
+  {"target":"linux/amd64","ok":true,"output":"ok","path":"bin/platforms/nggd-linux-amd64"},
+  {"target":"ios/arm64","ok":false,"output":"<真实 go build 错误输出，截断 400 字符>"} ] }
+```
+
+- 真实执行 `go build -trimpath -ldflags="-s -w"`，逐目标设 `GOOS/GOARCH/CGO_ENABLED=0`，单目标 4 分钟超时，产物落在 `bin/platforms/nggd-<goos>-<goarch>[.exe]`；格式错误的 target 返回 `ok:false, output:"invalid target"`，**不伪装成功**。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`500 INTERNAL_ERROR`（创建输出目录失败）。
+
+---
+
+## 5. curl 示例
+
+```bash
+TOKEN='<从 configs/ngg.yaml 读取>'
+BASE='http://127.0.0.1:9090/api/v1'
+H="Authorization: Bearer $TOKEN"
+JH='Content-Type: application/json'
+
+# ---------- Stage 2~3：网络引擎 ----------
+curl -H "$H" "$BASE/network/status"
+curl -X POST -H "$H" "$BASE/network/start"
+curl -X POST -H "$H" "$BASE/network/stop"
+
+curl -H "$H" "$BASE/network/config"
+curl -X PUT -H "$H" -H "$JH" \
+  -d '{"fail_closed":true,"failover":true,"default_core":"mihomo"}' "$BASE/network/config"
+
+curl -H "$H" "$BASE/network/rules"
+curl -X POST -H "$H" -H "$JH" \
+  -d '{"id":"r-example","type":"DOMAIN-SUFFIX","value":".example.com","action":"PROXY","core_id":"mihomo","priority":50,"enabled":true}' \
+  "$BASE/network/rules"
+curl -X PUT -H "$H" -H "$JH" \
+  -d '{"rules":[{"id":"r1","type":"MATCH","action":"PROXY","core_id":"mihomo","priority":10,"enabled":true}],"default_action":"DIRECT"}' \
+  "$BASE/network/rules"
+curl -X DELETE -H "$H" "$BASE/network/rules/r-example"
+curl -X POST -H "$H" -H "$JH" -d '{"path":"./rules.yaml"}' "$BASE/network/rules/load"
+
+curl -H "$H" "$BASE/network/dns"
+curl -X POST -H "$H" -H "$JH" -d '{"name":"www.example.com","type":"A"}' "$BASE/network/dns/resolve"
+curl -X POST -H "$H" -H "$JH" \
+  -d '{"hosts":{"internal.test":"10.0.0.9"},"block":["ads.example"]}' "$BASE/network/dns/hosts"
+
+curl -H "$H" "$BASE/network/sessions"
+curl -H "$H" "$BASE/network/endpoints"
+curl -X POST -H "$H" -H "$JH" -d '{"core_id":"mihomo"}' "$BASE/network/selftest"
+curl -X POST -H "$H" "$BASE/network/packettest"
+
+# ---------- Stage 4：阶段 / 协议 / 后量子 / 插件 ----------
+curl -H "$H" "$BASE/stages"
+curl -H "$H" "$BASE/protocols?category=vpn"
+curl -H "$H" "$BASE/protocols/wireguard"
+curl -X POST -H "$H" -H "$JH" -d '{"enabled":true}' "$BASE/protocols/wireguard/enable"
+curl -X POST -H "$H" -H "$JH" \
+  -d '{"kernel":"sing-box","params":{"server":"198.51.100.1","port":51820,"private_key":"x","peer_public_key":"y"}}' \
+  "$BASE/protocols/wireguard/config"
+
+curl -H "$H" "$BASE/pq/status"
+curl -X POST -H "$H" "$BASE/pq/selftest"
+
+curl -H "$H" "$BASE/plugins"
+curl -X POST -H "$H" -H "$JH" \
+  -d '{"id":"route-js","kind":"javascript","hooks":["session"],"enabled":true,"source":"var result={core_id:\"sing-box\"};"}' \
+  "$BASE/plugins"
+curl -X POST -H "$H" "$BASE/plugins/reload"
+curl -X POST -H "$H" -H "$JH" -d '{"enabled":true}' "$BASE/plugins/route-js/enable"
+curl -X POST -H "$H" -H "$JH" -d '{"input":{"domain":"www.example.com"}}' "$BASE/plugins/route-js/test"
+curl -X DELETE -H "$H" "$BASE/plugins/route-js"
+
+# ---------- Stage 5：SD-WAN / 多租户 / 跨平台 ----------
+curl -H "$H" "$BASE/sdwan/status"
+curl -H "$H" "$BASE/sdwan/links"
+curl -X POST -H "$H" -H "$JH" \
+  -d '{"id":"wan1","name":"Primary","probe_target":"198.51.100.1:443","weight":10,"cost":1,"enabled":true}' \
+  "$BASE/sdwan/links"
+curl -X DELETE -H "$H" "$BASE/sdwan/links/wan1"
+curl -X POST -H "$H" "$BASE/sdwan/start"
+curl -X POST -H "$H" "$BASE/sdwan/failover"
+curl -X POST -H "$H" -H "$JH" -d '{"policy":"lowest-latency"}' "$BASE/sdwan/policy"
+curl -X POST -H "$H" "$BASE/sdwan/stop"
+
+curl -H "$H" "$BASE/tenants"
+curl -X POST -H "$H" -H "$JH" \
+  -d '{"id":"acme","name":"Acme","enabled":true,"max_sessions":1000,"quota_bytes":1073741824,"allowed_cores":["mihomo"]}' \
+  "$BASE/tenants"
+curl -X DELETE -H "$H" "$BASE/tenants/acme"
+
+curl -H "$H" "$BASE/platforms"
+curl -X POST -H "$H" -H "$JH" \
+  -d '{"targets":["linux/amd64","windows/amd64"]}' "$BASE/platforms/build"
+```
+
+---
+
+## 6. 能力边界提醒
+
+- `POST /network/selftest` 的 DIRECT 自检路径是**真实直连**（`openDirect`），走 `PROXY` 时经真实内核本地端点；`ok:false` 是合法业务结果（HTTP 仍为 200）。
+- `POST /protocols/{id}/config` 只做**配置生成 + 格式校验**，不启动隧道、不重写内核协议栈。
+- `GET /pq/status` 的 `note` 与 `mlkem-hybrid` 协议一样，明确后量子实现**仅用于 NGG 节点间控制信道**。
+- `GET /platforms` 的 `note` 明确**原生 UI 客户端为骨架**，需各平台 SDK 打包。
+- 上述端点不提供「统一 TUN 全局接管」开关：TUN 只在 Linux 且 `TUN.AutoRoute=true` 时由 `Engine.Start` 尝试打开，Windows/macOS 返回 `ErrTUNUnsupported` 并改用 userspace 入口。

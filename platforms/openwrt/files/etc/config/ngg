@@ -1,0 +1,37 @@
+# NGG UCI 配置示例（字段对齐 configs/ngg.example.yaml 的
+# server / storage / cores / network 概念）。
+#
+# 对应关系：
+#   main.*    -> server.listen/port/token/web_dir + storage.dir + cores.*
+#   network.* -> network.enabled/fail_closed/default_core + network.ingress.* + network.dns.*
+#
+# 注意：本文件是 UCI 配置示例；实际生效的 YAML 由 /etc/init.d/ngg 首次启动时
+# 生成到 config_file（默认 /etc/ngg/ngg.yaml），并由 nggd 写回自动生成的 token。
+
+config ngg 'main'
+    option enabled '1'
+    option config_file '/etc/ngg/ngg.yaml'
+    # --- server ---
+    option listen '127.0.0.1'
+    option port '9090'
+    option token ''
+    option web_dir '/usr/share/ngg/web'
+    # --- storage ---
+    option storage_dir '/etc/ngg/data'
+    # --- cores ---
+    option descriptor_dir '/etc/ngg/cores.d'
+    option port_base '17890'
+    option port_stride '10'
+
+config network 'network'
+    option enabled '1'
+    option fail_closed '1'
+    option default_core 'mihomo'
+    # --- network.ingress（默认 userspace SOCKS5/HTTP CONNECT 入口）---
+    option ingress_listen '127.0.0.1'
+    option ingress_port '18080'
+    # --- network.dns ---
+    option dns_listen '127.0.0.1'
+    option dns_port '18053'
+    # --- Linux 统一 TUN：需要 /dev/net/tun + CAP_NET_ADMIN ---
+    option tun '1'

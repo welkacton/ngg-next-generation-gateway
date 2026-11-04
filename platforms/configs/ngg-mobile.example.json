@@ -1,0 +1,27 @@
+{
+  "_note": "NGG 移动端/嵌入式接入配置示例。这是骨架用模板，不是可直接运行的成品配置；token 与地址必须按实际部署替换。所有地址默认仅本机回环。",
+  "base_url": "http://127.0.0.1:9090",
+  "api_prefix": "/api/v1",
+  "ws_path": "/api/v1/ws",
+  "token": "<REPLACE_WITH_LOCAL_API_TOKEN>",
+  "ingress": {
+    "type": "socks5+http-connect",
+    "address": "127.0.0.1:18080",
+    "auth_user": "",
+    "auth_pass": ""
+  },
+  "dns": {
+    "address": "127.0.0.1:18053"
+  },
+  "default_core": "mihomo",
+  "fail_closed": true,
+  "_field_notes": {
+    "base_url": "控制面 REST 地址，默认 http://127.0.0.1:9090，仅监听回环地址。",
+    "token": "占位符。首次启动 nggd 会在控制台打印自动生成的 Token 并写回 configs/ngg.yaml；所有 /api/v1 请求需 Authorization: Bearer <token>。",
+    "ws_path": "WebSocket 端点，浏览器无法设置自定义头时可用 ?token=<token> 查询参数。",
+    "ingress": "数据面入口：Windows/macOS/移动端用 userspace SOCKS5/HTTP CONNECT；默认 127.0.0.1:18080。改成非回环地址时必须同时配置 auth_user/auth_pass。",
+    "dns": "NGG 内置 DNS 监听，默认 127.0.0.1:18053。",
+    "default_core": "示例值，必须替换为控制面中已注册且已安装的内核 id（可通过 GET /api/v1/cores 查询）。",
+    "fail_closed": "无可用执行路径时是否直接丢弃连接，对齐 network.fail_closed；true 表示不直连兜底。"
+  }
+}

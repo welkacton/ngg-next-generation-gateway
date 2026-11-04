@@ -1,0 +1,229 @@
+<script setup lang="ts">
+import { h, onMounted, ref } from 'vue'
+import {
+  NAlert,
+  NButton,
+  NCard,
+  NDataTable,
+  NDescriptions,
+  NDescriptionsItem,
+  NInput,
+  NSpace,
+  NTag,
+} from 'naive-ui'
+import { useCoresStore } from '../stores/cores'
+import { API_BASE, getToken, setToken } from '../api/client'
+import type { CoreDescriptor, PortAllocation } from '../api/ngg'
+
+const store = useCoresStore()
+const tokenInput = ref(getToken())
+const tokenSet = ref(!!getToken())
+const backendTarget = 'http://127.0.0.1:9090'
+const origin = window.location.origin
+
+function saveToken(): void {
+  setToken(tokenInput.value.trim())
+  tokenSet.value = !!getToken()
+  window.$message?.success('API Token 已保存，WebSocket 将使用新 Token 重连')
+}
+
+function clearToken(): void {
+  setToken('')
+  tokenInput.value = ''
+  tokenSet.value = false
+  window.$message?.warning('API Token 已清除，后续请求将不带认证头')
+}
+
+function portRowKey(row: any): string {
+  return String(row.core_id)
+}
+
+function registryRowKey(row: any): string {
+  return String(row.id)
+}
+
+const portColumns: any[] = [
+  {
+    title: '内核',
+    key: 'core_id',
+    minWidth: 160,
+    render: (row: PortAllocation) => h('span', { class: 'mono' }, row.core_id),
+  },
+  {
+    title: '端口',
+    key: 'ports',
+    minWidth: 200,
+    render: (row: PortAllocation) =>
+      row.ports && row.ports.length ? row.ports.join(', ') : '—',
+  },
+  {
+    title: '端口用途（names）',
+    key: 'names',
+    minWidth: 280,
+    render: (row: PortAllocation) => {
+      const entries = Object.entries(row.names || {})
+      if (!entries.length) return h('span', { class: 'hint' }, '—')
+      return h(
+        'div',
+        { class: 'cap-tags' },
+        entries.map(([port, name]) =>
+          h(NTag, { size: 'small', bordered: false }, {
+            default: () => `${port} → ${name}`,
+          }),
+        ),
+      )
+    },
+  },
+]
+
+const registryColumns: any[] = [
+  {
+    title: 'ID',
+    key: 'id',
+    minWidth: 130,
+    render: (row: CoreDescriptor) => h('span', { class: 'mono' }, row.id),
+  },
+  { title: '名称', key: 'display_name', minWidth: 140 },
+  { title: '说明', key: 'description', minWidth: 220 },
+  {
+    title: '来源',
+    key: 'builtin',
+    width: 120,
+    render: (row: CoreDescriptor) =>
+      h(
+        NTag,
+        { size: 'small', bordered: false, type: row.builtin ? 'info' : 'default' },
+        { default: () => (row.builtin ? '内置' : '描述文件') },
+      ),
+  },
+  {
+    title: '描述来源',
+    key: 'source',
+    minWidth: 160,
+    render: (row: CoreDescriptor) => h('span', { class: 'mono' }, row.source || '—'),
+  },
+  {
+    title: '仓库',
+    key: 'repository',
+    minWidth: 220,
+    render: (row: CoreDescriptor) => h('span', { class: 'mono' }, row.repository || '—'),
+  },
+]
+
+onMounted(() => {
+  store.ensureBase()
+})
+</script>
+
+<template>
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <h2 class="page-title">系统设置</h2>
+        <p class="page-subtitle">认证、连接信息、端口分配与架构说明</p>
+      </div>
+    </div>
+
+    <NCard size="small" title="API Token" class="section-gap">
+      <NSpace vertical :size="10" style="width: 100%">
+        <div class="hint">
+          所有 REST 请求自动携带
+          <span class="mono">Authorization: Bearer &lt;token&gt;</span>，WebSocket 连接同样附带
+          <span class="mono">?token=</span>。首次使用请在下方填入后端配置的默认 Token，
+          Token 保存在浏览器 <span class="mono">localStorage.ngg_token</span>。
+        </div>
+        <NSpace align="center" :wrap="true" :size="10">
+          <NInput
+            v-model:value="tokenInput"
+            type="password"
+            show-password-on="click"
+            style="max-width: 460px"
+            placeholder="请输入后端配置的 API Token"
+          />
+          <NButton type="primary" size="small" @click="saveToken">保存</NButton>
+          <NButton size="small" @click="clearToken">清除</NButton>
+          <NTag :bordered="false" size="small" :type="tokenSet ? 'success' : 'warning'">
+            {{ tokenSet ? '已设置' : '未设置' }}
+          </NTag>
+        </NSpace>
+      </NSpace>
+    </NCard>
+
+    <NCard size="small" title="后端连接信息" class="section-gap">
+      <NDescriptions bordered :column="2" size="small" label-placement="left">
+        <NDescriptionsItem label="API Base URL">
+          <span class="mono">{{ API_BASE }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem label="开发 / 预览代理目标">
+          <span class="mono">{{ backendTarget }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem label="WebSocket 路径">
+          <span class="mono">{{ API_BASE }}/ws</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem label="当前页面地址">
+          <span class="mono">{{ origin }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem label="后端服务" :span="2">
+          <span class="mono">{{ store.system?.listen_addr || '—' }}</span>
+          · 阶段 {{ store.system?.stage || '—' }} · 模式 {{ store.system?.mode || '—' }}
+        </NDescriptionsItem>
+      </NDescriptions>
+    </NCard>
+
+    <NCard size="small" title="端口分配（/ports）" class="section-gap">
+      <template #header-extra>
+        <NButton size="small" @click="store.refreshPorts()">刷新</NButton>
+      </template>
+      <NDataTable
+        :columns="portColumns"
+        :data="store.ports"
+        :row-key="portRowKey"
+        :bordered="false"
+        :scroll-x="760"
+        size="small"
+        :pagination="false"
+      />
+    </NCard>
+
+    <NCard size="small" title="内核注册表" class="section-gap">
+      <template #header-extra>
+        <NButton
+          size="small"
+          type="primary"
+          :loading="store.isBusy('reload-registry')"
+          @click="store.reloadRegistryAction()"
+        >
+          重载注册表
+        </NButton>
+      </template>
+      <NSpace vertical :size="10" style="width: 100%">
+        <div class="hint">
+          支持通过描述文件新增内核；新增或修改描述文件后点击「重载注册表」生效。
+          重载结果会返回加载数量与问题描述（problems）。
+        </div>
+        <NDataTable
+          :columns="registryColumns"
+          :data="store.registry"
+          :row-key="registryRowKey"
+          :bordered="false"
+          :scroll-x="1100"
+          size="small"
+          :pagination="false"
+        />
+      </NSpace>
+    </NCard>
+
+    <NCard size="small" title="架构与安全说明">
+      <NAlert type="info" :bordered="false">
+        <ul class="hint" style="margin: 0; padding-left: 18px; line-height: 2">
+          <li><strong>Worker Mode</strong>：内核以独立 Worker 进程运行，由网关统一管理启停与生命周期。</li>
+          <li><strong>资源隔离</strong>：每个内核拥有独立的二进制、配置、端口分配与资源统计。</li>
+          <li><strong>仅本机访问</strong>：管理接口仅监听本机地址，不对外暴露。</li>
+          <li><strong>认证</strong>：所有接口使用 Bearer Token 认证，WebSocket 连接附带 token 查询参数。</li>
+          <li><strong>配置事务</strong>：备份 → 原生校验 → 原子替换，任一步失败自动保留原配置。</li>
+          <li><strong>Phase 1 边界</strong>：统一 TUN / 规则引擎 / DNS 引擎属 Stage 2/3 预留。</li>
+        </ul>
+      </NAlert>
+    </NCard>
+  </div>
+</template>

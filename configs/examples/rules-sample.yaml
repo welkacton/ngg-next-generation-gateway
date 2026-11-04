@@ -1,0 +1,44 @@
+# NGG Stage 3 规则集示例（用 POST /api/v1/network/rules/load {"path":"..."} 加载）
+default_action: DIRECT
+default_core: ""
+rules:
+  - id: private-v4
+    type: IP-CIDR
+    value: 10.0.0.0/8
+    action: DIRECT
+    priority: 90
+    enabled: true
+    comment: 私网直连
+  - id: lan
+    type: IP-CIDR
+    value: 192.168.0.0/16
+    action: DIRECT
+    priority: 90
+    enabled: true
+  - id: dns-local
+    type: DST-PORT
+    value: "53"
+    action: DNS-LOCAL
+    priority: 80
+    enabled: true
+  - id: proxy-example
+    type: DOMAIN-SUFFIX
+    value: ".example.com"
+    action: PROXY
+    core_id: mihomo
+    priority: 50
+    enabled: true
+  - id: chain-demo
+    type: DOMAIN
+    value: "chain.example.net"
+    action: PROXY
+    chain: [mihomo, sing-box]
+    priority: 60
+    enabled: false
+    comment: 多内核代理链（嵌套 SOCKS5 握手）
+  - id: block-ads
+    type: DOMAIN-KEYWORD
+    value: "ads"
+    action: REJECT
+    priority: 40
+    enabled: true

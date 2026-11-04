@@ -1,0 +1,271 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/ngg-project/ngg/internal/netengine"
+	"github.com/ngg-project/ngg/pkg/contracts"
+)
+
+// Stage 2-3 REST surface for the Unified Network Engine. All operations go
+// through Core Manager's Network() facade.
+
+func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.engine.NetworkStatus())
+}
+
+func (s *Server) handleNetworkStart(w http.ResponseWriter, r *http.Request) {
+	if err := s.engine.NetworkStart(r.Context()); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeOK(w, "NGG unified network engine started")
+}
+
+func (s *Server) handleNetworkStop(w http.ResponseWriter, r *http.Request) {
+	if err := s.engine.NetworkStop(r.Context()); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeOK(w, "NGG unified network engine stopped")
+}
+
+func (s *Server) handleNetworkConfig(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, ne.Config())
+		return
+	}
+	var body struct {
+		FailClosed      *bool   `json:"fail_closed"`
+		Failover        *bool   `json:"failover"`
+		DefaultCore     *string `json:"default_core"`
+		DirectOnFailure *bool   `json:"direct_on_failure"`
+		EgressMark      *int    `json:"egress_mark"`
+		BypassTUN       *bool   `json:"bypass_tun"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	cfg := ne.Config()
+	changed := []string{}
+	needsRestart := []string{}
+	if body.FailClosed != nil {
+		cfg.FailClosed = *body.FailClosed
+		changed = append(changed, "fail_closed")
+	}
+	if body.Failover != nil {
+		cfg.Failover = *body.Failover
+		changed = append(changed, "failover")
+	}
+	if body.DefaultCore != nil {
+		cfg.DefaultCore = *body.DefaultCore
+		changed = append(changed, "default_core")
+	}
+	if body.DirectOnFailure != nil {
+		cfg.DirectOnFailure = *body.DirectOnFailure
+		changed = append(changed, "direct_on_failure")
+	}
+	if body.EgressMark != nil {
+		cfg.Egress.Mark = *body.EgressMark
+		changed = append(changed, "egress.mark")
+		needsRestart = append(needsRestart, "egress.mark")
+	}
+	if body.BypassTUN != nil {
+		cfg.Egress.BypassTUN = *body.BypassTUN
+		changed = append(changed, "egress.bypass_tun")
+		needsRestart = append(needsRestart, "egress.bypass_tun")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "changed": changed, "requires_restart": needsRestart, "config": cfg,
+	})
+}
+
+func (s *Server) handleNetworkRules(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	rs := ne.Rules()
+	switch r.Method {
+	case http.MethodGet:
+		action, core := rs.Defaults()
+		writeJSON(w, http.StatusOK, map[string]any{"rules": rs.List(), "default_action": action, "default_core": core})
+	case http.MethodPost:
+		var rule netengine.Rule
+		if err := decodeJSON(r, &rule); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if err := rs.Add(rule); err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rule": rule})
+	case http.MethodPut:
+		var body struct {
+			Rules         []netengine.Rule     `json:"rules"`
+			DefaultAction netengine.RuleAction `json:"default_action"`
+			DefaultCore   string               `json:"default_core"`
+		}
+		if err := decodeJSON(r, &body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if err := rs.Replace(body.Rules); err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if body.DefaultAction != "" {
+			rs.SetDefaults(body.DefaultAction, coreIDOf(body.DefaultCore))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(body.Rules)})
+	}
+}
+
+func coreIDOf(v string) contracts.CoreID { return contracts.CoreID(v) }
+
+func (s *Server) handleNetworkRuleByID(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	if !ne.Rules().Remove(id) {
+		writeErr(w, http.StatusNotFound, "rule "+id+" not found")
+		return
+	}
+	writeOK(w, "rule removed")
+}
+
+func (s *Server) handleNetworkRulesLoad(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.Path == "" {
+		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	n, err := s.engine.Network().Rules().LoadRuleFile(body.Path)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "loaded": n, "path": body.Path})
+}
+
+func (s *Server) handleNetworkDNS(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.engine.Network().DNS().Status())
+}
+
+func (s *Server) handleNetworkDNSResolve(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if body.Type == "" {
+		body.Type = "A"
+	}
+	ips, err := s.engine.Network().DNS().Resolve(r.Context(), body.Name, body.Type)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, ip.String())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": body.Name, "type": body.Type, "answers": out})
+}
+
+func (s *Server) handleNetworkDNSHosts(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Hosts map[string]string `json:"hosts"`
+		Block []string          `json:"block"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	s.engine.Network().DNS().SetHosts(body.Hosts, body.Block)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "hosts": len(body.Hosts), "block_added": len(body.Block)})
+}
+
+func (s *Server) handleNetworkSessions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.engine.Network().Sessions().List(200))
+}
+
+func (s *Server) handleNetworkEndpoints(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.engine.Network().Bridge().Endpoints())
+}
+
+func (s *Server) handleNetworkSelfTest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CoreID string `json:"core_id"`
+	}
+	if r.ContentLength > 0 {
+		if err := decodeJSON(r, &body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	result, err := s.engine.Network().SelfTest(ctx, strings.TrimSpace(body.CoreID))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleNetworkPacketTest(w http.ResponseWriter, r *http.Request) {
+	// Feeds a real synthetic IPv4/UDP/DNS packet through PacketProcessor.
+	pkt := syntheticDNSPacket()
+	action, err := s.engine.Network().PacketProcessor().Process(r.Context(), pkt)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	parsed, perr := s.engine.Network().PacketProcessor().Parse(pkt)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"action": action, "parse_error": fmt.Sprint(perr),
+		"packet": map[string]any{
+			"version": parsed.Version, "protocol": parsed.Protocol,
+			"src": parsed.Src.String(), "dst": parsed.Dst.String(),
+			"src_port": parsed.SrcPort, "dst_port": parsed.DstPort, "is_dns": parsed.IsDNS,
+		},
+	})
+}
+
+// syntheticDNSPacket builds a real, checksum-free IPv4/UDP/53 packet for
+// exercising the PacketProcessor classification path through the API.
+func syntheticDNSPacket() []byte {
+	b := make([]byte, 20+8+12)
+	b[0] = 0x45
+	b[2], b[3] = 0, byte(len(b))
+	b[8], b[9] = 64, 17
+	copy(b[12:16], []byte{10, 89, 0, 2})
+	copy(b[16:20], []byte{10, 89, 0, 1})
+	b[20], b[21] = 0x30, 0x39 // src 12345
+	b[22], b[23] = 0, 53      // dst 53
+	b[24], b[25] = 0, byte(8+12)
+	// minimal DNS header: ID, flags, QDCOUNT=0
+	b[28+4], b[28+5] = 0, 0
+	return b
+}

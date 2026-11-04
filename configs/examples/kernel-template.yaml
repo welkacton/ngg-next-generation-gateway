@@ -1,0 +1,52 @@
+# 新内核能力描述文件模板（复制到 configs/cores.d/ 并改成真实值后才会生效）
+# 这是 TEMPLATE，不是已注册内核；默认不会被 NGG 加载。
+id: my-core
+display_name: My Core
+description: 通过标准 Core Adapter 契约注册的第四个内核
+homepage: https://example.com
+repository: example/my-core
+
+capability:
+  protocols: [socks5, example-protocol]
+  inbound_types: [mixed, socks]
+  features: [native-config-check]
+  worker_mode: true            # 必须为 true：禁止内核自建系统 TUN / DNS 劫持
+  local_tcp_endpoint: "127.0.0.1:{{.MixedPort}}"
+  native_stream: false         # Stage 2 预留
+  native_datagram: false       # Stage 2 预留
+
+platforms:
+  - os: linux
+    arch: amd64
+  - os: windows
+    arch: amd64
+
+binary:
+  windows: my-core.exe
+  default: my-core
+
+commands:
+  version: ["version"]
+  run: ["run", "-c", "{{.Config}}"]
+  validate: ["check", "-c", "{{.Config}}"]   # 必须调用内核原生校验
+  env: []
+
+config:
+  file_name: config.json
+  default: |
+    {"listen":"127.0.0.1","port":{{.MixedPort}}}
+
+release:
+  repository: example/my-core
+  asset_templates:
+    windows: "my-core-{version}-windows-{arch}.zip"
+    linux: "my-core-{version}-linux-{arch}.tar.gz"
+  archive: auto
+  binary_in_archive: "my-core*"
+  digest_format: api          # 使用 GitHub Release Assets API 的 sha256 digest
+  version_prefix: "v"
+
+control_api:
+  type: none
+
+version_regex: "my-core ([0-9]+\\.[0-9]+\\.[0-9]+)"

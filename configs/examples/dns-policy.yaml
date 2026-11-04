@@ -1,0 +1,7 @@
+# NGG Stage 3 DNS 策略示例（POST /api/v1/network/dns/hosts）
+hosts:
+  "router.local.": "192.168.1.1"
+  "ngg.local.": "10.89.0.1"
+block:
+  - "ads.example.com."
+  - "tracker.example.net."

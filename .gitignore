@@ -1,0 +1,22 @@
+# binaries / runtime data
+bin/
+data/
+*.db
+*.db-wal
+*.db-shm
+nggd
+nggd.exe
+
+# frontend
+web/node_modules/
+web/dist/
+
+# 本地配置含自动生成的 API Token，勿提交（用 ngg.example.yaml 作模板）
+configs/ngg.yaml
+configs/ngg.local.yaml
+
+# editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,333 @@
+package netengine
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/ngg-project/ngg/pkg/contracts"
+	"gopkg.in/yaml.v3"
+)
+
+// Stage 3: NGG owns the global rule engine. Kernels keep their own rule
+// sections disabled; all global routing decisions are made here.
+
+type RuleType string
+
+const (
+	RuleDomain        RuleType = "DOMAIN"
+	RuleDomainSuffix  RuleType = "DOMAIN-SUFFIX"
+	RuleDomainKeyword RuleType = "DOMAIN-KEYWORD"
+	RuleDomainRegex   RuleType = "DOMAIN-REGEX"
+	RuleIPCIDR        RuleType = "IP-CIDR"
+	RulePort          RuleType = "DST-PORT"
+	RuleNetwork       RuleType = "NETWORK"
+	RuleProcess       RuleType = "PROCESS-NAME"
+	RuleTenant        RuleType = "TENANT"
+	RuleMatch         RuleType = "MATCH"
+)
+
+type RuleAction string
+
+const (
+	ActProxy  RuleAction = "PROXY"
+	ActDirect RuleAction = "DIRECT"
+	ActBlock  RuleAction = "REJECT"
+	ActDNS    RuleAction = "DNS-LOCAL"
+)
+
+type Rule struct {
+	ID       string             `json:"id" yaml:"id"`
+	Type     RuleType           `json:"type" yaml:"type"`
+	Value    string             `json:"value" yaml:"value"`
+	Action   RuleAction         `json:"action" yaml:"action"`
+	CoreID   contracts.CoreID   `json:"core_id,omitempty" yaml:"core_id,omitempty"`
+	Chain    []contracts.CoreID `json:"chain,omitempty" yaml:"chain,omitempty"`
+	TenantID string             `json:"tenant_id,omitempty" yaml:"tenant_id,omitempty"`
+	Priority int                `json:"priority" yaml:"priority"`
+	Enabled  bool               `json:"enabled" yaml:"enabled"`
+	Comment  string             `json:"comment,omitempty" yaml:"comment,omitempty"`
+}
+
+func (r Rule) Validate() error {
+	if strings.TrimSpace(r.ID) == "" {
+		return fmt.Errorf("rule id is required")
+	}
+	switch r.Type {
+	case RuleDomain, RuleDomainSuffix, RuleDomainKeyword, RuleDomainRegex,
+		RuleIPCIDR, RulePort, RuleNetwork, RuleProcess, RuleTenant, RuleMatch:
+	default:
+		return fmt.Errorf("unknown rule type %q", r.Type)
+	}
+	switch r.Action {
+	case ActProxy, ActDirect, ActBlock, ActDNS:
+	default:
+		return fmt.Errorf("unknown rule action %q", r.Action)
+	}
+	if r.Action == ActProxy && r.CoreID == "" && len(r.Chain) == 0 {
+		return fmt.Errorf("PROXY rule %q needs core_id or chain", r.ID)
+	}
+	if r.Type == RuleDomainRegex {
+		if _, err := regexp.Compile(r.Value); err != nil {
+			return fmt.Errorf("rule %q bad regex: %w", r.ID, err)
+		}
+	}
+	if r.Type == RuleIPCIDR && r.Value != "" {
+		if _, _, err := net.ParseCIDR(r.Value); err != nil {
+			return fmt.Errorf("rule %q bad CIDR: %w", r.ID, err)
+		}
+	}
+	return nil
+}
+
+type RuleSet struct {
+	mu            sync.RWMutex
+	rules         []Rule
+	defaultAction RuleAction
+	defaultCore   contracts.CoreID
+}
+
+type RuleFile struct {
+	Rules         []Rule           `json:"rules" yaml:"rules"`
+	DefaultAction RuleAction       `json:"default_action" yaml:"default_action"`
+	DefaultCore   contracts.CoreID `json:"default_core" yaml:"default_core"`
+}
+
+func NewRuleSet(defaultAction RuleAction, defaultCore contracts.CoreID) *RuleSet {
+	if defaultAction == "" {
+		defaultAction = ActDirect
+	}
+	return &RuleSet{defaultAction: defaultAction, defaultCore: defaultCore}
+}
+
+func (s *RuleSet) Add(r Rule) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.rules {
+		if s.rules[i].ID == r.ID {
+			return fmt.Errorf("duplicate rule id %q", r.ID)
+		}
+	}
+	s.rules = append(s.rules, r)
+	s.sortLocked()
+	return nil
+}
+
+func (s *RuleSet) Replace(rules []Rule) error {
+	for _, r := range rules {
+		if err := r.Validate(); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	for _, r := range rules {
+		if seen[r.ID] {
+			return fmt.Errorf("duplicate rule id %q", r.ID)
+		}
+		seen[r.ID] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rules = append([]Rule(nil), rules...)
+	s.sortLocked()
+	return nil
+}
+
+func (s *RuleSet) Remove(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.rules {
+		if r.ID == id {
+			s.rules = append(s.rules[:i], s.rules[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func (s *RuleSet) List() []Rule {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Rule(nil), s.rules...)
+}
+
+func (s *RuleSet) Defaults() (RuleAction, contracts.CoreID) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.defaultAction, s.defaultCore
+}
+
+func (s *RuleSet) SetDefaults(a RuleAction, c contracts.CoreID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultAction, s.defaultCore = a, c
+}
+
+func (s *RuleSet) sortLocked() {
+	sort.SliceStable(s.rules, func(i, j int) bool {
+		return s.rules[i].Priority > s.rules[j].Priority
+	})
+}
+
+// LoadRuleFile reads a YAML/JSON rule set from disk and REPLACES the active
+// set only if every rule validates (Fail-Closed: no half-applied policies).
+func (s *RuleSet) LoadRuleFile(path string) (int, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var f RuleFile
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		if err := yaml.Unmarshal(b, &f); err != nil {
+			return 0, err
+		}
+	} else if err := yaml.Unmarshal(b, &f); err != nil {
+		return 0, err
+	}
+	if err := s.Replace(f.Rules); err != nil {
+		return 0, err
+	}
+	if f.DefaultAction != "" {
+		s.mu.Lock()
+		s.defaultAction, s.defaultCore = f.DefaultAction, f.DefaultCore
+		s.mu.Unlock()
+	}
+	return len(f.Rules), nil
+}
+
+// MatchInput is the normalized tuple extracted from a session.
+type MatchInput struct {
+	Domain  string
+	IP      net.IP
+	Port    uint16
+	Network string
+	Process string
+	Tenant  string
+}
+
+func (s *RuleSet) Match(in MatchInput) (Rule, bool) {
+	s.mu.RLock()
+	rules := append([]Rule(nil), s.rules...)
+	defAction, defCore := s.defaultAction, s.defaultCore
+	s.mu.RUnlock()
+	domain := strings.ToLower(strings.TrimSuffix(in.Domain, "."))
+	for _, r := range rules {
+		if !r.Enabled {
+			continue
+		}
+		if r.TenantID != "" && r.TenantID != in.Tenant {
+			continue
+		}
+		if !matchOne(r, in, domain) {
+			continue
+		}
+		return r, true
+	}
+	return Rule{
+		ID: "DEFAULT", Type: RuleMatch, Value: "*", Action: defAction,
+		CoreID: defCore, Enabled: true, Comment: "no rule matched",
+	}, false
+}
+
+func matchOne(r Rule, in MatchInput, domain string) bool {
+	switch r.Type {
+	case RuleDomain:
+		return domain == strings.ToLower(r.Value)
+	case RuleDomainSuffix:
+		v := strings.ToLower(r.Value)
+		return domain == strings.TrimPrefix(v, ".") || strings.HasSuffix(domain, "."+strings.TrimPrefix(v, "."))
+	case RuleDomainKeyword:
+		return strings.Contains(domain, strings.ToLower(r.Value))
+	case RuleDomainRegex:
+		re, err := regexp.Compile(r.Value)
+		return err == nil && re.MatchString(domain)
+	case RuleIPCIDR:
+		if in.IP == nil {
+			return false
+		}
+		_, n, err := net.ParseCIDR(r.Value)
+		return err == nil && n.Contains(in.IP)
+	case RulePort:
+		return strings.TrimSpace(r.Value) == fmt.Sprintf("%d", in.Port)
+	case RuleNetwork:
+		return strings.EqualFold(r.Value, in.Network)
+	case RuleProcess:
+		return strings.Contains(strings.ToLower(in.Process), strings.ToLower(r.Value))
+	case RuleTenant:
+		return r.Value == in.Tenant
+	case RuleMatch:
+		return true
+	}
+	return false
+}
+
+// RuleEngine implements the reserved RuleEngine contract.
+type ruleEngine struct {
+	set     *RuleSet
+	metrics *Metrics
+}
+
+var _ RuleEngine = (*ruleEngine)(nil)
+
+func newRuleEngine(set *RuleSet, metrics *Metrics) *ruleEngine {
+	return &ruleEngine{set: set, metrics: metrics}
+}
+
+func (e *ruleEngine) Match(_ context.Context, s Session) (RouteDecision, error) {
+	in := MatchInput{Domain: s.Domain, Network: s.Network, Tenant: s.TenantID}
+	if a, ok := s.Dst.(*net.TCPAddr); ok {
+		in.IP, in.Port = a.IP, uint16(a.Port)
+	} else if a, ok := s.Dst.(*net.UDPAddr); ok {
+		in.IP, in.Port = a.IP, uint16(a.Port)
+	} else if s.Dst != nil {
+		host, port, _ := net.SplitHostPort(s.Dst.String())
+		in.IP = net.ParseIP(host)
+		fmt.Sscanf(port, "%d", &in.Port)
+	}
+	r, matched := e.set.Match(in)
+	if e.metrics != nil && matched {
+		e.metrics.RuleMatches.Add(1)
+	}
+	d := RouteDecision{
+		CoreID: r.CoreID, Chain: r.Chain, TenantID: r.TenantID,
+		Reason: fmt.Sprintf("rule=%s type=%s value=%s matched=%v", r.ID, r.Type, r.Value, matched),
+	}
+	switch r.Action {
+	case ActDirect:
+		d.Direct = true
+		d.Outbound = "direct"
+	case ActBlock:
+		d.Block = true
+		d.Outbound = "reject"
+	case ActDNS:
+		d.DNSPolicy = "local"
+		d.Direct = true
+		d.Outbound = "direct"
+	default:
+		d.Outbound = string(r.CoreID)
+		if len(r.Chain) > 0 {
+			d.CoreID = r.Chain[0]
+		}
+	}
+	return d, nil
+}
+
+func (e *ruleEngine) Reload(_ context.Context) error { return nil }
+
+func DefaultRules() []Rule {
+	return []Rule{
+		{ID: "r-private-v4", Type: RuleIPCIDR, Value: "10.0.0.0/8", Action: ActDirect, Priority: 90, Enabled: true, Comment: "private network direct"},
+		{ID: "r-private-v4b", Type: RuleIPCIDR, Value: "192.168.0.0/16", Action: ActDirect, Priority: 90, Enabled: true},
+		{ID: "r-localhost", Type: RuleIPCIDR, Value: "127.0.0.0/8", Action: ActDirect, Priority: 95, Enabled: true},
+		{ID: "r-dns-local", Type: RulePort, Value: "53", Action: ActDNS, Priority: 80, Enabled: true, Comment: "DNS handled by NGG DNS engine"},
+	}
+}
