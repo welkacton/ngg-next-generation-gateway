@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -321,5 +323,93 @@ func TestNodeRegistryAndRuleUpdate(t *testing.T) {
 	_, body = req(t, "GET", ts.URL+"/api/v1/network/rules", token, "")
 	if !strings.Contains(body, ".edited.test") || !strings.Contains(body, "edited via API") {
 		t.Fatalf("rule edit not applied: %s", body)
+	}
+}
+
+// TestRuleSets verifies custom rule sets: inline/URL creation, edit, upload
+// auto-detection, apply into the live rule table, and delete.
+func TestRuleSets(t *testing.T) {
+	ts, token := newTestServer(t)
+	resp, body := req(t, "GET", ts.URL+"/api/v1/rulesets", token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list rule sets: %d %s", resp.StatusCode, body)
+	}
+
+	created := `{"id":"rs-test","name":"测试规则集","source":"inline","enabled":true,"content":"DOMAIN-SUFFIX,example.com,PROXY\nIP-CIDR,10.0.0.0/8,DIRECT\n"}`
+	resp, body = req(t, "POST", ts.URL+"/api/v1/rulesets", token, created)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create rule set: %d %s", resp.StatusCode, body)
+	}
+	var saved struct {
+		RuleSet struct {
+			RuleCount int    `json:"rule_count"`
+			Format    string `json:"format"`
+		} `json:"ruleset"`
+	}
+	_ = json.Unmarshal([]byte(body), &saved)
+	if saved.RuleSet.RuleCount != 2 || saved.RuleSet.Format != "rule-lines" {
+		t.Fatalf("auto-detect failed: %s", body)
+	}
+
+	edited := `{"id":"rs-test","name":"已修改","source":"inline","enabled":true,"content":"DOMAIN,edited.example,PROXY\n"}`
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/rulesets/rs-test", token, edited)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit rule set: %d %s", resp.StatusCode, body)
+	}
+
+	resp, body = req(t, "POST", ts.URL+"/api/v1/rulesets/rs-test/apply", token, `{"core_id":"mihomo"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("apply rule set: %d %s", resp.StatusCode, body)
+	}
+	_, body = req(t, "GET", ts.URL+"/api/v1/network/rules", token, "")
+	if !strings.Contains(body, "edited.example") {
+		t.Fatalf("applied rule missing from live table: %s", body)
+	}
+
+	// Multipart upload must auto-detect a Clash YAML payload.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("file", "my-rules.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte(`payload:
+  - 'DOMAIN-SUFFIX,uploaded.example'
+`))
+	_ = mw.Close()
+	upReq, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/rulesets/upload", &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upReq.Header.Set("Authorization", "Bearer "+token)
+	upReq.Header.Set("Content-Type", mw.FormDataContentType())
+	upResp, err := http.DefaultClient.Do(upReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upResp.Body.Close()
+	upBody, _ := io.ReadAll(upResp.Body)
+	if upResp.StatusCode != http.StatusOK || !strings.Contains(string(upBody), "clash-yaml") {
+		t.Fatalf("upload auto-detect: %d %s", upResp.StatusCode, upBody)
+	}
+	_, body = req(t, "GET", ts.URL+"/api/v1/rulesets", token, "")
+	if !strings.Contains(body, "uploaded.example") || !strings.Contains(body, "rs-my-rules") {
+		t.Fatalf("uploaded set not appended to list: %s", body)
+	}
+
+	// URL-backed set performs a real HTTP fetch.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("DOMAIN,remote.example,PROXY\n"))
+	}))
+	defer srv.Close()
+	urlSet := `{"id":"rs-url","name":"远程","source":"url","url":"` + srv.URL + `","enabled":true}`
+	resp, body = req(t, "POST", ts.URL+"/api/v1/rulesets", token, urlSet)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("url rule set: %d %s", resp.StatusCode, body)
+	}
+
+	resp, _ = req(t, "DELETE", ts.URL+"/api/v1/rulesets/rs-test", token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete rule set: %d", resp.StatusCode)
 	}
 }

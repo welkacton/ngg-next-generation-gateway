@@ -1,11 +1,13 @@
-# NGG 部署与共享指南
+# NGG 部署指南
 
-本仓库是公开可克隆的，任何人都可以把 NGG 部署到自己的 VPS、家用电脑、软路由或 OpenWrt 设备上。
-许可：MIT（见 `LICENSE`）。
+仓库当前为 **Private（仅自己可见）**：`https://github.com/welkacton/ngg-next-generation-gateway`。
+只有仓库所有者授权的 GitHub 账号可以克隆；自行部署到 VPS、家用电脑、软路由或 OpenWrt 时，
+请先完成授权克隆（`git clone` 使用有权限的凭证 / SSH Key），或下载自己账号可见的 Release 产物。
+许可：MIT（见 `LICENSE`）。**如需对外共享，由所有者在仓库设置中手动改为 Public。**
 
 ---
 
-## 0. 先读安全清单（公开仓库尤其重要）
+## 0. 先读安全清单（私有仓库同样必须遵守）
 
 - **控制 API 默认只监听 `127.0.0.1:9090` 且必须带 Bearer Token**。不要把它直接暴露到公网。
   远程管理请走 SSH 隧道：`ssh -L 9090:127.0.0.1:9090 user@your-vps`。

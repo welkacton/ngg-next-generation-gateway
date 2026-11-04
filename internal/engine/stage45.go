@@ -10,6 +10,7 @@ import (
 	"github.com/ngg-project/ngg/internal/nodes"
 	"github.com/ngg-project/ngg/internal/plugins"
 	"github.com/ngg-project/ngg/internal/protocols"
+	"github.com/ngg-project/ngg/internal/rulesets"
 	"github.com/ngg-project/ngg/internal/sdwan"
 	"github.com/ngg-project/ngg/internal/tenants"
 	"github.com/ngg-project/ngg/pkg/contracts"
@@ -68,6 +69,10 @@ func (e *Engine) initStage45() {
 	e.plugins = plugins.NewManager(filepath.Join(e.cfg.Storage.Dir, "plugins"))
 	e.sdwan = sdwan.NewManager(sdwan.PolicyLowestLatency, 3*time.Second)
 	e.tenants = tenants.NewRegistry()
+	e.ruleSets = rulesets.NewRegistry(filepath.Join(e.cfg.Storage.Dir, "rulesets-config.json"))
+	if err := e.ruleSets.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted rule sets: %v\n", err)
+	}
 	e.nodeReg = nodes.NewRegistry(filepath.Join(e.cfg.Storage.Dir, "nodes-config.json"))
 	if err := e.nodeReg.Load(); err != nil {
 		fmt.Printf("NGG: could not load persisted nodes: %v\n", err)
@@ -88,6 +93,7 @@ func (e *Engine) Plugins() *plugins.Manager      { return e.plugins }
 func (e *Engine) SDWAN() *sdwan.Manager          { return e.sdwan }
 func (e *Engine) Tenants() *tenants.Registry     { return e.tenants }
 func (e *Engine) Nodes() *nodes.Registry         { return e.nodeReg }
+func (e *Engine) RuleSets() *rulesets.Registry   { return e.ruleSets }
 
 // Stages reports the honest implementation status of every stage.
 func (e *Engine) Stages() map[string]any {

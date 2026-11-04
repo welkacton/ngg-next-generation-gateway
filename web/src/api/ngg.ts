@@ -858,3 +858,76 @@ export interface NodeTemplate {
 
 /** 内置的整份原生配置示例（3X-UI / Xray / Remnawave 风格）。 */
 export const listNodeTemplates = () => get<NodeTemplate[]>('/nodes/templates')
+
+/* ------------------------------------------------------------------ *
+ * 配置引擎 · 自定义规则集（内联 / URL 订阅 / 上传附件）
+ * ------------------------------------------------------------------ */
+
+export type RuleSetSource = 'inline' | 'url' | 'upload'
+
+export interface ParsedRule {
+  type: string
+  value: string
+  action: string
+  raw?: string
+}
+
+export interface RuleSetDef {
+  id: string
+  name: string
+  description: string
+  format: string
+  source: RuleSetSource
+  url: string
+  filename?: string
+  content?: string
+  rules: ParsedRule[]
+  warnings: string[]
+  rule_count: number
+  enabled: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface RuleSetListResult {
+  rulesets: RuleSetDef[]
+  count: number
+  [key: string]: unknown
+}
+
+export interface RuleSetParsePreview {
+  format: string
+  count: number
+  warnings: string[]
+  sample: ParsedRule[]
+}
+
+export interface RuleSetUploadResult {
+  ok: boolean
+  ruleset: RuleSetDef
+  parse: RuleSetParsePreview
+  [key: string]: unknown
+}
+
+export const listRuleSets = () => get<RuleSetListResult>('/rulesets')
+export const addRuleSet = (set: Partial<RuleSetDef>) =>
+  post<GenericResult>('/rulesets', set)
+export const updateRuleSet = (id: string, set: Partial<RuleSetDef>) =>
+  put<GenericResult>(`/rulesets/${encodeURIComponent(id)}`, set)
+export const deleteRuleSet = (id: string) =>
+  del<GenericResult>(`/rulesets/${encodeURIComponent(id)}`)
+export const fetchRuleSet = (id: string) =>
+  post<GenericResult>(`/rulesets/${encodeURIComponent(id)}/fetch`)
+export const applyRuleSet = (id: string, coreId?: string) =>
+  post<GenericResult>(`/rulesets/${encodeURIComponent(id)}/apply`, coreId ? { core_id: coreId } : {})
+export const listRuleSetFormats = () =>
+  get<Array<{ id: string; name: string }>>('/rulesets/formats')
+
+/** 上传附件：后端自动识别格式、解析规则并立即附加到规则集列表。 */
+export const uploadRuleSet = (file: File, name?: string, description?: string) => {
+  const form = new FormData()
+  form.append('file', file)
+  if (name) form.append('name', name)
+  if (description) form.append('description', description)
+  return client.post<RuleSetUploadResult>('/rulesets/upload', form).then((r) => r.data)
+}

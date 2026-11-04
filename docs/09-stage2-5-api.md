@@ -638,3 +638,50 @@ curl -X PUT -H "$H" -H 'Content-Type: application/json' \
 curl -X POST -H "$H" -H 'Content-Type: application/json' \
   -d '{"kernel":"xray-core","content":"{\"inbounds\":[...]}"}' "$BASE/nodes/parse"
 ```
+
+### 自定义规则集端点（追加）
+
+配置引擎「规则」页的规则集栏使用以下端点，全部需要 `Authorization: Bearer <token>`。
+规则集持久化在 `data/rulesets-config.json`（0600），**不属于** `data/network-config.json`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/rulesets` | `{rulesets:[...],count:n}`；按 id 排序，无数据时返回 `[]` 而不是 `null` |
+| `POST` | `/api/v1/rulesets` | 新增规则集；body 为 `RuleSet` 对象，`id` / `name` 必填；保存时执行真实解析（URL 源执行真实 HTTP GET） |
+| `GET` | `/api/v1/rulesets/formats` | 返回自动识别支持的格式清单 `{id,name}[]` |
+| `POST` | `/api/v1/rulesets/upload` | `multipart/form-data`：`file`（必填）+ 可选 `id` / `name` / `description` / `format`；自动识别格式、解析规则并**立即创建并附加到规则集列表**，返回 `{ok,ruleset,parse:{format,count,warnings,sample}}` |
+| `GET` | `/api/v1/rulesets/{id}` | 读取单个规则集（含 `content` / `rules`） |
+| `PUT` | `/api/v1/rulesets/{id}` | 修改规则集；会重新 materialize（URL 源重新拉取、内容重新解析），失败保持原对象 |
+| `DELETE` | `/api/v1/rulesets/{id}` | 删除规则集（已合并进实时规则表的规则不会自动撤销） |
+| `POST` | `/api/v1/rulesets/{id}/fetch` | URL 源重新真实拉取订阅；其它源重新解析当前内容 |
+| `POST` | `/api/v1/rulesets/{id}/apply` | 把规则集合并进实时规则表；body 可选 `{core_id}`，留空取规则表默认内核；返回 `{applied,skipped,core_id}` |
+
+**RuleSet 字段**：`id`、`name`、`description`、`format`、`source`（`inline` / `url` / `upload`）、
+`url`、`filename`、`content`、`rules`、`warnings`、`rule_count`、`enabled`、`created_at`、`updated_at`。
+
+**自动识别格式**：`clash-yaml`（`payload:` / `rules:`）、`json-array`、`json-rules/payload/domains/list`、
+`rule-lines`（`DOMAIN-SUFFIX,x.com,PROXY`）、`domain-list`、`cidr-list`。
+纯域名列表支持 `*.` 通配与 AdGuard `||domain^` / `@@||domain^`（白名单映射为 DIRECT）。
+无法识别的行只累加进 `warnings`（格式：`N 行无法识别，已跳过（未伪造为规则）`），
+若一条规则都识别不出来返回 `422 未从内容中识别出任何规则`，**不创建空规则集**。
+
+**安全约束**：URL 只接受 `http` / `https`，20s 超时，响应体上限 8 MiB；上传文件上限 16 MiB；
+拉取失败返回 `502`，不会用旧内容伪装为刷新成功。
+
+```bash
+# 上传附件：后端自动识别并直接附加到规则集栏
+curl -X POST -H "$H" -F 'file=@./my-rules.yaml' -F 'name=我的规则集' \
+  "$BASE/rulesets/upload"
+
+# 新增 URL 订阅规则集（保存时真实拉取）
+curl -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"id":"rs-sub","name":"订阅","source":"url","url":"https://example.com/rules.yaml","format":"auto","enabled":true}' \
+  "$BASE/rulesets"
+
+# 把规则集合并进实时规则表
+curl -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"core_id":"mihomo"}' "$BASE/rulesets/rs-sub/apply"
+```
+
+前端对应 `web/src/views/Rules.vue`：规则表顶部与行内均有「新增 / 修改（编辑）/ 删除」按钮，
+规则集栏提供上传附件、URL 订阅、内联编辑、重新拉取、应用到规则表，上传后自动识别结果会显示在识别提示区。

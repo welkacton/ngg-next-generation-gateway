@@ -12,8 +12,9 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 
 ## 一键部署（VPS / 电脑 / 软路由）
 
-公开仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · MIT 许可（见 `LICENSE`）。
-任何人都可以 clone 后自行部署到自己的服务器、电脑、NAS 或软路由。
+私有仓库（**仅自己可见**）：**https://github.com/welkacton/ngg-next-generation-gateway** · MIT 许可（见 `LICENSE`）。
+仓库当前为 `private`，只有仓库所有者授权账号可以 clone；部署到自己的服务器、电脑、NAS 或软路由时，
+请先用有权限的账号完成克隆或下载 Release 产物。若日后要共享，由所有者手动改为 Public。
 
 | 场景 | 最短路径 |
 | --- | --- |
@@ -24,7 +25,7 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 
 完整部署、端口、备份、安全清单见 **[`docs/DEPLOY.md`](docs/DEPLOY.md)**。
 
-> ⚠️ 公开仓库请勿提交真实凭据：`configs/ngg.yaml`（含 API Token）与 `data/`（含节点密码、私钥、
+> ⚠️ 仓库请勿提交真实凭据（即使当前为私有仓库，也应始终保持脱敏）：`configs/ngg.yaml`（含 API Token）与 `data/`（含节点密码、私钥、
 > 后量子密钥）均已 gitignore。分享原生配置前请先脱敏；`configs/examples/native-xray.sample.json` 全是占位符。
 ## 架构要点
 
@@ -45,7 +46,7 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | --- | --- | --- |
 | Stage 1 | 统一管理中心 + 内核引擎（Mihomo / Xray-core / sing-box）、安装/升级/回滚、配置事务、日志监控、SQLite 状态恢复、REST+WS、Web UI | ✅ 完成 |
 | Stage 2 | 统一网络引擎：Linux 真 TUN、全平台 SOCKS5/SOCKS4a/HTTP CONNECT 入口、IPv4/IPv6 Packet Processor、Session Manager、Protocol Dispatcher、Core Adapter Bridge、多核代理链、Egress Manager、资源隔离与防回环 | ✅ 实现（TUN 有 Linux 能力边界） |
-| Stage 3 | 10 类规则 + 4 类动作、规则集原子替换、本地 DNS 引擎（缓存/hosts/block/DoH）、TUN 内 DNS 应答包、入口与出口策略 | ✅ 实现 |
+| Stage 3 | 10 类规则 + 4 类动作、规则表新增/修改/删除、自定义规则集（内联 / URL 订阅 / 上传文档自动识别并附加到规则集栏、一键合并进实时规则表）、本地 DNS 引擎（缓存/hosts/block/DoH）、TUN 内 DNS 应答包、入口与出口策略 | ✅ 实现 |
 | Stage 4 | 16 项 VPN/加密代理协议能力中心 + 真实内核原生配置生成、**ML-KEM-768 + X25519 混合后量子握手**（FIPS 203）与 AES-256-GCM 控制信道、JS(goja) + WASM(wazero) 插件运行时 | ✅ 实现 |
 | Stage 5 | SD-WAN 真实链路探测/选路/故障切换、企业多租户隔离与配额、跨平台构建矩阵 + gomobile 共享 Go 核心 + 各平台接入骨架 | ✅ 服务端实现 / 客户端为骨架 |
 
@@ -146,7 +147,7 @@ scripts/                   构建、开发、systemd 安装、端到端验收脚
 | `docs/07-stage2-network-engine.md` | Stage 2 数据平面设计与能力边界 |
 | `docs/08-stage3-5-features.md` | Stage 3~5 功能与实现状态 |
 | `docs/09-stage2-5-api.md` | Stage 2~5 全部 API 细节 + 节点/原生配置编辑附录 |
-| `docs/DEPLOY.md` | 公开仓库部署、Docker/systemd/软路由、安全清单、已知边界 |
+| `docs/DEPLOY.md` | 私有仓库部署、Docker/systemd/软路由、安全清单、已知边界 |
 
 ## 验证命令
 
