@@ -1,0 +1,108 @@
+{
+  "log": {
+    "loglevel": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "REGION_A_VlessEncryption",
+      "port": 33001,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "mlkem768x25519plus.native.600s.REPLACE_WITH_YOUR_OWN_KEY"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none"
+      }
+    },
+    {
+      "tag": "DIRECT_VlessEncryption",
+      "port": 33002,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "mlkem768x25519plus.native.600s.REPLACE_WITH_YOUR_OWN_KEY"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none"
+      }
+    },
+    {
+      "tag": "DIRECT_Trojan",
+      "port": 33003,
+      "listen": "0.0.0.0",
+      "protocol": "trojan",
+      "settings": {
+        "clients": []
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "keyFile": "/path/to/your/private.key",
+              "certificateFile": "/path/to/your/certificate.crt"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "REGION_A_Socks5_Encryption",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "203.0.113.10",
+            "port": 34001,
+            "users": [
+              {
+                "user": "REPLACE_USER",
+                "pass": "REPLACE_PASSWORD"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "tag": "US_DIRECT_Encryption",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "US_DIRECT_Trojan",
+      "protocol": "freedom"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["REGION_A_VlessEncryption"],
+        "outboundTag": "REGION_A_Socks5_Encryption"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["DIRECT_VlessEncryption"],
+        "outboundTag": "US_DIRECT_Encryption"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["DIRECT_Trojan"],
+        "outboundTag": "US_DIRECT_Trojan"
+      }
+    ]
+  }
+}

@@ -1,0 +1,76 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: 386 }
+          - { goos: linux, goarch: arm }
+          - { goos: windows, goarch: amd64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: freebsd, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build Web UI
+        run: |
+          cd web && npm ci --no-audit --no-fund && npm run build
+      - name: Cross-compile control plane
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist/ngg
+          BIN=nggd
+          [ "${{ matrix.goos }}" = "windows" ] && BIN=nggd.exe
+          go build -trimpath -ldflags="-s -w" -o "dist/ngg/$BIN" ./cmd/nggd
+          cp -r web/dist dist/ngg/web-dist
+          cp -r configs dist/ngg/configs
+          cp -r docs dist/ngg/docs
+          cp README.md LICENSE dist/ngg/
+          cp configs/ngg.example.yaml dist/ngg/configs/ngg.yaml.example
+      - name: Package
+        run: |
+          NAME="ngg-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          tar -czf "${NAME}.tar.gz" -C dist ngg
+          sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ngg-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            *.tar.gz
+            *.sha256
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Combined checksums
+        run: |
+          cd artifacts && cat *.sha256 > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

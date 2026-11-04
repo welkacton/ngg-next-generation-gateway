@@ -1,0 +1,29 @@
+services:
+  ngg:
+    build: .
+    image: ngg:local
+    container_name: ngg
+    restart: unless-stopped
+    # Host networking is required for LAN proxy / transparent ingress on Linux.
+    # On Docker Desktop, replace this with the commented ports block below.
+    network_mode: host
+    # ports:
+    #   - "127.0.0.1:9090:9090"
+    #   - "18080:18080"
+    #   - "18053:18053/tcp"
+    #   - "18053:18053/udp"
+    cap_add:
+      - NET_ADMIN          # needed only if tun.auto_route is enabled on Linux
+      - NET_BIND_SERVICE
+    environment:
+      NGG_TOKEN: ${NGG_TOKEN:-}
+      NGG_LISTEN: ${NGG_LISTEN:-127.0.0.1}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./runtime/configs:/app/configs
+      - ./runtime/data:/app/data
+      # 使用 3X-UI / Remnawave 导出的 Xray 配置时按需启用（详见 docs/DEPLOY.md 第 11 节）：
+      # - ./certs/privkey.key:/etc/ngg-certs/privkey.key:ro
+      # - ./certs/fullchain.pem:/etc/ngg-certs/fullchain.pem:ro
+      # 扩展 geo 文件按文件挂载，不要整目录覆盖默认 geosite/geoip
+      # - ./geo/geo-zapret.dat:/usr/local/share/xray/geo-zapret.dat:ro

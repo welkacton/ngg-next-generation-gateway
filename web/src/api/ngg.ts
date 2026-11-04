@@ -821,3 +821,40 @@ export const generateNodeConfig = (id: string, kernel: string) =>
 /** 单条规则编辑（配置引擎 · 规则表）。 */
 export const updateRule = (id: string, rule: Rule) =>
   put<GenericResult>(`/network/rules/${encodeURIComponent(id)}`, rule)
+
+/* ------------------------------------------------------------------ *
+ * 完整内核原生配置（Xray / sing-box JSON，Mihomo YAML）
+ * ------------------------------------------------------------------ */
+
+export interface NativeRoutingBinding {
+  inbound_tag: string
+  outbound_tag: string
+  rule_type?: string
+}
+
+export interface NativeParseResult {
+  kernel: string
+  nodes: ProtocolNode[]
+  routing: NativeRoutingBinding[]
+  detected: Record<string, number>
+  warnings: string[]
+  [key: string]: unknown
+}
+
+/** 解析整份内核原生配置，只返回结果、不落库。 */
+export const parseNativeConfig = (kernel: string, content: string) =>
+  post<NativeParseResult>('/nodes/parse', { kernel, content })
+
+/** 解析后把识别出的入口/出口节点合并进配置引擎节点库。 */
+export const importNativeNodes = (kernel: string, content: string) =>
+  post<GenericResult>('/nodes/from-native', { kernel, content })
+
+export interface NodeTemplate {
+  id: string
+  name: string
+  kernel: string
+  content: string
+}
+
+/** 内置的整份原生配置示例（3X-UI / Xray / Remnawave 风格）。 */
+export const listNodeTemplates = () => get<NodeTemplate[]>('/nodes/templates')

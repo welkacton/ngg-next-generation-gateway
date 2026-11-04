@@ -155,3 +155,60 @@ func (s *Server) handleNodeConfig(w http.ResponseWriter, r *http.Request) {
 		"note": "这是内核原生配置片段，需合并进内核完整配置后由内核原生校验器校验；NGG 不重写内核协议栈",
 	})
 }
+
+// handleParseNative parses a COMPLETE kernel native config (the kind shown in
+// the operator's Xray/sing-box JSON) into NGG nodes + routing bindings.
+// It only reads; nothing is applied until the operator confirms.
+func (s *Server) handleParseNative(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Kernel  string `json:"kernel"`
+		Content string `json:"content"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	result, err := nodes.ParseNative(body.Kernel, body.Content)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleFromNative parses and merges the detected nodes into the registry.
+func (s *Server) handleFromNative(w http.ResponseWriter, r *http.Request) {
+	reg := s.engine.Nodes()
+	if reg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "node registry not initialized")
+		return
+	}
+	var body struct {
+		Kernel  string `json:"kernel"`
+		Content string `json:"content"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	result, err := nodes.ParseNative(body.Kernel, body.Content)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	n, err := reg.Merge(result.Nodes)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "imported": n, "kernel": result.Kernel,
+		"detected": result.Detected, "routing": result.Routing, "warnings": result.Warnings,
+	})
+}
+
+// handleNodeTemplates exposes the shipped native-config examples so the UI can
+// load one with a single click. Content is the same as configs/examples/*.json.
+func (s *Server) handleNodeTemplates(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, nodes.Templates())
+}

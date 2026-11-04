@@ -10,6 +10,22 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 
 ---
 
+## 一键部署（VPS / 电脑 / 软路由）
+
+公开仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · MIT 许可（见 `LICENSE`）。
+任何人都可以 clone 后自行部署到自己的服务器、电脑、NAS 或软路由。
+
+| 场景 | 最短路径 |
+| --- | --- |
+| VPS / 云服务器 | `cp .env.example .env && docker compose up -d --build` |
+| Linux VPS（无 Docker） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` |
+| 本地电脑 | `bash scripts/quickstart.sh`（或 `--release v1.0.0` 下载预编译包） |
+| 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 |
+
+完整部署、端口、备份、安全清单见 **[`docs/DEPLOY.md`](docs/DEPLOY.md)**。
+
+> ⚠️ 公开仓库请勿提交真实凭据：`configs/ngg.yaml`（含 API Token）与 `data/`（含节点密码、私钥、
+> 后量子密钥）均已 gitignore。分享原生配置前请先脱敏；`configs/examples/native-xray.sample.json` 全是占位符。
 ## 架构要点
 
 - **统一 TUN 由 NGG 创建**（Linux `/dev/net/tun` + `CAP_NET_ADMIN`）；三个内核一律 Worker Mode，
@@ -95,6 +111,8 @@ make dev                # Vite :5173（后端另开终端 make run）
 
 ```
 cmd/nggd/                  服务入口
+Dockerfile / docker-compose.yml / .env.example   容器化部署
+.github/workflows/         CI + 多平台 Release 构建
 pkg/contracts/             共享 DTO 与能力描述契约
 internal/core/             Core Adapter 接口、Core Registry、模块端口
 internal/adapters/         mihomo / xray / singbox / generic / builtin
@@ -127,7 +145,8 @@ scripts/                   构建、开发、systemd 安装、端到端验收脚
 | `docs/06-roadmap.md` | 五阶段路线图与验收标准 |
 | `docs/07-stage2-network-engine.md` | Stage 2 数据平面设计与能力边界 |
 | `docs/08-stage3-5-features.md` | Stage 3~5 功能与实现状态 |
-| `docs/09-stage2-5-api.md` | Stage 2~5 全部 API 细节 |
+| `docs/09-stage2-5-api.md` | Stage 2~5 全部 API 细节 + 节点/原生配置编辑附录 |
+| `docs/DEPLOY.md` | 公开仓库部署、Docker/systemd/软路由、安全清单、已知边界 |
 
 ## 验证命令
 
@@ -141,6 +160,10 @@ NGG_TEST_ARCHIVE=/abs/path/to/mihomo.zip \
 node scripts/e2e-verify.js     # Phase 1 端到端
 node bin/_verify/e2e_stage5.js # Stage 3~5 现场 API 验收（需服务运行）
 ```
+
+## 开源与许可
+
+MIT License（见 `LICENSE`）。贡献见 `CONTRIBUTING.md`，安全披露见 `SECURITY.md`。
 
 ## 安全边界
 

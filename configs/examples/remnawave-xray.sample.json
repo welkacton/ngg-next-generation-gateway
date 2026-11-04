@@ -1,0 +1,59 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "error": "/var/log/remnanode/error.log",
+    "access": "/var/log/remnanode/access.log"
+  },
+  "inbounds": [
+    {
+      "tag": "VLESS_TCP_REALITY",
+      "port": 443,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    },
+    {
+      "tag": "Shadowsocks_20221101",
+      "port": 1234,
+      "listen": "0.0.0.0",
+      "protocol": "shadowsocks",
+      "settings": {
+        "method": "chacha20-ietf-poly1305",
+        "clients": [],
+        "network": "tcp,udp"
+      }
+    }
+  ],
+  "outbounds": [
+    { "tag": "NOT_RU_OUTBOUND", "protocol": "freedom" },
+    { "tag": "DIRECT", "protocol": "freedom" },
+    { "tag": "BLOCK", "protocol": "blackhole" }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "domain": ["ext:geo-zapret.dat:zapret"],
+        "inboundTag": ["VLESS_TCP_REALITY"],
+        "outboundTag": "NOT_RU_OUTBOUND"
+      },
+      {
+        "type": "field",
+        "ip": ["ext:ip-zapret.dat:zapret"],
+        "outboundTag": "NOT_RU_OUTBOUND"
+      }
+    ]
+  }
+}

@@ -43,7 +43,18 @@ const actionResult = ref<unknown>(null)
 const configResult = ref<NodeConfigResult | null>(null)
 const globalResult = ref<NetworkConfigPatchResult | null>(null)
 
-const jsonMode = ref(false)
+type EditorMode = 'form' | 'nodes-json' | 'native'
+const mode = ref<EditorMode>('form')
+
+// 完整内核原生配置（可直接粘贴整份 Xray / sing-box JSON 或 Mihomo YAML）
+const nativeKernel = ref('xray-core')
+const nativeText = ref('')
+const nativeValidate = ref<unknown>(null)
+const nativeApply = ref<unknown>(null)
+const nativeParse = ref<unknown>(null)
+const nativeImport = ref<unknown>(null)
+const templates = ref<api.NodeTemplate[]>([])
+const selectedTemplate = ref<string | null>(null)
 const jsonText = ref('{\n  "nodes": []\n}')
 const showGlobal = ref(false)
 
@@ -177,8 +188,9 @@ async function loadJson() {
   }
 }
 
-watch(jsonMode, (on) => {
-  if (on) loadJson()
+watch(mode, (m) => {
+  if (m === 'nodes-json') loadJson()
+  if (m === 'native' && !nativeText.value) loadNativeFromCore()
 })
 
 function startEdit(n: ProtocolNode) {
@@ -249,7 +261,7 @@ async function saveNode() {
     actionResult.value = r
     cancelEdit()
     await refresh()
-    if (jsonMode.value) await loadJson()
+    if (mode.value === 'nodes-json') await loadJson()
   }
 }
 
@@ -265,7 +277,7 @@ function confirmDelete(id: string) {
         actionResult.value = r
         if (editingId.value === id) cancelEdit()
         await refresh()
-        if (jsonMode.value) await loadJson()
+        if (mode.value === 'nodes-json') await loadJson()
       }
     },
   })
@@ -308,10 +320,66 @@ async function saveGlobal() {
   await refresh()
 }
 
+async function loadTemplates() {
+  const t = await run('templates', () => api.listNodeTemplates())
+  if (t) {
+    templates.value = toArray<api.NodeTemplate>(t)
+    if (templates.value.length && !selectedTemplate.value) selectedTemplate.value = templates.value[0].id
+  }
+}
+
+function applyTemplate() {
+  const tpl = templates.value.find((t) => t.id === selectedTemplate.value)
+  if (!tpl) {
+    window.$message?.warning('请先选择一个示例模板')
+    return
+  }
+  nativeText.value = tpl.content
+  nativeKernel.value = tpl.kernel
+  nativeParse.value = null
+  nativeApply.value = null
+  window.$message?.success('已载入示例：' + tpl.name)
+}
+
+async function loadNativeFromCore() {
+  const d = await run('native-load', () => api.getConfig(nativeKernel.value))
+  if (d) nativeText.value = d.content ?? ''
+}
+
+async function validateNative() {
+  const r = await run('native-validate', () =>
+    api.validateConfig(nativeKernel.value, nativeText.value), '原生校验完成')
+  if (r) nativeValidate.value = r
+}
+
+async function applyNative() {
+  const r = await run(
+    'native-apply',
+    () => api.saveConfig(nativeKernel.value, nativeText.value, 'native-config-editor'),
+    '原生配置已备份、校验并应用',
+  )
+  if (r) nativeApply.value = r
+}
+
+async function parseNative() {
+  const r = await run('native-parse', () =>
+    api.parseNativeConfig(nativeKernel.value, nativeText.value), '解析完成')
+  if (r) nativeParse.value = r
+}
+
+async function importNative() {
+  const r = await run('native-import', () =>
+    api.importNativeNodes(nativeKernel.value, nativeText.value), '原生配置节点已导入')
+  if (r) {
+    nativeImport.value = r
+    await refresh()
+  }
+}
+
 onMounted(async () => {
   await refreshCatalog()
   await refresh()
-  if (jsonMode.value) await loadJson()
+  await loadTemplates()
 })
 </script>
 
@@ -322,9 +390,10 @@ onMounted(async () => {
         <h2 class="page-title">{{ title }}</h2>
         <p class="page-subtitle">{{ subtitle }}</p>
       </div>
-      <NSpace :size="10" align="center" :wrap="true">
-        <span class="hint">JSON 编辑</span>
-        <NSwitch v-model:value="jsonMode" />
+      <NSpace :size="8" align="center" :wrap="true">
+        <NButton size="small" :type="mode === 'form' ? 'primary' : 'default'" @click="mode = 'form'">表单编辑</NButton>
+        <NButton size="small" :type="mode === 'nodes-json' ? 'primary' : 'default'" @click="mode = 'nodes-json'">节点 JSON</NButton>
+        <NButton size="small" :type="mode === 'native' ? 'primary' : 'default'" @click="mode = 'native'">原生配置</NButton>
         <NButton size="small" :loading="isBusy('list')" @click="refresh">刷新</NButton>
       </NSpace>
     </div>
@@ -338,7 +407,7 @@ onMounted(async () => {
     </NAlert>
 
     <!-- ============================ 表单模式 ============================ -->
-    <template v-if="!jsonMode">
+    <template v-if="mode === 'form'">
       <NCard size="small" :title="`${title}列表（GET /nodes）`" class="section-gap">
         <template #header-extra>
           <NTag size="small" :bordered="false" type="info">{{ nodes.length }} 个节点</NTag>
@@ -465,7 +534,7 @@ onMounted(async () => {
     </template>
 
     <!-- ============================ JSON 模式 ============================ -->
-    <NCard v-else size="small" title="JSON 编辑（全量替换 · Fail-Closed）" class="section-gap">
+    <NCard v-else-if="mode === 'nodes-json'" size="small" title="节点 JSON 编辑（全量替换 · Fail-Closed）" class="section-gap">
       <template #header-extra>
         <NSpace :size="8">
           <NButton size="small" :loading="isBusy('export')" @click="loadJson">从服务端重新载入</NButton>
@@ -483,6 +552,58 @@ onMounted(async () => {
       <pre v-if="actionResult" class="mono output-block" style="max-height: 160px; margin-top: 10px">{{ prettyJson(actionResult) }}</pre>
     </NCard>
 
+    <!-- ======================= 原生配置模式 ======================= -->
+    <NCard v-else size="small" title="完整内核原生配置（整份 JSON / YAML 自定义）" class="section-gap">
+      <template #header-extra>
+        <NSpace :size="8">
+          <NSelect v-model:value="nativeKernel" :options="kernelOptions" style="width: 170px" />
+          <NButton size="small" :loading="isBusy('native-load')" @click="loadNativeFromCore">
+            读取内核当前配置
+          </NButton>
+        </NSpace>
+      </template>
+      <NSpace :size="8" :wrap="true" align="center" style="margin-bottom: 10px">
+        <span class="hint">示例模板</span>
+        <NSelect
+          v-model:value="selectedTemplate"
+          :options="templates.map((t) => ({ label: t.name, value: t.id }))"
+          style="width: 380px"
+        />
+        <NButton size="small" :loading="isBusy('templates')" @click="applyTemplate">载入示例</NButton>
+        <span class="hint">3X-UI 默认配置 / Xray 多入口 / Remnawave 节点配置</span>
+      </NSpace>
+      <NAlert type="info" :bordered="false" style="margin-bottom: 10px">
+        可直接粘贴整份 Xray-core / sing-box JSON 或 Mihomo YAML（含 log / inbounds / outbounds / routing）。
+        带 @long-text: 或 &lt;long_text_quote&gt; 包裹的长文本会自动剥离。
+        「校验并应用」先备份当前有效配置，再调用内核自身校验器，通过才替换；重启内核后生效。
+        NGG 不改写协议栈，也不解析其中的凭据，请自行保管好密码与私钥。
+      </NAlert>
+      <NInput v-model:value="nativeText" type="textarea" class="code-editor" :rows="22" />
+      <NSpace :size="8" :wrap="true" style="margin-top: 10px">
+        <NButton size="small" :loading="isBusy('native-validate')" @click="validateNative">仅原生校验</NButton>
+        <NButton size="small" type="primary" :loading="isBusy('native-apply')" @click="applyNative">
+          校验并应用
+        </NButton>
+        <NButton size="small" :loading="isBusy('native-parse')" @click="parseNative">解析为节点</NButton>
+        <NButton size="small" :loading="isBusy('native-import')" @click="importNative">导入节点库</NButton>
+      </NSpace>
+      <div v-if="nativeValidate" style="margin-top: 12px">
+        <div class="kv-label">内核原生校验输出</div>
+        <pre class="mono output-block" style="max-height: 200px">{{ prettyJson(nativeValidate) }}</pre>
+      </div>
+      <div v-if="nativeApply" style="margin-top: 12px">
+        <div class="kv-label">应用结果（含自动备份）</div>
+        <pre class="mono output-block" style="max-height: 200px">{{ prettyJson(nativeApply) }}</pre>
+      </div>
+      <div v-if="nativeImport" style="margin-top: 12px">
+        <div class="kv-label">节点导入结果</div>
+        <pre class="mono output-block" style="max-height: 200px">{{ prettyJson(nativeImport) }}</pre>
+      </div>
+      <div v-if="nativeParse" style="margin-top: 12px">
+        <div class="kv-label">解析出的入口 / 出口 / 路由绑定（NGG 视图）</div>
+        <pre class="mono output-block" style="max-height: 320px">{{ prettyJson(nativeParse) }}</pre>
+      </div>
+    </NCard>
     <!-- ========================= 全局参数（保留） ========================= -->
     <NCard size="small" class="section-gap">
       <template #header>

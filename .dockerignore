@@ -1,0 +1,13 @@
+.git
+.github
+data
+bin
+web/node_modules
+web/dist
+configs/ngg.yaml
+configs/ngg.local.yaml
+.workbuddy
+*.db
+*.exe
+*.zip
+*.log

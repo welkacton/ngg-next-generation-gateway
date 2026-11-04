@@ -387,3 +387,33 @@ func GenerateKernelConfig(n Node, kernel string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("kernel %q has no config generator", kernel)
 	}
 }
+
+// Merge imports parsed native-config nodes without deleting existing ones.
+// Everything is validated first; a failure leaves the registry untouched.
+func (r *Registry) Merge(list []Node) (int, error) {
+	validated := make([]Node, 0, len(list))
+	for i := range list {
+		n := list[i]
+		normalize(&n)
+		if err := validate(n); err != nil {
+			return 0, fmt.Errorf("node #%d (%s): %w", i+1, n.ID, err)
+		}
+		validated = append(validated, n)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	old := r.nodes
+	next := map[string]Node{}
+	for k, v := range old {
+		next[k] = v
+	}
+	for _, n := range validated {
+		next[n.ID] = n
+	}
+	r.nodes = next
+	if err := r.persistLocked(); err != nil {
+		r.nodes = old
+		return 0, fmt.Errorf("persist merged nodes: %w", err)
+	}
+	return len(validated), nil
+}
