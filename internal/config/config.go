@@ -22,6 +22,7 @@ type Config struct {
 	Supervisor SupervisorConfig `yaml:"supervisor" json:"supervisor"`
 	Logging    LoggingConfig    `yaml:"logging" json:"logging"`
 	Network    netengine.Config `yaml:"network" json:"network"`
+	Build      BuildConfig      `yaml:"build" json:"build"`
 }
 
 type ServerConfig struct {
@@ -45,6 +46,10 @@ type SupervisorConfig struct {
 	StopTimeout    string `yaml:"stop_timeout" json:"stop_timeout"`
 	RestartMax     int    `yaml:"restart_max" json:"restart_max"`
 	RestartBackoff string `yaml:"restart_backoff" json:"restart_backoff"`
+}
+
+type BuildConfig struct {
+	GoBinary string `yaml:"go_binary" json:"go_binary"`
 }
 
 type LoggingConfig struct {

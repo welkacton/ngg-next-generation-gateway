@@ -318,6 +318,13 @@ func (s *Server) handlePlatformBuild(w http.ResponseWriter, r *http.Request) {
 		Output string `json:"output"`
 		Path   string `json:"path,omitempty"`
 	}
+	// A daemon (systemd / service) often has no Go toolchain on PATH, and
+	// -trimpath builds report an empty runtime.GOROOT(). Resolve explicitly.
+	goBin := s.resolveGoBinary()
+	if goBin == "" {
+		writeErr(w, http.StatusServiceUnavailable, "Go toolchain not found: set build.go_binary in configs/ngg.yaml or NGG_GO_BINARY")
+		return
+	}
 	results := make([]result, 0, len(targets))
 	for _, t := range targets {
 		parts := strings.Split(t, "/")
@@ -332,7 +339,7 @@ func (s *Server) handlePlatformBuild(w http.ResponseWriter, r *http.Request) {
 		}
 		out := filepath.Join(outDir, name)
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
-		cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags=-s -w", "-o", out, "./cmd/nggd")
+		cmd := exec.CommandContext(ctx, goBin, "build", "-trimpath", "-ldflags=-s -w", "-o", out, "./cmd/nggd")
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
 		b, err := cmd.CombinedOutput()
@@ -348,7 +355,43 @@ func (s *Server) handlePlatformBuild(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, entry)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "go_binary": goBin, "results": results})
+}
+
+// resolveGoBinary finds a REAL Go compiler without assuming PATH or GOROOT.
+func (s *Server) resolveGoBinary() string {
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	candidates := []string{}
+	if v := s.cfg.Build.GoBinary; v != "" {
+		candidates = append(candidates, v)
+	}
+	if v := os.Getenv("NGG_GO_BINARY"); v != "" {
+		candidates = append(candidates, v)
+	}
+	if found, err := exec.LookPath("go"); err == nil {
+		candidates = append(candidates, found)
+	}
+	if goroot := runtime.GOROOT(); goroot != "" {
+		candidates = append(candidates, filepath.Join(goroot, "bin", "go"+ext))
+	}
+	for _, p := range []string{
+		"/usr/local/go/bin/go", "/usr/lib/go/bin/go", "/opt/go/bin/go",
+		filepath.Join(os.Getenv("USERPROFILE"), ".workbuddy", "toolchains", "go", "bin", "go"+ext),
+		filepath.Join(os.Getenv("HOME"), ".workbuddy", "toolchains", "go", "bin", "go"+ext),
+	} {
+		if p != "" {
+			candidates = append(candidates, p)
+		}
+	}
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c
+		}
+	}
+	return ""
 }
 
 func truncate(s string, n int) string {

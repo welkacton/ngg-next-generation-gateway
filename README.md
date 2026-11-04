@@ -67,6 +67,8 @@ make dev                # Vite :5173（后端另开终端 make run）
 ```
 
 服务启动会：恢复上次运行的内核 → 自动拉起统一网络引擎 → 监听 `127.0.0.1:9090`。
+以 daemon 运行且 PATH 不含 `go` 时，请在 `configs/ngg.yaml` 设置 `build.go_binary`（或 `NGG_GO_BINARY`），
+否则 `POST /api/v1/platforms/build` 会如实报「找不到工具链」而不是伪装成功。
 在 Web UI「Cores」页安装三个内核后，「Stage 2 网络引擎」页的端到端自检即可验证
 `NGG 入口 → Session → Rule → Dispatcher → Core Bridge → 真实内核 → 目标` 全链路。
 

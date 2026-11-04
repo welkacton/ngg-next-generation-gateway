@@ -219,6 +219,7 @@ logging:
 | `logging.level` | `info` | 日志级别 |
 | `logging.dir` | `data/logs` | 日志目录 |
 | `logging.ring_capacity` | `4000` | 环形缓冲条数 |
+| `build.go_binary` | `""` | 交叉编译用的 Go 工具链绝对路径。服务以 systemd/daemon 启动时 PATH 常不含 `go`，且 `-trimpath` 构建的 `runtime.GOROOT()` 为空；此时必须显式配置，或设置环境变量 `NGG_GO_BINARY`。未找到编译器时 `POST /platforms/build` 返回 `503` 并给出明确原因 |
 
 **环境变量覆盖**（优先级高于配置文件）：`NGG_LISTEN`、`NGG_PORT`、`NGG_DATA_DIR`、`NGG_TOKEN`。
 

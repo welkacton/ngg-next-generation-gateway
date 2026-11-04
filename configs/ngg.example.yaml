@@ -51,3 +51,7 @@ network:
         bypass_tun: true
     default_core: ""
     direct_on_failure: false
+
+# 交叉编译用的 Go 工具链路径（服务以 daemon 运行时 PATH 常不含 go）
+build:
+  go_binary: ""

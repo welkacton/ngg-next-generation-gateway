@@ -423,13 +423,14 @@
 - 响应 `200`：
 
 ```json
-{ "ok":true, "results":[
+{ "ok":true, "go_binary":"<实际使用的 go 可执行文件绝对路径>", "results":[
   {"target":"linux/amd64","ok":true,"output":"ok","path":"bin/platforms/nggd-linux-amd64"},
   {"target":"ios/arm64","ok":false,"output":"<真实 go build 错误输出，截断 400 字符>"} ] }
 ```
 
 - 真实执行 `go build -trimpath -ldflags="-s -w"`，逐目标设 `GOOS/GOARCH/CGO_ENABLED=0`，单目标 4 分钟超时，产物落在 `bin/platforms/nggd-<goos>-<goarch>[.exe]`；格式错误的 target 返回 `ok:false, output:"invalid target"`，**不伪装成功**。
-- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`500 INTERNAL_ERROR`（创建输出目录失败）。
+- 编译器解析顺序：`build.go_binary` → `NGG_GO_BINARY` → `PATH` 中的 `go` → `runtime.GOROOT()/bin/go` → 常见安装路径（`C:/Users/admin/.workbuddy/toolchains/go/bin/go.exe` 等）；全部找不到时返回 `500` 并提示配置方式。响应中的 `go_binary` 是**真实使用**的编译器路径。
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`500 INTERNAL_ERROR`（创建输出目录失败）；`503`（工具链未找到，响应体为 `{"error":"...: Go toolchain not found: ..."}`）。
 
 ---
 
