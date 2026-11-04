@@ -435,7 +435,7 @@ export interface Rule {
   value: string
   action: string
   core_id?: string
-  chain?: string
+  chain?: string[] | string
   tenant_id?: string
   priority: number
   enabled: boolean
@@ -751,3 +751,73 @@ export interface NetworkConfigPatchResult {
 
 export const patchNetworkConfig = (patch: NetworkConfigPatch) =>
   put<NetworkConfigPatchResult>('/network/config', patch)
+
+/* ------------------------------------------------------------------ *
+ * 配置引擎 · 入口 / 出口节点（加密协议节点）
+ * ------------------------------------------------------------------ */
+
+export type NodeKind = 'inbound' | 'outbound'
+
+export interface ProtocolNode {
+  id: string
+  name: string
+  kind: NodeKind
+  protocol: string
+  address: string
+  port: number
+  enabled: boolean
+  core_id: string
+  params: Record<string, unknown>
+  tags: string[]
+  description: string
+}
+
+export interface NodeProtocolInfo {
+  id: string
+  name: string
+  category: string
+  kinds: NodeKind[]
+  default_port: number
+  encrypted: boolean
+  pq_capable: boolean
+  description: string
+}
+
+export interface NodeListResult {
+  nodes: ProtocolNode[]
+  count: number
+  path?: string
+  [key: string]: unknown
+}
+
+export interface NodeConfigResult {
+  ok?: boolean
+  node_id?: string
+  kernel?: string
+  format?: string
+  content?: string
+  validated?: boolean
+  note?: string
+  [key: string]: unknown
+}
+
+const node = (id: string) => `/nodes/${encodeURIComponent(id)}`
+
+export const listNodes = (kind?: NodeKind) =>
+  get<NodeListResult>(kind ? `/nodes?kind=${kind}` : '/nodes')
+export const getNode = (id: string) => get<ProtocolNode>(node(id))
+export const addNode = (n: ProtocolNode) => post<GenericResult>('/nodes', n)
+export const updateNode = (id: string, n: ProtocolNode) =>
+  put<GenericResult>(node(id), n)
+export const deleteNode = (id: string) => del<GenericResult>(node(id))
+export const listNodeProtocols = (kind: NodeKind) =>
+  get<NodeProtocolInfo[]>(`/nodes/protocols?kind=${kind}`)
+export const exportNodes = () => get<NodeListResult>('/nodes/export')
+export const importNodes = (nodes: ProtocolNode[]) =>
+  put<GenericResult>('/nodes/import', { nodes })
+export const generateNodeConfig = (id: string, kernel: string) =>
+  post<NodeConfigResult>(`${node(id)}/config`, { kernel })
+
+/** 单条规则编辑（配置引擎 · 规则表）。 */
+export const updateRule = (id: string, rule: Rule) =>
+  put<GenericResult>(`/network/rules/${encodeURIComponent(id)}`, rule)

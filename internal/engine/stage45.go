@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ngg-project/ngg/internal/netengine"
+	"github.com/ngg-project/ngg/internal/nodes"
 	"github.com/ngg-project/ngg/internal/plugins"
 	"github.com/ngg-project/ngg/internal/protocols"
 	"github.com/ngg-project/ngg/internal/sdwan"
@@ -67,6 +68,10 @@ func (e *Engine) initStage45() {
 	e.plugins = plugins.NewManager(filepath.Join(e.cfg.Storage.Dir, "plugins"))
 	e.sdwan = sdwan.NewManager(sdwan.PolicyLowestLatency, 3*time.Second)
 	e.tenants = tenants.NewRegistry()
+	e.nodeReg = nodes.NewRegistry(filepath.Join(e.cfg.Storage.Dir, "nodes-config.json"))
+	if err := e.nodeReg.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted nodes: %v\n", err)
+	}
 	if e.network != nil {
 		e.network.SetPluginHook(&pluginHookAdapter{m: e.plugins})
 		e.network.SetTenantResolver(e.tenants)
@@ -82,6 +87,7 @@ func (e *Engine) Protocols() *protocols.Registry { return e.protocols }
 func (e *Engine) Plugins() *plugins.Manager      { return e.plugins }
 func (e *Engine) SDWAN() *sdwan.Manager          { return e.sdwan }
 func (e *Engine) Tenants() *tenants.Registry     { return e.tenants }
+func (e *Engine) Nodes() *nodes.Registry         { return e.nodeReg }
 
 // Stages reports the honest implementation status of every stage.
 func (e *Engine) Stages() map[string]any {

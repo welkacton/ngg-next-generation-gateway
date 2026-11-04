@@ -31,14 +31,41 @@ function menuIcon() {
   return h('span', { class: 'menu-dot' })
 }
 
-// 一级大分类：内核引擎 / 配置引擎；其余能力页平铺，不显示额外分组小标题。
+// 一级大分类是可折叠子菜单：点击大分类即可收起 / 展开其二级页面。
+const MENU_EXPANDED_KEY = 'ngg_menu_expanded'
+const defaultExpanded = ['group-core-engine', 'group-config-engine']
+
+function loadExpandedKeys(): string[] {
+  try {
+    const raw = localStorage.getItem(MENU_EXPANDED_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed.map(String)
+    }
+  } catch {
+    // 损坏的本地偏好回退到默认展开，不写入任何模拟状态
+  }
+  return [...defaultExpanded]
+}
+
+const expandedKeys = ref<string[]>(loadExpandedKeys())
+
+function handleExpandedKeys(keys: (string | number)[]) {
+  expandedKeys.value = keys.map(String)
+  try {
+    localStorage.setItem(MENU_EXPANDED_KEY, JSON.stringify(expandedKeys.value))
+  } catch {
+    // 隐私模式下写不进去也不影响菜单功能
+  }
+}
+
 const menuOptions: MenuOption[] = [
   { label: '概览', key: 'dashboard', icon: menuIcon },
   { type: 'divider', key: 'divider-top' },
   {
-    type: 'group',
     label: '内核引擎',
     key: 'group-core-engine',
+    icon: menuIcon,
     children: [
       { label: '内核管理', key: 'cores', icon: menuIcon },
       { label: '配置管理', key: 'config', icon: menuIcon },
@@ -48,9 +75,9 @@ const menuOptions: MenuOption[] = [
     ],
   },
   {
-    type: 'group',
     label: '配置引擎',
     key: 'group-config-engine',
+    icon: menuIcon,
     children: [
       { label: '规则', key: 'rules', icon: menuIcon },
       { label: 'DNS', key: 'dns', icon: menuIcon },
@@ -128,9 +155,11 @@ onUnmounted(() => {
         <NMenu
           :options="menuOptions"
           :value="activeKey"
+          :expanded-keys="expandedKeys"
           :root-indent="22"
           :indent="18"
           @update:value="handleMenu"
+          @update:expanded-keys="handleExpandedKeys"
         />
         <div class="sider-footer">
           NGG · 统一网络引擎<br />

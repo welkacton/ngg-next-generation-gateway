@@ -142,6 +142,25 @@ func (s *RuleSet) Replace(rules []Rule) error {
 	return nil
 }
 
+// Update replaces one rule in place while keeping the priority ordering.
+// ID is immutable during editing to avoid breaking rule references.
+func (s *RuleSet) Update(id string, r Rule) error {
+	r.ID = id
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.rules {
+		if s.rules[i].ID == id {
+			s.rules[i] = r
+			s.sortLocked()
+			return nil
+		}
+	}
+	return fmt.Errorf("rule %q not found", id)
+}
+
 func (s *RuleSet) Remove(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

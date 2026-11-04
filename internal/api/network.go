@@ -248,6 +248,20 @@ func (s *Server) handleNetworkRuleByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	if r.Method == http.MethodPut {
+		var rule netengine.Rule
+		if err := decodeJSON(r, &rule); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		rule.ID = id
+		if err := ne.Rules().Update(id, rule); err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rule": rule})
+		return
+	}
 	if !ne.Rules().Remove(id) {
 		writeErr(w, http.StatusNotFound, "rule "+id+" not found")
 		return

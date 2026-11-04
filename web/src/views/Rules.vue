@@ -35,6 +35,7 @@ const defaultAction = ref('')
 const defaultCore = ref('')
 const rulesResult = ref<unknown>(null)
 const loadPath = ref('')
+const editingId = ref<string | null>(null)
 
 const ruleForm = ref({
   id: '',
@@ -57,7 +58,9 @@ function buildRule(): Rule {
     value: ruleForm.value.value.trim(),
     action: ruleForm.value.action,
     core_id: ruleForm.value.core_id.trim() || undefined,
-    chain: ruleForm.value.chain.trim() || undefined,
+    chain: ruleForm.value.chain.trim()
+      ? ruleForm.value.chain.split(/[,\s]+/).map((v) => v.trim()).filter(Boolean)
+      : undefined,
     tenant_id: ruleForm.value.tenant_id.trim() || undefined,
     priority: ruleForm.value.priority ?? 0,
     enabled: ruleForm.value.enabled,
@@ -74,13 +77,50 @@ async function refreshRules() {
   }
 }
 
-async function addRuleAction() {
+function chainToText(chain: unknown): string {
+  if (Array.isArray(chain)) return chain.join(', ')
+  return String(chain ?? '')
+}
+
+function startEdit(r: Rule) {
+  editingId.value = r.id
+  ruleForm.value = {
+    id: r.id,
+    type: r.type,
+    value: r.value,
+    action: r.action,
+    core_id: r.core_id ?? '',
+    chain: chainToText(r.chain),
+    tenant_id: r.tenant_id ?? '',
+    priority: r.priority ?? 0,
+    enabled: r.enabled,
+    comment: r.comment ?? '',
+  }
+  window.$message?.info('已载入规则 ' + r.id + '，修改后点击「保存修改」')
+}
+
+function cancelEdit() {
+  editingId.value = null
+  ruleForm.value = {
+    id: '', type: 'DOMAIN', value: '', action: 'PROXY', core_id: '',
+    chain: '', tenant_id: '', priority: 0, enabled: true, comment: '',
+  }
+}
+
+async function saveRuleAction() {
   if (!ruleForm.value.id.trim() || !ruleForm.value.value.trim()) {
     window.$message?.warning('请填写规则 ID 与匹配值')
     return
   }
-  const r = await run('add-rule', () => api.addRule(buildRule()), '规则已新增')
-  if (r) rulesResult.value = r
+  const rule = buildRule()
+  const editing = editingId.value
+  const r = editing
+    ? await run('update-rule', () => api.updateRule(editing, rule), '规则已修改')
+    : await run('add-rule', () => api.addRule(rule), '规则已新增')
+  if (r) {
+    rulesResult.value = r
+    cancelEdit()
+  }
   await refreshRules()
 }
 
@@ -169,7 +209,7 @@ const ruleColumns: any[] = [
       ),
   },
   { title: '内核', key: 'core_id', minWidth: 110, render: (r: Rule) => r.core_id ?? '—' },
-  { title: '链', key: 'chain', minWidth: 110, render: (r: Rule) => r.chain ?? '—' },
+  { title: '链', key: 'chain', minWidth: 130, render: (r: Rule) => Array.isArray(r.chain) ? r.chain.join(' → ') : (r.chain ?? '—') },
   { title: '租户', key: 'tenant_id', minWidth: 110, render: (r: Rule) => r.tenant_id ?? '—' },
   { title: '优先级', key: 'priority', width: 90, render: (r: Rule) => r.priority ?? 0 },
   {
@@ -187,19 +227,26 @@ const ruleColumns: any[] = [
   {
     title: '操作',
     key: 'actions',
-    width: 100,
+    width: 140,
     fixed: 'right',
     render: (r: Rule) =>
-      h(
-        NButton,
-        {
-          size: 'tiny',
-          type: 'error',
-          loading: isBusy('del:' + r.id),
-          onClick: () => confirmDelete(r.id),
-        },
-        { default: () => '删除' },
-      ),
+      h(NSpace, { size: 6 }, { default: () => [
+        h(
+          NButton,
+          { size: 'tiny', onClick: () => startEdit(r) },
+          { default: () => '编辑' },
+        ),
+        h(
+          NButton,
+          {
+            size: 'tiny',
+            type: 'error',
+            loading: isBusy('del:' + r.id),
+            onClick: () => confirmDelete(r.id),
+          },
+          { default: () => '删除' },
+        ),
+      ] }),
   },
 ]
 
@@ -251,12 +298,12 @@ onMounted(() => {
 
     <NGrid cols="1 m:2" responsive="screen" :x-gap="14" :y-gap="14" class="section-gap">
       <NGi>
-        <NCard size="small" title="新增规则（POST /network/rules）">
+        <NCard size="small" :title="editingId ? '编辑规则 ' + editingId + '（PUT /network/rules/{id}）' : '新增规则（POST /network/rules）'">
           <NSpace vertical :size="10" style="width: 100%">
             <NGrid cols="2" :x-gap="10" :y-gap="8">
               <NGi>
                 <div class="kv-label">ID（必填）</div>
-                <NInput v-model:value="ruleForm.id" placeholder="rule-1" />
+                <NInput v-model:value="ruleForm.id" placeholder="rule-1" :disabled="!!editingId" />
               </NGi>
               <NGi>
                 <div class="kv-label">类型</div>
@@ -295,9 +342,17 @@ onMounted(() => {
                 <NInput v-model:value="ruleForm.comment" placeholder="可选" />
               </NGi>
             </NGrid>
-            <NButton size="small" type="primary" :loading="isBusy('add-rule')" @click="addRuleAction">
-              新增规则
-            </NButton>
+            <NSpace :size="8">
+              <NButton
+                size="small"
+                type="primary"
+                :loading="isBusy('add-rule') || isBusy('update-rule')"
+                @click="saveRuleAction"
+              >
+                {{ editingId ? '保存修改' : '新增规则' }}
+              </NButton>
+              <NButton v-if="editingId" size="small" @click="cancelEdit">取消编辑</NButton>
+            </NSpace>
           </NSpace>
         </NCard>
       </NGi>

@@ -546,3 +546,73 @@ curl -X POST -H "$H" -H "$JH" \
 - `GET /pq/status` 的 `note` 与 `mlkem-hybrid` 协议一样，明确后量子实现**仅用于 NGG 节点间控制信道**。
 - `GET /platforms` 的 `note` 明确**原生 UI 客户端为骨架**，需各平台 SDK 打包。
 - 上述端点不提供「统一 TUN 全局接管」开关：TUN 只在 Linux 且 `TUN.AutoRoute=true` 时由 `Engine.Start` 尝试打开，Windows/macOS 返回 `ErrTUNUnsupported` 并改用 userspace 入口。
+
+---
+
+## 附录 A · 配置引擎节点与规则编辑（追加）
+
+### 规则单条编辑
+
+| 方法 | 路径 | 请求体 | 响应 |
+| --- | --- | --- | --- |
+| `PUT` | `/api/v1/network/rules/{id}` | `Rule` 对象（`id` 以路径参数为准，保持不可变） | `{"ok":true,"rule":{...}}` |
+
+- 后端调用 `RuleSet.Update`，先做 `Rule.Validate()`，再按优先级重新排序；不存在的 id 返回 `422`。
+- 与现有 `POST /network/rules`（新增）、`DELETE /network/rules/{id}`（删除）、`PUT /network/rules`（全量替换）配合，规则表支持完整增删改。
+
+### 入口 / 出口协议节点
+
+节点是「配置哪个加密协议、由哪个内核执行、用什么参数」的定义，持久化在
+`<storage.dir>/nodes-config.json`（0600）。NGG 生成内核原生配置片段，实际握手/隧道由内核执行。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/nodes?kind=inbound\|outbound` | 节点列表：`{"nodes":[...],"count":n,"path":"..."}` |
+| `POST` | `/api/v1/nodes` | 新增节点（body 为单个 `Node`） |
+| `GET` | `/api/v1/nodes/{id}` | 单个节点 |
+| `PUT` | `/api/v1/nodes/{id}` | 修改节点（ID 不可变） |
+| `DELETE` | `/api/v1/nodes/{id}` | 删除节点 |
+| `GET` | `/api/v1/nodes/protocols?kind=inbound\|outbound` | 该方向可用的协议目录 |
+| `GET` | `/api/v1/nodes/export` | 导出全部节点 JSON |
+| `PUT` | `/api/v1/nodes/import` | `{"nodes":[...]}` 全量 JSON 替换（全或不做） |
+| `POST` | `/api/v1/nodes/{id}/config` | `{"kernel":"mihomo"}` → 生成并格式校验内核原生配置片段 |
+
+`Node` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` / `name` | string | 必填，id 唯一且编辑时不可变 |
+| `kind` | `inbound` / `outbound` | 必填 |
+| `protocol` | string | 必须存在于协议目录，且支持该 kind |
+| `address` / `port` | string / int | 入口监听地址或出口服务器；port=0 时套用协议默认端口 |
+| `enabled` / `core_id` | bool / string | 启用状态；指定执行内核 |
+| `params` | object | 协议参数（密码、UUID、cipher、private_key、TLS、obfs 等），自由 JSON |
+| `tags` / `description` | array / string | 标签与说明 |
+
+协议目录覆盖 Shadowsocks / VMess / VLESS+REALITY / Trojan / Hysteria2 / TUIC / AnyTLS /
+Mieru / Snell / NaiveProxy / SOCKS5 / HTTP / WireGuard / OpenVPN / IPsec-IKEv2 / L2TP /
+PPTP / SSTP / OpenConnect / SSH / ML-KEM-768 混合后量子 / DIRECT / REJECT。
+其中 VPN 类多为 `outbound` only，`mixed` 仅 `inbound`；不匹配的组合返回 `422`。
+
+**校验规则（Fail-Closed）**：未知协议、方向不匹配、端口越界、重复 id、JSON 参数不可序列化都会被拒绝；
+`import` 逐条校验，任一条失败则整个集合保持不变，写文件失败同样回滚内存。
+
+**诚实边界**：节点定义用于生成并校验内核原生配置片段，供运维合并进内核完整配置；
+当前 userspace 统一入口仍为单一监听端口，多协议 inbound 的实际监听由内核 Worker Mode 承担，
+NGG 不重写任何内核协议栈。`params` 中的凭据以明文保存在本地 0600 文件，不上传仓库。
+
+```bash
+# 新增一个加密入口节点
+curl -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"id":"in-ss","name":"SS 入口","kind":"inbound","protocol":"shadowsocks","address":"0.0.0.0","port":8388,"enabled":true,"params":{"cipher":"aes-256-gcm","password":"secret"}}' \
+  "$BASE/nodes"
+
+# 生成 sing-box 原生配置片段
+curl -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"kernel":"sing-box"}' "$BASE/nodes/in-ss/config"
+
+# 编辑一条规则
+curl -X PUT -H "$H" -H 'Content-Type: application/json' \
+  -d '{"type":"DOMAIN-SUFFIX","value":".example.com","action":"PROXY","core_id":"mihomo","priority":50,"enabled":true}' \
+  "$BASE/network/rules/r-example"
+```

@@ -231,3 +231,95 @@ func TestNetworkConfigIngressEgressPatch(t *testing.T) {
 		t.Fatal("unrelated fields must be preserved")
 	}
 }
+
+// TestNodeRegistryAndRuleUpdate verifies the Config Engine's editable node
+// registry (CRUD + JSON import + kernel config generation) and single-rule
+// editing through PUT /network/rules/{id}.
+func TestNodeRegistryAndRuleUpdate(t *testing.T) {
+	ts, token := newTestServer(t)
+
+	resp, body := req(t, "GET", ts.URL+"/api/v1/nodes/protocols?kind=inbound", token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("protocol catalog: %d %s", resp.StatusCode, body)
+	}
+	var catalog []map[string]any
+	if err := json.Unmarshal([]byte(body), &catalog); err != nil || len(catalog) < 10 {
+		t.Fatalf("inbound protocol catalog too small: %v %d", err, len(catalog))
+	}
+
+	node := `{"id":"in-ss","name":"SS 入口","kind":"inbound","protocol":"shadowsocks","address":"0.0.0.0","port":8388,"enabled":true,"params":{"cipher":"aes-256-gcm","password":"pw"}}`
+	resp, body = req(t, "POST", ts.URL+"/api/v1/nodes", token, node)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("add node: %d %s", resp.StatusCode, body)
+	}
+	_, body = req(t, "GET", ts.URL+"/api/v1/nodes?kind=inbound", token, "")
+	var listed struct {
+		Nodes []map[string]any `json:"nodes"`
+		Count int              `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(body), &listed); err != nil || listed.Count != 1 {
+		t.Fatalf("list nodes: %v %s", err, body)
+	}
+
+	updated := `{"id":"in-ss","name":"SS 入口（已编辑）","kind":"inbound","protocol":"trojan","address":"0.0.0.0","port":443,"enabled":true,"params":{"password":"pw2"}}`
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/nodes/in-ss", token, updated)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update node: %d %s", resp.StatusCode, body)
+	}
+	_, body = req(t, "GET", ts.URL+"/api/v1/nodes/in-ss", token, "")
+	var one map[string]any
+	_ = json.Unmarshal([]byte(body), &one)
+	if one["name"] != "SS 入口（已编辑）" || one["protocol"] != "trojan" {
+		t.Fatalf("node edit not applied: %s", body)
+	}
+
+	resp, body = req(t, "POST", ts.URL+"/api/v1/nodes/in-ss/config", token, `{"kernel":"sing-box"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "trojan") {
+		t.Fatalf("kernel config generation: %d %s", resp.StatusCode, body)
+	}
+
+	// JSON import is all-or-nothing.
+	goodImport := `{"nodes":[{"id":"a","name":"A","kind":"inbound","protocol":"socks5","port":1080},{"id":"b","name":"B","kind":"outbound","protocol":"wireguard","port":51820,"params":{"private_key":"x"}}]}`
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/nodes/import", token, goodImport)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid JSON import rejected: %d %s", resp.StatusCode, body)
+	}
+	badImport := `{"nodes":[{"id":"c","name":"C","kind":"outbound","protocol":"not-a-protocol"}]}`
+	resp, _ = req(t, "PUT", ts.URL+"/api/v1/nodes/import", token, badImport)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid JSON import must be rejected, got %d", resp.StatusCode)
+	}
+	_, body = req(t, "GET", ts.URL+"/api/v1/nodes", token, "")
+	var after struct {
+		Count int `json:"count"`
+	}
+	_ = json.Unmarshal([]byte(body), &after)
+	if after.Count != 2 {
+		t.Fatalf("failed import changed the node set: %s", body)
+	}
+
+	resp, body = req(t, "DELETE", ts.URL+"/api/v1/nodes/a", token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete node: %d %s", resp.StatusCode, body)
+	}
+
+	// Single-rule editing.
+	_, body = req(t, "GET", ts.URL+"/api/v1/network/rules", token, "")
+	var rules struct {
+		Rules []map[string]any `json:"rules"`
+	}
+	_ = json.Unmarshal([]byte(body), &rules)
+	if len(rules.Rules) == 0 {
+		t.Fatal("expected built-in default rules")
+	}
+	ruleID := fmt.Sprint(rules.Rules[0]["id"])
+	ruleEdit := `{"id":"` + ruleID + `","type":"DOMAIN-SUFFIX","value":".edited.test","action":"PROXY","core_id":"mihomo","priority":77,"enabled":true,"comment":"edited via API"}`
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/network/rules/"+ruleID, token, ruleEdit)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update rule: %d %s", resp.StatusCode, body)
+	}
+	_, body = req(t, "GET", ts.URL+"/api/v1/network/rules", token, "")
+	if !strings.Contains(body, ".edited.test") || !strings.Contains(body, "edited via API") {
+		t.Fatalf("rule edit not applied: %s", body)
+	}
+}

@@ -111,6 +111,18 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/network/endpoints", s.handleNetworkEndpoints)
 	m.HandleFunc("POST /api/v1/network/selftest", s.handleNetworkSelfTest)
 	m.HandleFunc("POST /api/v1/network/packettest", s.handleNetworkPacketTest)
+	m.HandleFunc("PUT /api/v1/network/rules/{id}", s.handleNetworkRuleByID)
+
+	// Config Engine: inbound / outbound encrypted protocol nodes
+	m.HandleFunc("GET /api/v1/nodes", s.handleNodes)
+	m.HandleFunc("POST /api/v1/nodes", s.handleNodes)
+	m.HandleFunc("GET /api/v1/nodes/protocols", s.handleNodeProtocols)
+	m.HandleFunc("GET /api/v1/nodes/export", s.handleNodeExport)
+	m.HandleFunc("PUT /api/v1/nodes/import", s.handleNodeImport)
+	m.HandleFunc("POST /api/v1/nodes/{id}/config", s.handleNodeConfig)
+	m.HandleFunc("GET /api/v1/nodes/{id}", s.handleNodeByID)
+	m.HandleFunc("PUT /api/v1/nodes/{id}", s.handleNodeByID)
+	m.HandleFunc("DELETE /api/v1/nodes/{id}", s.handleNodeByID)
 
 	// Stage 4: VPN protocol center / post-quantum / plugin runtime
 	m.HandleFunc("GET /api/v1/stages", s.handleStages)
