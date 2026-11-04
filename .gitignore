@@ -4,8 +4,8 @@ data/
 *.db
 *.db-wal
 *.db-shm
-nggd
-nggd.exe
+/nggd
+/nggd.exe
 
 # frontend
 web/node_modules/
@@ -20,3 +20,6 @@ configs/ngg.local.yaml
 .idea/
 Thumbs.db
 .DS_Store
+
+# 本地工作区记忆/会话数据（非项目源码）
+.workbuddy/
