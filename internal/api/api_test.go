@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -164,4 +165,69 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestNetworkConfigIngressEgressPatch verifies the config API accepts real
+// nested ingress/tun/egress patches, reports restart requirements, and
+// refuses an insecure non-loopback ingress (Fail-Closed).
+func TestNetworkConfigIngressEgressPatch(t *testing.T) {
+	ts, token := newTestServer(t)
+
+	resp, body := req(t, "GET", ts.URL+"/api/v1/network/config", token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET network/config: %d %s", resp.StatusCode, body)
+	}
+	var before map[string]any
+	if err := json.Unmarshal([]byte(body), &before); err != nil {
+		t.Fatal(err)
+	}
+	ing, _ := before["ingress"].(map[string]any)
+	if ing == nil || ing["port"].(float64) != 18080 {
+		t.Fatalf("unexpected default ingress: %+v", ing)
+	}
+
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/network/config", token,
+		`{"ingress":{"enabled":true,"listen":"127.0.0.1","port":18099,"auth_user":"","auth_pass":""}}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT ingress: %d %s", resp.StatusCode, body)
+	}
+	var saved map[string]any
+	_ = json.Unmarshal([]byte(body), &saved)
+	changed := fmt.Sprint(saved["changed"])
+	if !strings.Contains(changed, "ingress") || !strings.Contains(fmt.Sprint(saved["requires_restart"]), "ingress") {
+		t.Fatalf("ingress change not reported: %s", body)
+	}
+	if saved["persisted"] != true {
+		t.Fatal("network config must be persisted to the data dir")
+	}
+
+	_, body = req(t, "GET", ts.URL+"/api/v1/network/config", token, "")
+	var after map[string]any
+	_ = json.Unmarshal([]byte(body), &after)
+	ing2 := after["ingress"].(map[string]any)
+	if ing2["port"].(float64) != 18099 {
+		t.Fatalf("ingress port not applied: %+v", ing2)
+	}
+
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/network/config", token,
+		`{"ingress":{"enabled":true,"listen":"0.0.0.0","port":18099,"auth_user":"","auth_pass":""}}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("insecure ingress must be rejected, got %d %s", resp.StatusCode, body)
+	}
+
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/network/config", token,
+		`{"egress":{"interface":"eth0","mark":4321,"bypass_tun":false}}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT egress: %d %s", resp.StatusCode, body)
+	}
+	_, body = req(t, "GET", ts.URL+"/api/v1/network/config", token, "")
+	var final map[string]any
+	_ = json.Unmarshal([]byte(body), &final)
+	eg := final["egress"].(map[string]any)
+	if eg["interface"] != "eth0" || eg["mark"].(float64) != 4321 || eg["bypass_tun"] != false {
+		t.Fatalf("egress patch not applied: %+v", eg)
+	}
+	if final["fail_closed"] != true {
+		t.Fatal("unrelated fields must be preserved")
+	}
 }

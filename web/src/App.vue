@@ -31,29 +31,42 @@ function menuIcon() {
   return h('span', { class: 'menu-dot' })
 }
 
+// 一级大分类：内核引擎 / 配置引擎；其余能力页平铺，不显示额外分组小标题。
 const menuOptions: MenuOption[] = [
   { label: '概览', key: 'dashboard', icon: menuIcon },
-  { label: '内核管理', key: 'cores', icon: menuIcon },
-  { label: '配置管理', key: 'config', icon: menuIcon },
-  { label: '实时日志', key: 'logs', icon: menuIcon },
-  { label: '版本管理', key: 'versions', icon: menuIcon },
-  { label: '系统设置', key: 'settings', icon: menuIcon },
+  { type: 'divider', key: 'divider-top' },
   {
     type: 'group',
-    label: 'Stage 2 ~ 5 能力',
-    key: 'stage-group',
+    label: '内核引擎',
+    key: 'group-core-engine',
     children: [
-      { label: 'Stage 2 网络引擎', key: 'network', icon: menuIcon },
-      { label: 'Stage 3 规则与 DNS', key: 'rules', icon: menuIcon },
-      { label: 'Stage 4 协议中心', key: 'protocols', icon: menuIcon },
-      { label: '后量子', key: 'pq', icon: menuIcon },
-      { label: '插件', key: 'plugins', icon: menuIcon },
-      { label: 'Stage 5 SD-WAN', key: 'sdwan', icon: menuIcon },
-      { label: '多租户', key: 'tenants', icon: menuIcon },
-      { label: '跨平台', key: 'platforms', icon: menuIcon },
-      { label: '阶段总览', key: 'stages', icon: menuIcon },
+      { label: '内核管理', key: 'cores', icon: menuIcon },
+      { label: '配置管理', key: 'config', icon: menuIcon },
+      { label: '实时日志', key: 'logs', icon: menuIcon },
+      { label: '版本管理', key: 'versions', icon: menuIcon },
+      { label: '系统设置', key: 'settings', icon: menuIcon },
     ],
   },
+  {
+    type: 'group',
+    label: '配置引擎',
+    key: 'group-config-engine',
+    children: [
+      { label: '规则', key: 'rules', icon: menuIcon },
+      { label: 'DNS', key: 'dns', icon: menuIcon },
+      { label: '协议中心', key: 'protocols', icon: menuIcon },
+      { label: '入口节点', key: 'inbound', icon: menuIcon },
+      { label: '出口节点', key: 'outbound', icon: menuIcon },
+    ],
+  },
+  { type: 'divider', key: 'divider-extra' },
+  { label: '网络引擎', key: 'network', icon: menuIcon },
+  { label: '后量子', key: 'pq', icon: menuIcon },
+  { label: '插件运行时', key: 'plugins', icon: menuIcon },
+  { label: 'SD-WAN', key: 'sdwan', icon: menuIcon },
+  { label: '多租户', key: 'tenants', icon: menuIcon },
+  { label: '跨平台构建', key: 'platforms', icon: menuIcon },
+  { label: '阶段总览', key: 'stages', icon: menuIcon },
 ]
 
 const activeKey = computed(() => String(route.name || 'dashboard'))
@@ -101,7 +114,7 @@ onUnmounted(() => {
     <NLayout has-sider style="height: 100vh">
       <NLayoutSider
         bordered
-        :width="216"
+        :width="232"
         :native-scrollbar="false"
         content-style="position: relative; min-height: 100%;"
       >
@@ -120,8 +133,8 @@ onUnmounted(() => {
           @update:value="handleMenu"
         />
         <div class="sider-footer">
-          Phase 1 · 统一管理中心 + 内核引擎<br />
-          Stage 2~5 · 网络 / 规则 / 协议 / PQ / 插件 / SD-WAN
+          NGG · 统一网络引擎<br />
+          多内核协议运行时 / 统一出入口调度
         </div>
       </NLayoutSider>
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -83,6 +84,15 @@ func New(cfg *config.Config) (*Engine, error) {
 	for _, d := range []string{cfg.Storage.Dir, filepath.Join(cfg.Storage.Dir, "cores"), cfg.Logging.Dir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("create %s: %w", d, err)
+		}
+	}
+	// Runtime network config (managed from the Web UI) lives in a dedicated
+	// JSON file so the main config — comments, token, formatting — is never
+	// rewritten by the control plane.
+	if blob, err := os.ReadFile(filepath.Join(cfg.Storage.Dir, "network-config.json")); err == nil {
+		var saved netengine.Config
+		if err := json.Unmarshal(blob, &saved); err == nil {
+			cfg.Network = saved
 		}
 	}
 	st, err := store.Open(cfg.DBPath())

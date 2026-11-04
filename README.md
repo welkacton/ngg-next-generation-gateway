@@ -67,6 +67,8 @@ make dev                # Vite :5173（后端另开终端 make run）
 ```
 
 服务启动会：恢复上次运行的内核 → 自动拉起统一网络引擎 → 监听 `127.0.0.1:9090`。
+管理界面一级分类为「内核引擎」（内核/配置/日志/版本/设置）与「配置引擎」（规则/DNS/协议中心/入口节点/出口节点）。
+从界面修改的网络配置持久化到 `data/network-config.json`，不会改写含 Token 与注释的主配置文件。
 以 daemon 运行且 PATH 不含 `go` 时，请在 `configs/ngg.yaml` 设置 `build.go_binary`（或 `NGG_GO_BINARY`），
 否则 `POST /api/v1/platforms/build` 会如实报「找不到工具链」而不是伪装成功。
 在 Web UI「Cores」页安装三个内核后，「Stage 2 网络引擎」页的端到端自检即可验证
@@ -108,7 +110,7 @@ internal/store/            SQLite 状态持久化（纯 Go 免 CGO）
 internal/api/              REST + WebSocket（本机限制 + Bearer 认证）
 configs/                   主配置、能力描述目录、规则/DNS/SD-WAN/插件示例数据
 platforms/                 跨平台构建脚本与 Android/iOS/HarmonyOS/TV/OpenWrt 骨架
-web/                       Vue 3 + TS + Naive UI（15 个页面）
+web/                       Vue 3 + TS + Naive UI（18 个页面；一级分类「内核引擎 / 配置引擎」）
 docs/                      架构 / API / 开发 / 安装 / 排障 / 路线图 / Stage 2~5 专题
 scripts/                   构建、开发、systemd 安装、端到端验收脚本
 ```

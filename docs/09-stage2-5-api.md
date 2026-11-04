@@ -101,7 +101,7 @@
 | --- | --- |
 | `enabled` / `fail_closed` / `failover` | bool |
 | `ingress` | `enabled, listen, port, auth_user, auth_pass` |
-| `tun` | **`Name, MTU, IPv4, IPv6, AutoRoute, StrictRoute`**（`TunConfig` 无 `json` tag，序列化为 Go 导出字段名，首字母大写） |
+| `tun` | `name, mtu, ipv4, ipv6, auto_route, strict_route`（`TunConfig` 已带 `json`/`yaml` tag） |
 | `dns` | `enabled, listen, port, upstreams, cache_ttl, hosts, block` |
 | `egress` | `interface, local_addr, mark, bypass_tun` |
 | `default_core` / `direct_on_failure` | string / bool |
@@ -110,7 +110,7 @@
 
 ### `PUT /api/v1/network/config`
 
-- 请求体（字段均可选，指针类型，未提供则不改）：
+- 请求体（字段均可选，未提供则不改；嵌套对象按字段 patch，不会用零值覆盖未提供的子字段）：
 
 ```json
 {
@@ -119,12 +119,34 @@
   "default_core": "mihomo",
   "direct_on_failure": false,
   "egress_mark": 20039,
-  "bypass_tun": true
+  "bypass_tun": true,
+  "ingress": { "enabled": true, "listen": "127.0.0.1", "port": 18080, "auth_user": "", "auth_pass": "" },
+  "dns": { "enabled": true, "listen": "127.0.0.1", "port": 18053, "upstreams": ["223.5.5.5:53"], "cache_ttl": 60, "hosts": {}, "block": [] },
+  "tun": { "name": "ngg0", "mtu": 1500, "ipv4": "10.89.0.1/24", "ipv6": "fd89::1/64", "auto_route": false, "strict_route": true },
+  "egress": { "interface": "eth0", "local_addr": "", "mark": 20039, "bypass_tun": true }
 }
 ```
 
-- 响应 `200`：`{"ok":true,"changed":["fail_closed",...],"requires_restart":["egress.mark","egress.bypass_tun"],"config":{...完整 Config...}}`。`egress_mark` / `bypass_tun` 的改动会进入 `requires_restart`（需重启网络引擎生效）。
-- 错误：`400 INVALID_ARGUMENT`（JSON 非法）；`503 INTERNAL_ERROR`（引擎未初始化）。
+- 扁平字段 `egress_mark` / `bypass_tun` 是 `egress.mark` / `egress.bypass_tun` 的快捷写法，保留向后兼容。
+- `ingress` / `dns` / `tun` / `egress` 的改动会进入 `requires_restart`（监听地址、端口、TUN、出口标记都要重启网络引擎才生效）。
+- `ingress.enabled=true` 时校验 `port` 在 1..65535，且非回环 `listen` 必须同时提供 `auth_user` / `auth_pass`（对应 `ErrIngressInsecure`）；`dns.enabled=true` 时校验 `port`。
+- 非 Linux 平台设置 `tun.auto_route=true` 会返回 `warnings`，如实说明该能力边界。
+- **持久化**：变更写入 `<storage.dir>/network-config.json`（0600），服务重启时由 `engine.New` 加载并覆盖 `configs/ngg.yaml` 中的 `network` 段。主配置文件（含注释与 API Token）**不会被控制面重写**；写入失败时内存配置会回滚。
+- 响应 `200`：
+
+```json
+{
+  "ok": true,
+  "changed": ["ingress", "dns"],
+  "requires_restart": ["ingress", "dns"],
+  "warnings": [],
+  "persisted": true,
+  "persist_path": "data/network-config.json",
+  "config": { "...完整 Config..." }
+}
+```
+
+- 错误：`400 INVALID_ARGUMENT`（JSON 非法 / 端口越界 / 非回环入口缺认证）；`503 INTERNAL_ERROR`（引擎未初始化）；`500 INTERNAL_ERROR`（持久化失败，内存已回滚）。
 
 ### `GET /api/v1/network/rules`
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
+import { h, onMounted, ref } from 'vue'
 import {
   NAlert,
   NButton,
@@ -17,7 +17,6 @@ import {
 import * as api from '../api/ngg'
 import type { Rule } from '../api/ngg'
 import { useApiAction } from '../composables/useApi'
-import { makeColumns } from '../composables/tableColumns'
 import { prettyJson, toArray } from '../utils/format'
 
 const { isBusy, run } = useApiAction()
@@ -50,12 +49,6 @@ const ruleForm = ref({
   comment: '',
 })
 
-const dnsStatus = ref<unknown>(null)
-const resolveForm = ref({ name: '', type: 'A' })
-const resolveResult = ref<unknown>(null)
-const hostsText = ref('{\n  "example.local": "127.0.0.1"\n}')
-const blockText = ref('')
-const dnsResult = ref<unknown>(null)
 
 function buildRule(): Rule {
   return {
@@ -133,48 +126,6 @@ async function loadFromFile() {
   if (r) rulesResult.value = r
   await refreshRules()
 }
-
-async function refreshDnsStatus() {
-  const d = await run('dns-status', () => api.getDnsStatus())
-  if (d) dnsStatus.value = d
-}
-
-async function doResolve() {
-  if (!resolveForm.value.name.trim()) {
-    window.$message?.warning('请填写要解析的域名')
-    return
-  }
-  const r = await run('resolve', () =>
-    api.resolveDns(resolveForm.value.name.trim(), resolveForm.value.type.trim() || 'A'),
-  )
-  if (r) resolveResult.value = r
-}
-
-async function setHosts() {
-  let hosts: Record<string, string>
-  try {
-    hosts = JSON.parse(hostsText.value)
-  } catch {
-    window.$message?.error('hosts 必须是合法的 JSON 对象')
-    return
-  }
-  const block = blockText.value
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-  const r = await run(
-    'hosts',
-    () => api.setDnsHosts({ hosts, block }),
-    'DNS hosts 已更新',
-  )
-  if (r) dnsResult.value = r
-  await refreshDnsStatus()
-}
-
-const answers = computed(() =>
-  toArray((resolveResult.value as Record<string, unknown> | null)?.answers ?? resolveResult.value),
-)
-const answerColumns = computed(() => makeColumns(answers.value))
 
 function actionTagType(action: string): 'success' | 'error' | 'warning' | 'info' | 'default' {
   switch (action) {
@@ -254,7 +205,6 @@ const ruleColumns: any[] = [
 
 onMounted(() => {
   refreshRules()
-  refreshDnsStatus()
 })
 </script>
 
@@ -262,8 +212,8 @@ onMounted(() => {
   <div class="page">
     <div class="page-head">
       <div>
-        <h2 class="page-title">规则与 DNS</h2>
-        <p class="page-subtitle">Stage 3 · 分流规则集、文件加载与本地 DNS</p>
+        <h2 class="page-title">规则</h2>
+        <p class="page-subtitle">配置引擎 · 分流规则集、优先级与规则文件加载</p>
       </div>
       <NSpace>
         <NButton size="small" :loading="isBusy('rules')" @click="refreshRules">刷新规则</NButton>
@@ -367,55 +317,6 @@ onMounted(() => {
       </NGi>
     </NGrid>
 
-    <NCard size="small" title="DNS 状态（/network/dns）" class="section-gap">
-      <template #header-extra>
-        <NButton size="small" :loading="isBusy('dns-status')" @click="refreshDnsStatus">刷新</NButton>
-      </template>
-      <pre class="mono output-block" style="max-height: 220px">{{ prettyJson(dnsStatus) }}</pre>
-    </NCard>
 
-    <NGrid cols="1 m:2" responsive="screen" :x-gap="14" :y-gap="14" class="section-gap">
-      <NGi>
-        <NCard size="small" title="解析测试（POST /network/dns/resolve）">
-          <NSpace vertical :size="10" style="width: 100%">
-            <NSpace :size="8" :wrap="true" align="center">
-              <NInput v-model:value="resolveForm.name" style="max-width: 240px" placeholder="域名，例如 example.com" />
-              <NInput v-model:value="resolveForm.type" style="width: 90px" placeholder="A" />
-              <NButton size="small" type="primary" :loading="isBusy('resolve')" @click="doResolve">
-                解析
-              </NButton>
-            </NSpace>
-            <div v-if="resolveResult">
-              <div class="hint">answers：</div>
-              <NDataTable
-                v-if="answers.length"
-                :columns="answerColumns"
-                :data="answers"
-                :bordered="false"
-                size="small"
-                :pagination="false"
-                :scroll-x="600"
-              />
-              <pre class="mono output-block" style="max-height: 200px">{{ prettyJson(resolveResult) }}</pre>
-            </div>
-          </NSpace>
-        </NCard>
-      </NGi>
-
-      <NGi>
-        <NCard size="small" title="Hosts / 拦截（POST /network/dns/hosts）">
-          <NSpace vertical :size="10" style="width: 100%">
-            <div class="hint">hosts（JSON 对象：域名 → IP）：</div>
-            <NInput v-model:value="hostsText" type="textarea" class="code-editor" :rows="5" />
-            <div class="hint">block（拦截域名，逗号或换行分隔）：</div>
-            <NInput v-model:value="blockText" type="textarea" :rows="2" placeholder="ads.example.com" />
-            <NButton size="small" type="primary" :loading="isBusy('hosts')" @click="setHosts">
-              提交
-            </NButton>
-            <pre v-if="dnsResult" class="mono output-block" style="max-height: 160px">{{ prettyJson(dnsResult) }}</pre>
-          </NSpace>
-        </NCard>
-      </NGi>
-    </NGrid>
   </div>
 </template>

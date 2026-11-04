@@ -33,12 +33,12 @@ type TunManager interface {
 }
 
 type TunConfig struct {
-	Name        string
-	MTU         int
-	IPv4        string
-	IPv6        string
-	AutoRoute   bool // owned by NGG, never by a kernel
-	StrictRoute bool
+	Name        string `json:"name" yaml:"name"`
+	MTU         int    `json:"mtu" yaml:"mtu"`
+	IPv4        string `json:"ipv4" yaml:"ipv4"`
+	IPv6        string `json:"ipv6" yaml:"ipv6"`
+	AutoRoute   bool   `json:"auto_route" yaml:"auto_route"` // owned by NGG, never by a kernel
+	StrictRoute bool   `json:"strict_route" yaml:"strict_route"`
 }
 
 type TunStats struct {

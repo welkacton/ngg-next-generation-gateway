@@ -687,3 +687,67 @@ export interface StageInfo {
 }
 
 export const getStages = () => get<StageInfo[]>('/stages')
+
+/* ------------------------------------------------------------------ *
+ * 配置引擎 · 入口节点 / DNS / 出口节点 配置补丁
+ * PUT /network/config 支持扁平策略字段与嵌套 ingress/dns/tun/egress，
+ * 未提供的字段保持不变（后端按字段 patch，不用零值覆盖）。
+ * ------------------------------------------------------------------ */
+
+export interface IngressNodeConfig {
+  enabled: boolean
+  listen: string
+  port: number
+  auth_user: string
+  auth_pass: string
+}
+
+export interface TunNodeConfig {
+  name: string
+  mtu: number
+  ipv4: string
+  ipv6: string
+  auto_route: boolean
+  strict_route: boolean
+}
+
+export interface DnsEngineConfig {
+  enabled: boolean
+  listen: string
+  port: number
+  upstreams: string[]
+  cache_ttl: number
+  hosts: Record<string, string>
+  block: string[]
+}
+
+export interface EgressNodeConfig {
+  interface: string
+  local_addr: string
+  mark: number
+  bypass_tun: boolean
+}
+
+export interface NetworkConfigPatch {
+  fail_closed?: boolean
+  failover?: boolean
+  default_core?: string
+  direct_on_failure?: boolean
+  ingress?: IngressNodeConfig
+  dns?: DnsEngineConfig
+  tun?: TunNodeConfig
+  egress?: EgressNodeConfig
+}
+
+export interface NetworkConfigPatchResult {
+  ok?: boolean
+  changed?: string[]
+  requires_restart?: string[]
+  warnings?: string[]
+  persisted?: boolean
+  config?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export const patchNetworkConfig = (patch: NetworkConfigPatch) =>
+  put<NetworkConfigPatchResult>('/network/config', patch)

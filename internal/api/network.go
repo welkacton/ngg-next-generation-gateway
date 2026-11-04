@@ -2,8 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -44,21 +49,36 @@ func (s *Server) handleNetworkConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ne.Config())
 		return
 	}
+	// Egress is patched field-by-field so a partial update never wipes an
+	// unset value with a zero value.
+	type egressPatch struct {
+		Interface *string `json:"interface"`
+		LocalAddr *string `json:"local_addr"`
+		Mark      *int    `json:"mark"`
+		BypassTUN *bool   `json:"bypass_tun"`
+	}
 	var body struct {
-		FailClosed      *bool   `json:"fail_closed"`
-		Failover        *bool   `json:"failover"`
-		DefaultCore     *string `json:"default_core"`
-		DirectOnFailure *bool   `json:"direct_on_failure"`
-		EgressMark      *int    `json:"egress_mark"`
-		BypassTUN       *bool   `json:"bypass_tun"`
+		FailClosed      *bool                    `json:"fail_closed"`
+		Failover        *bool                    `json:"failover"`
+		DefaultCore     *string                  `json:"default_core"`
+		DirectOnFailure *bool                    `json:"direct_on_failure"`
+		EgressMark      *int                     `json:"egress_mark"`
+		BypassTUN       *bool                    `json:"bypass_tun"`
+		Ingress         *netengine.IngressConfig `json:"ingress"`
+		Dns             *netengine.DNSConfig     `json:"dns"`
+		Tun             *netengine.TunConfig     `json:"tun"`
+		Egress          *egressPatch             `json:"egress"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	cfg := ne.Config()
+	old := *cfg
 	changed := []string{}
 	needsRestart := []string{}
+	warnings := []string{}
+
 	if body.FailClosed != nil {
 		cfg.FailClosed = *body.FailClosed
 		changed = append(changed, "fail_closed")
@@ -85,10 +105,96 @@ func (s *Server) handleNetworkConfig(w http.ResponseWriter, r *http.Request) {
 		changed = append(changed, "egress.bypass_tun")
 		needsRestart = append(needsRestart, "egress.bypass_tun")
 	}
+	if body.Ingress != nil {
+		in := *body.Ingress
+		if in.Enabled {
+			if in.Port < 1 || in.Port > 65535 {
+				writeErr(w, http.StatusBadRequest, "ingress.port must be 1..65535")
+				return
+			}
+			if !isLoopbackListen(in.Listen) && (in.AuthUser == "" || in.AuthPass == "") {
+				writeErr(w, http.StatusBadRequest, "non-loopback ingress requires auth_user and auth_pass")
+				return
+			}
+		}
+		cfg.Ingress = in
+		changed = append(changed, "ingress")
+		needsRestart = append(needsRestart, "ingress")
+	}
+	if body.Dns != nil {
+		dns := *body.Dns
+		if dns.Enabled && (dns.Port < 1 || dns.Port > 65535) {
+			writeErr(w, http.StatusBadRequest, "dns.port must be 1..65535")
+			return
+		}
+		cfg.DNS = dns
+		changed = append(changed, "dns")
+		needsRestart = append(needsRestart, "dns")
+	}
+	if body.Tun != nil {
+		cfg.TUN = *body.Tun
+		changed = append(changed, "tun")
+		needsRestart = append(needsRestart, "tun")
+		if cfg.TUN.AutoRoute && goruntimeGOOS() != "linux" {
+			warnings = append(warnings, "tun.auto_route requires Linux with /dev/net/tun and CAP_NET_ADMIN; it will be ignored on this host")
+		}
+	}
+	if body.Egress != nil {
+		if body.Egress.Interface != nil {
+			cfg.Egress.Interface = *body.Egress.Interface
+			changed = append(changed, "egress.interface")
+		}
+		if body.Egress.LocalAddr != nil {
+			cfg.Egress.LocalAddr = *body.Egress.LocalAddr
+			changed = append(changed, "egress.local_addr")
+		}
+		if body.Egress.Mark != nil {
+			cfg.Egress.Mark = *body.Egress.Mark
+			changed = append(changed, "egress.mark")
+		}
+		if body.Egress.BypassTUN != nil {
+			cfg.Egress.BypassTUN = *body.Egress.BypassTUN
+			changed = append(changed, "egress.bypass_tun")
+		}
+		needsRestart = append(needsRestart, "egress")
+	}
+
+	persisted := false
+	persistPath := filepath.Join(s.cfg.Storage.Dir, "network-config.json")
+	if len(changed) > 0 {
+		if err := os.MkdirAll(s.cfg.Storage.Dir, 0o755); err != nil {
+			*cfg = old
+			writeErr(w, http.StatusInternalServerError, "could not create data dir: "+err.Error())
+			return
+		}
+		blob, mErr := json.MarshalIndent(cfg, "", "  ")
+		if mErr != nil {
+			*cfg = old
+			writeErr(w, http.StatusInternalServerError, "could not encode network config: "+mErr.Error())
+			return
+		}
+		if wErr := os.WriteFile(persistPath, blob, 0o600); wErr != nil {
+			*cfg = old
+			writeErr(w, http.StatusInternalServerError, "could not persist network config: "+wErr.Error())
+			return
+		}
+		persisted = true
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "changed": changed, "requires_restart": needsRestart, "config": cfg,
+		"ok": true, "changed": changed, "requires_restart": needsRestart,
+		"warnings": warnings, "persisted": persisted, "persist_path": persistPath, "config": cfg,
 	})
 }
+
+func isLoopbackListen(host string) bool {
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func goruntimeGOOS() string { return runtime.GOOS }
 
 func (s *Server) handleNetworkRules(w http.ResponseWriter, r *http.Request) {
 	ne := s.engine.Network()
