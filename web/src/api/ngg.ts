@@ -447,6 +447,37 @@ export const getNetworkSessions = () =>
   get<NetworkSession[]>('/network/sessions')
 export const getNetworkEndpoints = () =>
   get<NetworkEndpoint[]>('/network/endpoints')
+/* 真实流量历史采样：后端每 2s 从统一网络引擎的计数器取一次，绝不插值/伪造。
+ * rate_* 是相邻真实计数差除以真实时间差，网络引擎未运行时 running=false。 */
+export interface MetricsSample {
+  ts: number
+  running: boolean
+  bytes_in: number
+  bytes_out: number
+  rate_in: number
+  rate_out: number
+  active: number
+  connections: number
+  direct: number
+  proxied: number
+  dropped: number
+  dns_queries: number
+  rule_matches: number
+  failovers: number
+}
+
+export interface MetricsHistoryResult {
+  running: boolean
+  interval_sec: number
+  window_minutes: number
+  count: number
+  samples: MetricsSample[]
+  note: string
+}
+
+export const getNetworkMetricsHistory = (minutes = 5) =>
+  get<MetricsHistoryResult>(`/network/metrics/history?minutes=${minutes}`)
+
 export const getNetworkConfig = () => get<NetworkConfig>('/network/config')
 export const saveNetworkConfig = (config: NetworkConfig) =>
   put<NetworkConfigSaveResult>('/network/config', config)

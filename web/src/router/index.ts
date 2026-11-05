@@ -6,7 +6,13 @@ const routes: RouteRecordRaw[] = [
     path: '/dashboard',
     name: 'dashboard',
     component: () => import('../views/Dashboard.vue'),
-    meta: { title: '概览' },
+    meta: { title: '系统概览' },
+  },
+  {
+    path: '/network-overview',
+    name: 'network-overview',
+    component: () => import('../views/NetworkOverview.vue'),
+    meta: { title: '网络概览' },
   },
   {
     path: '/cores',

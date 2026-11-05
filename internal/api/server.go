@@ -36,6 +36,7 @@ type Server struct {
 	profileStore *profiles.Store
 	githubIndex  *rulesets.GitHubIndex
 	installs     *installManager
+	sampler      *metricsSampler
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -63,6 +64,10 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 		installs:    newInstallManager(),
 	}
 	s.hub = newWSHub(eng)
+	// Real traffic history for the Network Overview console. Started only once
+	// per daemon and stopped together with the HTTP server.
+	s.sampler = newMetricsSampler(eng.NetworkStatus)
+	s.sampler.Start()
 	s.routes()
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Listen, cfg.Server.Port),
@@ -84,7 +89,12 @@ func (s *Server) ListenAndServe() error {
 	return s.http.Serve(ln)
 }
 
-func (s *Server) Shutdown() error { return s.http.Close() }
+func (s *Server) Shutdown() error {
+	if s.sampler != nil {
+		s.sampler.Stop()
+	}
+	return s.http.Close()
+}
 
 func (s *Server) routes() {
 	m := s.mux
@@ -134,6 +144,7 @@ func (s *Server) routes() {
 
 	// Stage 2-3: Unified Network Engine
 	m.HandleFunc("GET /api/v1/network/status", s.handleNetworkStatus)
+	m.HandleFunc("GET /api/v1/network/metrics/history", s.handleNetworkMetricsHistory)
 	m.HandleFunc("POST /api/v1/network/start", s.handleNetworkStart)
 	m.HandleFunc("POST /api/v1/network/stop", s.handleNetworkStop)
 	m.HandleFunc("GET /api/v1/network/config", s.handleNetworkConfig)

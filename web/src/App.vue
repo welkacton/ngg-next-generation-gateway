@@ -65,7 +65,8 @@ function handleExpandedKeys(keys: (string | number)[]) {
 }
 
 const menuOptions: MenuOption[] = [
-  { label: '概览', key: 'dashboard', icon: menuIcon },
+  { label: '系统概览', key: 'dashboard', icon: menuIcon },
+  { label: '网络概览', key: 'network-overview', icon: menuIcon },
   { type: 'divider', key: 'divider-top' },
   {
     label: '内核引擎',

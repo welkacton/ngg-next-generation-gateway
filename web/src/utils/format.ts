@@ -53,7 +53,9 @@ export function formatTime(value?: string): string {
 
 export function formatBytes(value?: number): string {
   if (value === undefined || value === null || Number.isNaN(value)) return '—'
-  if (value < 1024) return `${value} B`
+  // Byte counters are integral; rates derived from real deltas can be floats.
+  // Never leak a long fractional tail into the UI.
+  if (value < 1024) return `${Math.round(value)} B`
   const units = ['KB', 'MB', 'GB', 'TB']
   let size = value / 1024
   let index = 0

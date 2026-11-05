@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.3.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.4.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.3.0），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.4.0），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -506,4 +506,36 @@ curl -X POST -H "$H" -H 'Content-Type: application/json' \
 
 curl -H "$H" "$BASE/hosts/stats"
 curl -X POST -H "$H" "$BASE/hosts/probe"
+```
+
+---
+
+## 12. 真实流量历史（v2.4.0，网络概览）
+
+`GET /api/v1/network/metrics/history?minutes=5|15|30` 返回后端内存中的真实采样序列。
+守护进程每 2 秒从统一网络引擎的 `Metrics.Snapshot()` 采一次，最多保留 900 点（30 分钟）；
+进程重启后历史清空，绝不用旧数据伪装实时状态。
+
+| 字段 | 说明 |
+| --- | --- |
+| `running` | 最新采样时网络引擎是否运行；`false` 时 `note` 明确说明没有真实流量 |
+| `interval_sec` / `window_minutes` / `count` | 采样间隔、请求窗口、返回点数 |
+| `samples[].ts` | Unix 毫秒时间戳 |
+| `samples[].bytes_in` / `bytes_out` | 真实累计字节（下载 / 上传） |
+| `samples[].rate_in` / `rate_out` | 相邻真实计数差 ÷ 真实时间差，单位 B/s |
+| `samples[].active` / `connections` / `direct` / `proxied` / `dropped` / `dns_queries` / `rule_matches` / `failovers` | 统一网络引擎的真实计数 |
+
+- **不伪造**：引擎未运行时速率为 0 并标记 `running=false`；计数器归零（引擎重启）时速率按 0 处理，
+  不产生虚假尖峰；第一个采样点没有前驱，速率为 0。
+- **v2.4.0 计量修复**：`internal/netengine/netengine.go` 的 `relay()` 原先把两个方向的字节都累加到
+  `BytesOut`，导致 `bytes_in`（下载）恒为 0。现在 `upstream → client` 计入 `BytesIn`、
+  `client → upstream` 计入 `BytesOut`，并有 `TestRelayCountsDirectionsSeparately` 回归测试。
+- 前端 `web/src/views/NetworkOverview.vue` 每 2 秒轮询该端点，用纯 SVG 双系列面积图绘制
+  速率 / 累计流量 / 连接数三种视图；无采样点时显示空状态，不绘制模拟曲线。
+
+```bash
+curl -H "$H" "$BASE/network/metrics/history?minutes=5"
+# {"running":true,"interval_sec":2,"window_minutes":5,"count":19,
+#  "samples":[{"ts":...,"bytes_in":39849802,"bytes_out":1653,
+#              "rate_in":8388608,"rate_out":350,...}],"note":""}
 ```

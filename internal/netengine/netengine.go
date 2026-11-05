@@ -325,7 +325,11 @@ func (e *Engine) reject(req ConnRequest, err error) error {
 func (e *Engine) relay(client, upstream net.Conn, rec *SessionRec) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	copyOne := func(dst, src net.Conn, out *uint64) {
+	// Direction matters: "download" = bytes the upstream sends back to the
+	// client, "upload" = bytes the client sends to the upstream. Previously
+	// both directions were added to BytesOut, so the download counter stayed
+	// at zero and the traffic dashboard could never show real download data.
+	copyOne := func(dst, src net.Conn, download bool) {
 		defer wg.Done()
 		buf := make([]byte, 32*1024)
 		for {
@@ -333,9 +337,17 @@ func (e *Engine) relay(client, upstream net.Conn, rec *SessionRec) {
 			if n > 0 {
 				written, werr := dst.Write(buf[:n])
 				if written > 0 {
-					e.metrics.BytesOut.Add(uint64(written))
-					if rec != nil {
-						rec.AddBytes(0, uint64(written))
+					bytes := uint64(written)
+					if download {
+						e.metrics.BytesIn.Add(bytes)
+						if rec != nil {
+							rec.AddBytes(bytes, 0)
+						}
+					} else {
+						e.metrics.BytesOut.Add(bytes)
+						if rec != nil {
+							rec.AddBytes(0, bytes)
+						}
 					}
 				}
 				if werr != nil {
@@ -353,9 +365,8 @@ func (e *Engine) relay(client, upstream net.Conn, rec *SessionRec) {
 			_ = c.CloseRead()
 		}
 	}
-	var dummy uint64
-	go copyOne(upstream, client, &dummy)
-	go copyOne(client, upstream, &dummy)
+	go copyOne(upstream, client, false) // client -> upstream = upload
+	go copyOne(client, upstream, true)  // upstream -> client = download
 	wg.Wait()
 }
 
