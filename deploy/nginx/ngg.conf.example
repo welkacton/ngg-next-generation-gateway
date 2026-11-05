@@ -1,0 +1,36 @@
+# NGG control-plane reverse proxy — manual installation reference.
+# Copy to /etc/nginx/sites-available/ngg.conf, symlink into sites-enabled,
+# create the htpasswd file, then run `nginx -t && systemctl reload nginx`.
+# The control API still binds to 127.0.0.1:9090; never publish 9090 directly.
+#
+#   htpasswd -bcB /etc/ngg/htpasswd ngg '<random-password>'
+#   certbot --nginx -d ngg.example.com --redirect
+#
+# IMPORTANT: Basic Auth is an EXTRA layer, not a replacement for NGG's
+# Bearer Token. The Web UI still needs ?token=<TOKEN> on first bind.
+server {
+    listen 80;
+    server_name ngg.example.com;
+
+    client_max_body_size 32m;
+    auth_basic "NGG Control Plane";
+    auth_basic_user_file /etc/ngg/htpasswd;
+
+    location / {
+        proxy_pass http://127.0.0.1:9090;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # WebSocket (/api/v1/ws) needs Upgrade headers.
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+
+# certbot --nginx rewrites this server block to add a 443 listener and TLS.
+# If you terminate TLS yourself, add the listen 443 ssl block here and keep
+# the same proxy_* and auth_basic_* directives in both server blocks.

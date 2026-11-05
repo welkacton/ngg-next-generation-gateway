@@ -9,8 +9,9 @@
 - 已有且可构建：`cmd/nggd` 守护进程（控制面 REST + WS + Web UI），由
   `platforms/build.sh` 交叉编译，或仓库根目录 `make backend` 本机编译。
 - 已有：`web/` 下的 Web UI，浏览器打开 `http://127.0.0.1:9090/?token=<TOKEN>` 使用。
-- **未实现**：系统托盘 / 菜单栏 App、开机自启 GUI、原生设置面板、一键改系统代理的
-  图形界面。下面的系统代理命令需要用户手动执行或自行封装成脚本/服务。
+- **已实现**：开机自启常驻（Windows 服务 / Linux systemd），但**没有 GUI 开关**。
+- **未实现**：系统托盘 / 菜单栏 App、原生设置面板、一键改系统代理的图形界面。
+  下面的系统代理命令需要用户手动执行或自行封装成脚本。
 - 入口形态：Windows / macOS 用 userspace SOCKS5 / HTTP CONNECT 入口
   （默认 `127.0.0.1:18080`）+ 系统代理；Linux 既可用 userspace 入口，也可用统一 TUN
   （需 `/dev/net/tun` + `CAP_NET_ADMIN`）。DNS 默认 `127.0.0.1:18053`。
@@ -34,9 +35,16 @@ bash platforms/build.sh windows/amd64 darwin/arm64 linux/amd64
 控制面为 `http://127.0.0.1:9090/api/v1`，WS 为 `/api/v1/ws?token=<TOKEN>`，
 所有 `/api/v1/**` 请求需 `Authorization: Bearer <token>`。
 
-Linux 以 systemd 常驻（服务模式）请参考仓库 `docs/04-installation.md` 与
-`scripts/install.sh`；macOS 可用 launchd、Windows 可用「任务计划程序 / 服务封装」
-自行包装，本目录不提供这些包装文件。
+**现在已有正式的常驻/安装封装（不在本目录，但在仓库里）**：
+
+- Linux VPS：`scripts/deploy-vps.sh`（Release 一键安装 + systemd），见 [`docs/DEPLOY-VPS.md`](../../docs/DEPLOY-VPS.md)；
+  从源码安装见 `scripts/install.sh` 与 [`docs/04-installation.md`](../../docs/04-installation.md)。
+- Windows：`installer/windows/` 提供 Inno Setup GUI 安装包、便携 ZIP、PowerShell 安装/卸载脚本，
+  以及 `nggd.exe` 内置的 **Windows 服务**（`cmd/nggd/service_windows.go`），见
+  [`docs/INSTALL-WINDOWS.md`](../../docs/INSTALL-WINDOWS.md)。
+- macOS：目前仍以源码 / 预编译包手动运行为主，launchd plist 尚未提供。
+
+本目录仍只描述桌面端的**系统代理接入方式**，不提供托盘 App。
 
 ## 3. 系统代理设置示例
 
@@ -115,7 +123,7 @@ curl -H "$H" "$BASE/cores"           # 内核列表
 ## 5. 仍需完成（未实现清单）
 
 - 系统托盘 / 菜单栏 App（一键开关、状态图标、菜单）
-- 自动配置/还原系统代理、开机自启的图形化封装
+- 自动配置/还原系统代理的图形化封装（开机自启已由 Windows 服务 / systemd 解决，但无 GUI 开关）
 - 原生设置面板（Token 录入与 Keychain/凭据管理器存储）
 - 断线重连、fail_closed 策略的桌面端产品化
 

@@ -1,5 +1,13 @@
 # NGG 安装说明
 
+> **⚠ 本文是 Phase 1 / Stage 1 基线文档，保留作为配置字段与离线内核的参考。**
+> **当前实际部署请以新版手册为准**：
+> - VPS / 云服务器：[`DEPLOY-VPS.md`](DEPLOY-VPS.md)（一键脚本 `scripts/deploy-vps.sh`、systemd、HTTPS、备份回滚）
+> - Windows：[`INSTALL-WINDOWS.md`](INSTALL-WINDOWS.md)（GUI 安装包、便携 ZIP、Windows 服务、卸载）
+> - 全场景速查：[`DEPLOY.md`](DEPLOY.md)
+>
+> 与本文冲突之处，以新版手册和实际代码为准（例如 Windows/macOS 现已提供正式安装方式，不再只是「开发运行」）。
+
 > **适用版本**：Phase 1 / Stage 1
 > **首发平台**：**Linux x86_64 优先**（后续 Linux ARM64 / OpenWrt / Windows / macOS / Android / iOS / HarmonyOS / iPad / TV / 软路由）
 > **配置契约**：本文字段与 `internal/config/config.go` 一一对应；仓库提供无密钥模板 `configs/ngg.example.yaml`，
@@ -270,6 +278,11 @@ cd web && npm install && npm run build      # 生成 web/dist
 ---
 
 ## 9. Windows / macOS 开发运行
+
+> **本节描述的是 Phase 1 时期的开发运行方式。** 现在 Windows 已有正式安装方式：
+> GUI 安装包 `NGG-Setup-vX.Y.Z.exe`、便携 ZIP + `installer/windows/install.ps1`、
+> 以及 `nggd.exe` 内置的 Windows 服务。请改读 [`INSTALL-WINDOWS.md`](INSTALL-WINDOWS.md)。
+> macOS 仍以源码/预编译包手动运行为主（`docs/DEPLOY.md` 第 4 节）。
 
 > 仅用于**开发**，不是生产首发平台（首发为 Linux x86_64）。
 

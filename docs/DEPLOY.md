@@ -5,6 +5,11 @@
 请先完成授权克隆（`git clone` 使用有权限的凭证 / SSH Key），或下载自己账号可见的 Release 产物。
 许可：MIT（见 `LICENSE`）。**如需对外共享，由所有者在仓库设置中手动改为 Public。**
 
+> **按目标平台选择专门手册**（本文是全场景速查）：
+> - VPS / 云服务器「从空白机器到可用」→ **[`DEPLOY-VPS.md`](DEPLOY-VPS.md)**（一键脚本、systemd、防火墙、SSH 隧道 / HTTPS、备份回滚）
+> - Windows 安装程序 / 服务 / 卸载 → **[`INSTALL-WINDOWS.md`](INSTALL-WINDOWS.md)**
+> - 手工部署模板 → `deploy/systemd/ngg.service.example`、`deploy/nginx/ngg.conf.example`
+
 ---
 
 ## 0. 先读安全清单（私有仓库同样必须遵守）
@@ -30,7 +35,8 @@
 | 目标 | 推荐方式 | 架构 | 备注 |
 | --- | --- | --- | --- |
 | VPS / 云服务器 | Docker Compose 或 systemd | linux/amd64、linux/arm64 | 最完整路径 |
-| 家用电脑（Windows / macOS / Linux） | `scripts/quickstart.sh` 或预编译包 | 各平台原生二进制 | 控制面仅本机 |
+| 家用电脑（Windows） | `NGG-Setup-vX.Y.Z.exe` / 便携 ZIP + `install.ps1` | Windows 服务 + Web UI | 见 `INSTALL-WINDOWS.md` |
+| 家用电脑（macOS / Linux） | `scripts/quickstart.sh` 或预编译包 | 各平台原生二进制 | 控制面仅本机 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI | linux/arm64、linux/mipsle 等 | 需自行交叉编译 |
 | 群晖 / NAS / 小主机 | Docker | amd64 / arm64 | 用 `.env` 配 Token |
 | 集群 / 多机 | 每台独立部署；SD-WAN 链路在「出口节点」页配置 | — | 不共享 `data/` |
@@ -69,16 +75,31 @@ docker run -d --name ngg --network host \
 
 ## 3. systemd（无 Docker 的 VPS）
 
+**推荐：一键安装 Release 预编译包（VPS 上不需要 Go / Node，自动写绝对路径配置与 Token）**
+
+```bash
+export GITHUB_TOKEN='ghp_xxx'     # 私有仓库下载 Release 需要 PAT
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0
+sudo ./scripts/deploy-vps.sh status
+# 完整参数与手工等价步骤见 docs/DEPLOY-VPS.md
+```
+
+`deploy-vps.sh` 支持 `install / upgrade / backup / restore / status / doctor / uninstall`，
+并能可选配置 ufw/firewalld、Nginx + Basic Auth + certbot HTTPS。
+
+**备选：从源码构建安装**（需要 VPS 上有 Go 1.26+、Node 20+）
+
 ```bash
 git clone https://github.com/welkacton/ngg-next-generation-gateway.git
 cd ngg-next-generation-gateway
-sudo bash scripts/install.sh          # 安装到 /opt/ngg，配置 /etc/ngg/ngg.yaml
+cd web && npm ci && npm run build && cd ..     # 生成 Web UI
+sudo bash scripts/install.sh                   # 安装到 /opt/ngg，配置 /etc/ngg/ngg.yaml
 sudo systemctl enable --now ngg
-journalctl -u ngg -f                 # 查看 Token 与日志
+journalctl -u ngg -f                           # 查看 Token 与日志
 ```
 
-如需 Web UI，先在仓库里 `cd web && npm ci && npm run build`，`install.sh` 会把 `web/dist` 复制过去。
-生产环境务必把 `storage.dir`、`logging.dir`、`server.web_dir` 改成绝对路径（见 `docs/04-installation.md` 第 2 节）。
+> `install.sh` 复制的配置仍是**相对路径**；生产环境务必把 `storage.dir`、`logging.dir`、`server.web_dir`
+> 改成绝对路径（见 `04-installation.md` 第 2 节）。一键脚本已自动处理这一点。
 
 ---
 
@@ -93,14 +114,21 @@ bash scripts/quickstart.sh --release v1.0.0    # 下载官方 Release 预编译�
 ```
 
 脚本会：构建/下载 → 复制 `configs/ngg.example.yaml` 为 `configs/ngg.yaml` → 启动。
-首次启动自动生成 Token 并写入本地配置（0600）。Windows 用户可用 `bin/nggd.exe -config configs/ngg.yaml`。
+首次启动自动生成 Token 并写入本地配置（0600）。
+
+**Windows 用户请用安装程序而不是手跑 exe**：双击 `NGG-Setup-vX.Y.Z.exe`，或解压
+`NGG-vX.Y.Z-windows-amd64.zip` 后以管理员运行 `install.ps1`。它会写好绝对路径配置、随机 Token、
+注册 Windows 服务、启动并做健康检查。完整步骤见 [`INSTALL-WINDOWS.md`](INSTALL-WINDOWS.md)。
+仅在开发调试时才需要 `bin\nggd.exe -config configs\ngg.yaml`。
 
 ---
 
 ## 5. 从 GitHub Release 获取预编译包
 
 发布 tag（`v*`）时 CI 会为 linux amd64/arm64/386/arm、windows amd64、darwin amd64/arm64、freebsd amd64
-构建包含 `nggd` + `web/dist` + 配置模板 + 文档的 tar.gz，并附 `SHA256SUMS`。
+构建包含 `nggd` + `web-dist` + 配置模板 + 文档 + `scripts/` + `deploy/` + `installer/` 的 tar.gz，
+并额外产出 **`NGG-<tag>-windows-amd64.zip`（便携包）** 与 **`NGG-Setup-<tag>.exe`（Inno Setup 安装程序）**，
+全部附 `SHA256SUMS` 与逐包 `.sha256`。`deploy-vps.sh` / `install.ps1` 下载时都会校验摘要。
 
 ```bash
 # 校验（示例）
@@ -181,6 +209,9 @@ platforms/            各平台接入骨架
 
 ## 9. 升级与备份
 
+> systemd 原生部署的一键运维命令见 [`DEPLOY-VPS.md`](DEPLOY-VPS.md) 第 8 节：
+> `deploy-vps.sh upgrade / backup / restore / status / doctor / uninstall`（升级失败会自动回滚二进制）。
+
 - 升级代码：`git pull` → 重新构建 → 重启服务；内核二进制与配置在 `data/`，不会丢。
 - 备份：打包 `configs/ngg.yaml` 与 `data/`（含密钥，请加密保存）。
 - 配置回滚：Web UI「配置管理」页按备份 ID 回滚，或「原生配置」页重新应用旧配置。
@@ -197,8 +228,7 @@ platforms/            各平台接入骨架
 - 后量子能力用于 NGG 节点间控制信道；内核数据面的 PQ 支持取决于内核版本。
 - SD-WAN 探测与选路真实可用，但选路结果尚未注入每条连接的出站拨号器。
 - 协议中心不重写内核协议栈；传统 VPN 由外部 helper 执行。
-EOF
-echo "DEPLOY.md written"
+
 ---
 
 ## 11. 兼容 3X-UI / Remnawave 导出的 Xray 配置

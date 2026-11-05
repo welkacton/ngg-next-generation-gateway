@@ -34,3 +34,45 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+  deployment-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax check
+        run: |
+          set -e
+          for f in scripts/*.sh scripts/docker-entrypoint.sh platforms/*.sh deploy/**/*.example; do
+            [ -f "$f" ] || continue
+            case "$f" in *.sh|*/docker-entrypoint.sh) bash -n "$f" ;; esac
+          done
+          bash -n scripts/deploy-vps.sh
+          echo "shell syntax OK"
+      - name: Validate workflows and example config YAML
+        run: |
+          python3 - <<'PY'
+          import glob, sys
+          import yaml
+          files = glob.glob('.github/workflows/*.yml') + ['configs/ngg.example.yaml', 'docker-compose.yml']
+          for path in files:
+              with open(path, encoding='utf-8') as f:
+                  yaml.safe_load(f)
+              print('yaml ok:', path)
+          PY
+  windows-scripts:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell installer scripts
+        shell: pwsh
+        run: |
+          $failed = 0
+          Get-ChildItem installer/windows -Filter *.ps1 | ForEach-Object {
+            $tokens = $null; $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errs) | Out-Null
+            if ($errs.Count -gt 0) {
+              Write-Error "Syntax errors in $($_.Name):"
+              $errs | ForEach-Object { Write-Error $_.Message }
+              $failed++
+            } else { Write-Host "parse ok: $($_.Name)" }
+          }
+          if ($failed -gt 0) { exit 1 }

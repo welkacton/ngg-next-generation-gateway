@@ -1,11 +1,13 @@
-// nggd is the NGG Phase 1 daemon: unified core management center.
+// nggd is the NGG daemon: unified core management center + network engine.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,7 +20,7 @@ import (
 
 func main() {
 	var (
-		configPath = flag.String("config", "configs/ngg.yaml", "NGG config file")
+		configPath = flag.String("config", "configs/ngg.yaml", "NGG config file (use an absolute path under a service manager)")
 		noRestore  = flag.Bool("no-restore", false, "do not restore previously running kernels")
 		showVer    = flag.Bool("version", false, "print version and exit")
 	)
@@ -28,19 +30,37 @@ func main() {
 		return
 	}
 	log.SetFlags(log.LstdFlags | log.LUTC)
+
+	// When started by the Windows Service Control Manager, the process must
+	// report its state through svc.Run before it starts listening. Console
+	// launches on Windows and all non-Windows platforms take the normal path.
+	if runAsWindowsService(*configPath, *noRestore) {
+		return
+	}
+	if err := run(*configPath, *noRestore, nil); err != nil {
+		log.Fatalf("nggd: %v", err)
+	}
+}
+
+// run starts the daemon and blocks until the HTTP server fails, an OS signal
+// arrives, or stop is closed. A nil stop channel is valid (console mode).
+// The stop channel is what makes a real Windows service shutdown graceful:
+// the SCM sends Stop/Shutdown, the service closes stop, and NGG performs the
+// same orderly shutdown as Ctrl+C (close API, stop network engine, stop kernels).
+func run(configPath string, noRestore bool, stop <-chan struct{}) error {
 	log.Printf("NGG %s starting", engine.NGGVersion)
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 	eng, err := engine.New(cfg)
 	if err != nil {
-		log.Fatalf("init engine: %v", err)
+		return fmt.Errorf("init engine: %w", err)
 	}
 	srv := api.New(cfg, eng)
 
-	if !*noRestore {
+	if !noRestore {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		results := eng.Restore(ctx)
 		cancel()
@@ -70,14 +90,21 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	// A nil channel would block forever in select, which is exactly what a
+	// console launch needs; the OS signal / HTTP failure cases still work.
 	select {
 	case err := <-errCh:
-		if err != nil {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("http server stopped: %v", err)
 		}
 	case sig := <-sigCh:
 		log.Printf("received %s, shutting down kernels", sig)
+	case <-stop:
+		log.Printf("service stop requested, shutting down kernels")
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	_ = srv.Shutdown()
@@ -85,4 +112,5 @@ func main() {
 		log.Printf("engine shutdown: %v", err)
 	}
 	log.Printf("NGG stopped")
+	return nil
 }

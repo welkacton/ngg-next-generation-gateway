@@ -46,7 +46,11 @@ jobs:
           cp -r web/dist dist/ngg/web-dist
           cp -r configs dist/ngg/configs
           cp -r docs dist/ngg/docs
-          cp README.md LICENSE dist/ngg/
+          # Keep every deployment path self-contained inside the release bundle.
+          cp -r scripts dist/ngg/scripts
+          cp -r deploy dist/ngg/deploy
+          cp -r installer dist/ngg/installer
+          cp README.md LICENSE docker-compose.yml Dockerfile .env.example dist/ngg/
           cp configs/ngg.example.yaml dist/ngg/configs/ngg.yaml.example
       - name: Package
         run: |
@@ -59,17 +63,57 @@ jobs:
           path: |
             *.tar.gz
             *.sha256
-  publish:
+
+  windows-installer:
     needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ngg-windows-amd64
+          path: artifacts
+      - name: Unpack Windows bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $tarball = (Get-ChildItem artifacts -Filter '*.tar.gz' | Select-Object -First 1).FullName
+          tar -xzf $tarball -C dist
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { choco install innosetup -y --no-progress }
+      - name: Build Windows ZIP + installer EXE
+        shell: pwsh
+        run: |
+          .\installer\windows\build-installer.ps1 `
+            -Version "${{ github.ref_name }}" -StageDir "dist/ngg" -SkipBuild -OutputDir "out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ngg-windows-installer
+          path: |
+            out/*.zip
+            out/*.exe
+            out/*.sha256
+
+  publish:
+    needs: [build, windows-installer]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: ngg-*
           path: artifacts
           merge-multiple: true
       - name: Combined checksums
         run: |
-          cd artifacts && cat *.sha256 > SHA256SUMS
+          cd artifacts
+          rm -f SHA256SUMS
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS' ! -name '*.sha256' \
+            -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS
+          cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*

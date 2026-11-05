@@ -16,14 +16,22 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 仓库当前为 `private`，只有仓库所有者授权账号可以 clone；部署到自己的服务器、电脑、NAS 或软路由时，
 请先用有权限的账号完成克隆或下载 Release 产物。若日后要共享，由所有者手动改为 Public。
 
-| 场景 | 最短路径 |
-| --- | --- |
-| VPS / 云服务器 | `cp .env.example .env && docker compose up -d --build` |
-| Linux VPS（无 Docker） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` |
-| 本地电脑 | `bash scripts/quickstart.sh`（或 `--release v1.0.0` 下载预编译包） |
-| 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 |
+| 场景 | 最短路径 | 完整步骤 |
+| --- | --- | --- |
+| VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **Windows 安装程序** | 双击 `NGG-Setup-v1.0.0.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
+| Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
+| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v1.0.0` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
+| 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
-完整部署、端口、备份、安全清单见 **[`docs/DEPLOY.md`](docs/DEPLOY.md)**。
+`scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →
+系统用户与目录 → 绝对路径配置 + 随机 Token → systemd unit → 可选防火墙 / Nginx HTTPS → 健康检查 / 备份 / 升级 / 卸载。
+Windows 端提供 Inno Setup GUI 安装包、便携 ZIP、PowerShell 安装/卸载脚本，以及 `nggd.exe` 内置的
+**Windows 服务**（开机自启、失败重启、优雅停止、`logs/ngg-service.log`）。
+
+全场景部署、端口、备份、安全清单见 **[`docs/DEPLOY.md`](docs/DEPLOY.md)**；
+VPS 专属手册见 **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)**，Windows 专属手册见 **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)**。
 
 > ⚠️ 仓库请勿提交真实凭据（即使当前为私有仓库，也应始终保持脱敏）：`configs/ngg.yaml`（含 API Token）与 `data/`（含节点密码、私钥、
 > 后量子密钥）均已 gitignore。分享原生配置前请先脱敏；`configs/examples/native-xray.sample.json` 全是占位符。
@@ -130,8 +138,10 @@ internal/api/              REST + WebSocket（本机限制 + Bearer 认证）
 configs/                   主配置、能力描述目录、规则/DNS/SD-WAN/插件示例数据
 platforms/                 跨平台构建脚本与 Android/iOS/HarmonyOS/TV/OpenWrt 骨架
 web/                       Vue 3 + TS + Naive UI（18 个页面；一级分类「内核引擎 / 配置引擎」）
-docs/                      架构 / API / 开发 / 安装 / 排障 / 路线图 / Stage 2~5 专题
-scripts/                   构建、开发、systemd 安装、端到端验收脚本
+docs/                      架构 / API / 开发 / 安装 / 排障 / 路线图 / Stage 2~5 专题 / VPS 与 Windows 部署
+scripts/                   构建、开发、systemd 安装、VPS 一键部署、端到端验收脚本
+deploy/                    systemd unit 与 Nginx 反向代理模板（手工部署参考）
+installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、构建脚本
 ```
 
 ## 文档
@@ -148,6 +158,10 @@ scripts/                   构建、开发、systemd 安装、端到端验收脚
 | `docs/08-stage3-5-features.md` | Stage 3~5 功能与实现状态 |
 | `docs/09-stage2-5-api.md` | Stage 2~5 全部 API 细节 + 节点/原生配置编辑附录 |
 | `docs/DEPLOY.md` | 私有仓库部署、Docker/systemd/软路由、安全清单、已知边界 |
+| `docs/DEPLOY-VPS.md` | **VPS 完整手册**：系统准备、Release 一键安装、systemd、SSH 隧道 / Nginx HTTPS、防火墙、备份回滚、排障清单 |
+| `docs/INSTALL-WINDOWS.md` | **Windows 完整手册**：GUI 安装包、便携 ZIP、Windows 服务、Token/日志、系统代理、升级卸载、排障清单 |
+| `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
+| `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 
 ## 验证命令
 

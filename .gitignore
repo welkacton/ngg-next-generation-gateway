@@ -11,6 +11,10 @@ data/
 web/node_modules/
 web/dist/
 
+# local packaging output (installer/windows/build-installer.ps1)
+/out/
+/dist/
+
 # 本地配置含自动生成的 API Token，勿提交（用 ngg.example.yaml 作模板）
 configs/ngg.yaml
 configs/ngg.local.yaml
