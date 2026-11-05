@@ -62,11 +62,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse PowerShell installer scripts
+      - name: Parse PowerShell installer and update scripts
         shell: pwsh
         run: |
           $failed = 0
-          Get-ChildItem installer/windows -Filter *.ps1 | ForEach-Object {
+          $files = @(Get-ChildItem installer/windows -Filter *.ps1) + @(Get-ChildItem scripts -Filter *.ps1)
+          $files | ForEach-Object {
             $tokens = $null; $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errs) | Out-Null
             if ($errs.Count -gt 0) {
