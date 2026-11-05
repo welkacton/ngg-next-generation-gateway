@@ -1,5 +1,13 @@
 import axios, { AxiosError, type AxiosResponse } from 'axios'
 
+// High-frequency editor requests (auto-sync while typing) must not spam the
+// global error toast: the editor shows the parse error inline instead.
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    silentError?: boolean
+  }
+}
+
 export const TOKEN_KEY = 'ngg_token'
 export const GITHUB_TOKEN_KEY = 'ngg_github_token'
 export const API_BASE = '/api/v1'
@@ -78,10 +86,12 @@ client.interceptors.response.use(
   (response: AxiosResponse) => response,
   (error: AxiosError) => {
     const msg = extractError(error)
-    if (window.$message) {
-      window.$message.error(msg, { duration: 6000, keepAliveOnHover: true })
-    } else {
-      console.error('[NGG API]', msg)
+    if (!error.config?.silentError) {
+      if (window.$message) {
+        window.$message.error(msg, { duration: 6000, keepAliveOnHover: true })
+      } else {
+        console.error('[NGG API]', msg)
+      }
     }
     return Promise.reject(new Error(msg))
   },

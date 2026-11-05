@@ -844,6 +844,16 @@ export interface ProfileRenderResult {
   kernel: string
 }
 
+export interface ProfileSplitResult {
+  ok: boolean
+  sections: ProfileSection[]
+  format: string
+  kernel: string
+  message: string
+  warnings?: string[]
+  changed: string[]
+}
+
 export interface ProfileMutationResult {
   ok: boolean
   profile: Profile
@@ -866,6 +876,13 @@ export const getProfileTemplate = (kernel: string, name: string) =>
   post<Profile>('/profiles/template', { kernel, name })
 export const validateProfile = (p: Partial<Profile>) =>
   post<ProfileValidateResult>('/profiles/validate', p)
+// Reverse of validate/render: an edited complete config is split back into
+// the six editable sections. `config` lets the editor silence the global
+// error toast while auto-syncing on every keystroke.
+export const splitProfile = (
+  payload: { profile: Partial<Profile>; content: string },
+  config?: AxiosRequestConfig,
+) => post<ProfileSplitResult>('/profiles/split', payload, config)
 export const duplicateProfile = (id: string, name: string) =>
   post<ProfileMutationResult>(`/profiles/${encodeURIComponent(id)}/duplicate`, { name })
 export const activateProfile = (id: string) =>

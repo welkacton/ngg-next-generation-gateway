@@ -203,6 +203,7 @@
 | 56c | POST | `/profiles/validate` | 逐段 + 合并后真实语法校验，返回完整配置文本 | v2.2.1 |
 | 56d | GET / PUT / DELETE | `/profiles/{id}` | 读取 / 更新 / 删除配置文件 | v2.2.1 |
 | 56e | POST | `/profiles/{id}/render` `…/duplicate` `…/activate` | 生成完整配置 / 复制 / 设为默认 | v2.2.1 |
+| 56f | POST | `/profiles/split` | **完整配置反向拆分**：`{profile, content}` → 6 个分区 + `changed` / `warnings`；纯计算不落盘，语法错误返回 422；详见 `docs/11-protocol-center.md` | v2.2.2 |
 | 57 | GET | `/rulesets/github/presets` | 内置 GitHub 规则集预设仓库 | v2.2.1 |
 | 57a | GET | `/rulesets/github/catalog` | 已缓存的 GitHub 分流规则分类目录 | v2.2.1 |
 | 57b | POST | `/rulesets/github/catalog/refresh` | 真实抓取 git-trees 并重建分类目录 | v2.2.1 |
@@ -236,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.2.1", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.2.2", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.2.1），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.2.2），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`

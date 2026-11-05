@@ -13,7 +13,7 @@
 | Generation | **2** |
 | Label | **Gen 2** |
 | 名称 | **第二代 · 本地部署与统一控制台** |
-| Release | **v2.2.1** |
+| Release | **v2.2.2** |
 | 仓库 | `welkacton/ngg-next-generation-gateway` |
 
 ---
@@ -28,7 +28,8 @@
 | Gen 2 增补 | v2.1.1 | Web 端一键更新与交互优化 | 私有仓库 PAT 可在更新面板直接填写（请求级 context，不落盘不写日志）+「立即更新」一键全链路 + 新版本自动刷新；协议目录五类视图；精简表格列修复文字叠加；点「配置」自动滚动定位；移除冗余 params 输入框与单条详情卡片；大栏目标题加粗放大 |
 | Gen 2 增补 | v2.1.2 | 按内核官方语法配置 | 三内核协议目录；`internal/protocols/schema.go` 三套字段定义与官方文档链接；两卡片合并为「可视化表单 + 带注释代码编辑」 |
 | Gen 2 增补 | v2.2.0 | 协议配置与 GitHub 规则集 | 「协议中心」改名**协议配置**：上半只读纯文字协议目录（`internal/protocols/catalog.go` 每 6 小时从三内核官方文档仓库同步）；下半 Profile 卡片列表（`internal/profiles` 6 分区、按内核官方语法、带中文注释与语法校验）；规则页 `internal/rulesets/github.go` 一次 git-trees 发现 668+ 分类，批量 mount/import |
-| **Gen 2（当前）** | **v2.2.1** | 内核安装修复与交互整理 | 内核安装改为**异步后台任务**（`internal/api/installs.go`：POST 立即 202、`/cores/install/status` 轮询、进度走 `core.install` WebSocket），修掉前端 30 秒超时导致三个内核装不上；`GET /protocols/catalog` 不再触发 GitHub 请求（避免页面轮询耗尽匿名 60/h 配额），安装器支持 `NGG_GITHUB_TOKEN`/`GITHUB_TOKEN` 与限流提示；配置引擎二级重排为 协议配置/规则配置/DNS配置/入口节点/出口节点；配置文件分区改为 协议→入站→出站→路由规则→DNS→其他→重建模板、页面留白、卡片支持单条与批量启停（`POST /profiles/toggle`）；GitHub 规则集可「全选全部」并自动按 50 一批加载；侧栏改 flex 三段式，修复展开后底部文字覆盖 |
+| Gen 2 增补 | v2.2.1 | 内核安装修复与交互整理 | 内核安装改为**异步后台任务**（`internal/api/installs.go`：POST 立即 202、`/cores/install/status` 轮询、进度走 `core.install` WebSocket），修掉前端 30 秒超时导致三个内核装不上；`GET /protocols/catalog` 不再触发 GitHub 请求（避免页面轮询耗尽匿名 60/h 配额），安装器支持 `NGG_GITHUB_TOKEN`/`GITHUB_TOKEN` 与限流提示；配置引擎二级重排为 协议配置/规则配置/DNS配置/入口节点/出口节点；配置文件分区改为 协议→入站→出站→路由规则→DNS→其他→重建模板、页面留白、卡片支持单条与批量启停（`POST /profiles/toggle`）；GitHub 规则集可「全选全部」并自动按 50 一批加载；侧栏改 flex 三段式，修复展开后底部文字覆盖 |
+| **Gen 2（当前）** | **v2.2.2** | 完整配置双向编辑 | `internal/profiles/split.go` 实现 `Render` 的逆运算：YAML 按顶层键保留原文与注释，JSON 用 `json.Decoder.Token` 保序拆分并把 `outbounds` 按节点/策略重新分组；`POST /profiles/split` 纯计算不落盘，语法错误返回 422；前端 Protocols.vue 把只读 `<pre>` 换成可编辑 textarea + 650ms 防抖自动同步、`silentError` 静默请求、分区行数高亮与保存并关闭 |
 
 ### 代际判定标准
 
@@ -44,12 +45,12 @@
 
 | 位置 | 显示内容 |
 | --- | --- |
-| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.2.1` 徽章 + 代际表 |
-| GitHub Releases | tag `v2.2.1`，Release 名称含代际 |
-| Web UI 顶栏 | `Gen 2 · v2.2.1` 徽章 + 代际名称 |
+| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.2.2` 徽章 + 代际表 |
+| GitHub Releases | tag `v2.2.2`，Release 名称含代际 |
+| Web UI 顶栏 | `Gen 2 · v2.2.2` 徽章 + 代际名称 |
 | `GET /api/v1/update/status` | `generation` / `generation_label` / `generation_name` / `release` |
-| `nggd -version` | `NGG 2.2.1`（来自 `internal/engine.NGGVersion = version.Release`） |
-| `GET /api/v1/system` | `ngg_version: "2.2.1"` |
+| `nggd -version` | `NGG 2.2.2`（来自 `internal/engine.NGGVersion = version.Release`） |
+| `GET /api/v1/system` | `ngg_version: "2.2.2"` |
 
 ---
 

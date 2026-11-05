@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -233,37 +233,199 @@ async function validateEditor() {
   if (res) editorNote.value = res.message
 }
 
-async function saveEditor() {
-  if (!editing.value) return
+async function saveEditor(): Promise<boolean> {
+  if (!editing.value) return false
   const p = editing.value
   if (!p.name.trim()) {
     window.$message?.warning('请填写配置文件名称')
-    return
+    return false
   }
   const res = p.id
     ? await run('save', () => api.updateProfile(p.id, p), '配置文件已保存')
     : await run('save', () => api.createProfile(p), '配置文件已创建')
-  if (!res) return
+  if (!res) return false
   editing.value = JSON.parse(JSON.stringify(res.profile)) as Profile
   await loadProfiles()
   editorNote.value = `已保存 · ${formatTime(editing.value.updated_at)}`
+  return true
 }
 
-/* ------------------------------ 完整配置 ------------------------------ */
+/* ------------------------------ 完整配置 ------------------------------ *
+ * 双向编辑：分段 -> Render -> 完整配置 -> Split -> 分段。
+ * 完整配置不再是只读 <pre>：用户编辑后（停止输入 650ms）自动调用
+ * /profiles/split，把改动写回上方 6 个分区；语法错误时不覆盖分区，
+ * 只在状态栏提示，关窗时再让用户决定是修正还是放弃。
+ * -------------------------------------------------------------------- */
 const showFull = ref(false)
 const fullContent = ref('')
 const fullFormat = ref('')
+const fullBase = ref('') // 最近一次与分区一致的文本
+const fullAutoSync = ref(true)
+const fullDirty = ref(false)
+const fullWarnings = ref<string[]>([])
+const fullChanged = ref<string[]>([])
+type SyncState = 'idle' | 'dirty' | 'syncing' | 'synced' | 'error'
+const fullSyncState = ref<SyncState>('idle')
+const fullSyncMsg = ref('')
+let fullDebounce: number | undefined
+let fullSeq = 0 // 丢弃过期的异步响应，避免快速输入时旧结果覆盖新结果
 
-async function viewFull() {
+const statusTitle = computed(
+  () =>
+    ({ idle: '未修改', dirty: '待同步', syncing: '同步中', synced: '已同步', error: '未同步' })[
+      fullSyncState.value
+    ],
+)
+
+// 直接读取 editing.sections：同步成功后这里的行数会立刻变化，用户能看到
+// 「上面的分段配置」确实被更新了。
+const fullSectionStats = computed(() =>
+  (editing.value?.sections ?? []).map((s) => {
+    const text = String(s.content ?? '').trim()
+    return {
+      key: s.key,
+      label: s.label,
+      lines: text ? text.split('\n').length : 0,
+      changed: fullChanged.value.includes(s.key),
+    }
+  }),
+)
+
+async function openFull() {
   if (!editing.value) return
-  // Use the local (possibly unsaved) edits so "查看完整配置" reflects what
-  // the user is actually looking at, not the last saved version.
+  // 用本地（可能未保存）的分段渲染，而不是上一次保存的版本。
   const res = await run('render', () => api.validateProfile(editing.value!))
-  if (res) {
-    fullContent.value = res.content
-    fullFormat.value = res.format
-    showFull.value = true
+  if (!res) return
+  fullContent.value = res.content
+  fullBase.value = res.content
+  fullFormat.value = res.format
+  fullDirty.value = false
+  fullWarnings.value = []
+  fullChanged.value = []
+  fullSyncState.value = 'synced'
+  fullSyncMsg.value = '与上方 6 个分区一致，可直接编辑整份配置'
+  showFull.value = true
+}
+
+function cleanErr(e: unknown): string {
+  let msg = e instanceof Error ? e.message : String(e)
+  msg = msg.replace(/^HTTP \d+ · [^·]*·\s*/, '')
+  msg = msg.replace(/^[A-Z_]+:\s*/, '')
+  return msg || '同步失败'
+}
+
+async function syncFull(showToast = false): Promise<boolean> {
+  const target = editing.value
+  if (!target) return false
+  if (fullDebounce) {
+    window.clearTimeout(fullDebounce)
+    fullDebounce = undefined
   }
+  const seq = ++fullSeq
+  const content = fullContent.value
+  if (!content.trim()) {
+    fullSyncState.value = 'error'
+    fullSyncMsg.value = '完整配置不能为空'
+    return false
+  }
+  fullSyncState.value = 'syncing'
+  fullSyncMsg.value = '正在按内核语法拆分到上方分区…'
+  try {
+    const res = await api.splitProfile({ profile: target, content }, { silentError: true })
+    if (seq !== fullSeq) return false
+    target.sections = res.sections
+    fullFormat.value = res.format
+    fullBase.value = content
+    fullWarnings.value = res.warnings ?? []
+    fullChanged.value = res.changed ?? []
+    fullDirty.value = false
+    fullSyncState.value = 'synced'
+    fullSyncMsg.value =
+      res.message + (res.changed?.length ? ` · 更新 ${res.changed.length} 个分区` : ' · 分区无变化')
+    editorNote.value = '完整配置已自动同步到上方分区，请点「保存」写入磁盘。'
+    if (showToast) window.$message?.success('已同步到上方分区')
+    return true
+  } catch (e) {
+    if (seq !== fullSeq) return false
+    fullSyncState.value = 'error'
+    fullSyncMsg.value = cleanErr(e)
+    return false
+  }
+}
+
+watch(fullContent, (v) => {
+  if (!showFull.value) return
+  if (v === fullBase.value) {
+    fullDirty.value = false
+    fullSyncState.value = 'synced'
+    fullSyncMsg.value = '与上方 6 个分区一致'
+    return
+  }
+  fullDirty.value = true
+  if (!fullAutoSync.value) {
+    fullSeq++ // 让在途请求失效
+    fullSyncState.value = 'dirty'
+    fullSyncMsg.value = '已修改，点「立即同步到分区」写回上方分区'
+    return
+  }
+  if (fullDebounce) window.clearTimeout(fullDebounce)
+  fullSyncState.value = 'syncing'
+  fullSyncMsg.value = '输入中，停止输入后自动同步到上方分区…'
+  fullDebounce = window.setTimeout(() => void syncFull(), 650)
+})
+
+async function closeFull() {
+  if (fullDebounce) {
+    window.clearTimeout(fullDebounce)
+    fullDebounce = undefined
+  }
+  if (!fullDirty.value) {
+    showFull.value = false
+    return
+  }
+  if (await syncFull()) {
+    showFull.value = false
+    return
+  }
+  window.$dialog?.warning({
+    title: '完整配置尚未写回分区',
+    content: `${fullSyncMsg.value}\n\n关闭会放弃这次在完整配置里的修改（上方分区保持不变）；继续编辑可修正语法后重试。`,
+    positiveText: '放弃修改并关闭',
+    negativeText: '继续编辑',
+    onPositiveClick: () => {
+      fullDirty.value = false
+      showFull.value = false
+    },
+  })
+}
+
+function onFullShow(v: boolean) {
+  if (v) showFull.value = true
+  else void closeFull()
+}
+
+function onAutoSyncChange(v: boolean) {
+  if (fullDebounce) {
+    window.clearTimeout(fullDebounce)
+    fullDebounce = undefined
+  }
+  if (!v) {
+    fullSeq++
+    if (fullDirty.value) {
+      fullSyncState.value = 'dirty'
+      fullSyncMsg.value = '自动同步已关闭，点「立即同步到分区」写回上方分区'
+    }
+    return
+  }
+  if (fullDirty.value) void syncFull()
+}
+
+async function saveFullAndClose() {
+  if (fullDirty.value && !(await syncFull())) {
+    window.$message?.error(`完整配置有语法错误，未保存：${fullSyncMsg.value}`)
+    return
+  }
+  if (await saveEditor()) showFull.value = false
 }
 
 async function copyText(text: string, okMsg = '已复制到剪贴板') {
@@ -331,6 +493,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
+  if (fullDebounce) window.clearTimeout(fullDebounce)
 })
 </script>
 
@@ -487,7 +650,8 @@ onBeforeUnmount(() => {
 
       <div class="pc-help">
         每个配置文件按目标内核的官方语法分成 6 个可编辑分区，顺序为：协议 → 入站 → 出站 → 路由规则 → DNS → 其他。
-        分区内已写好带中文注释的模板，修改后先「校验语法」再「保存」；「查看完整配置」可得到合并后的 YAML / JSON。
+        分区内已写好带中文注释的模板，修改后先「校验语法」再「保存」；「编辑完整配置」可直接修改合并后的 YAML / JSON，
+        编辑内容会自动同步回上方 6 个分区，两边始终保持一致。
       </div>
     </section>
 
@@ -597,7 +761,7 @@ onBeforeUnmount(() => {
         <template #footer>
           <div class="pc-editor-footer">
             <NButton size="small" :loading="isBusy('validate')" @click="validateEditor">校验语法</NButton>
-            <NButton size="small" :loading="isBusy('render')" @click="viewFull">查看完整配置</NButton>
+            <NButton size="small" :loading="isBusy('render')" @click="openFull">编辑完整配置</NButton>
             <div class="pc-toolbar-spacer" />
             <NButton size="small" type="primary" :loading="isBusy('save')" @click="saveEditor">保存</NButton>
           </div>
@@ -605,23 +769,73 @@ onBeforeUnmount(() => {
       </NDrawerContent>
     </NDrawer>
 
-    <!-- 完整配置 -->
+    <!-- 完整配置：可编辑 + 自动同步回上方分区 -->
     <NModal
-      v-model:show="showFull"
+      :show="showFull"
+      @update:show="onFullShow"
       preset="card"
       :title="`完整配置 · ${editing?.name ?? ''}`"
-      style="width: 820px"
+      style="width: 920px; max-width: calc(100vw - 48px)"
       :bordered="false"
     >
-      <div class="hint" style="margin-bottom: 10px">
-        由 6 个分区合并而成，已剥离注释，可直接交给内核解析（{{ fullFormat.toUpperCase() }}）。
+      <div class="pc-full-bar">
+        <NTag size="small" :bordered="false">{{ fullFormat.toUpperCase() }}</NTag>
+        <span class="pc-full-hint">由 6 个分区合并而成 · 可直接编辑整份配置</span>
+        <div class="pc-toolbar-spacer" />
+        <label class="pc-full-auto">
+          <NSwitch v-model:value="fullAutoSync" size="small" @update:value="onAutoSyncChange" />
+          <span>自动同步到分区</span>
+        </label>
       </div>
-      <pre class="output-block pc-full">{{ fullContent }}</pre>
+
+      <NInput
+        v-model:value="fullContent"
+        type="textarea"
+        class="code-editor code-editor-large pc-full-editor"
+        :autosize="{ minRows: 18, maxRows: 26 }"
+        spellcheck="false"
+        placeholder="粘贴或编辑完整的内核配置"
+      />
+
+      <div class="pc-full-status" :class="fullSyncState">
+        <span class="pc-full-dot">●</span>
+        <strong>{{ statusTitle }}</strong>
+        <span>{{ fullSyncMsg }}</span>
+      </div>
+
+      <div class="pc-full-sections">
+        <span
+          v-for="s in fullSectionStats"
+          :key="s.key"
+          class="pc-full-chip"
+          :class="{ changed: s.changed }"
+        >
+          {{ s.label }} · {{ s.lines }} 行
+        </span>
+      </div>
+
+      <NAlert v-if="fullWarnings.length" type="warning" :bordered="false" style="margin-top: 10px">
+        <div v-for="w in fullWarnings" :key="w">{{ w }}</div>
+      </NAlert>
+
+      <div class="hint" style="margin-top: 10px">
+        修改后停止输入约 0.6 秒即自动拆分回上方分区；语法错误时保留原分区并在上方红字提示。
+        JSON 内核（sing-box / Xray-core）的 <span class="mono">outbounds</span> 会按「协议内容 / 出站」重新分组，
+        分段里的说明注释不会保留；未识别的顶层键统一放入「其他」，不会丢失。
+      </div>
+
       <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <div class="pc-full-footer">
           <NButton size="small" @click="copyText(fullContent)">复制</NButton>
           <NButton size="small" @click="downloadFull">下载</NButton>
-          <NButton size="small" @click="showFull = false">关闭</NButton>
+          <NButton size="small" :loading="fullSyncState === 'syncing'" @click="syncFull(true)">
+            立即同步到分区
+          </NButton>
+          <div class="pc-toolbar-spacer" />
+          <NButton size="small" @click="closeFull">关闭</NButton>
+          <NButton size="small" type="primary" :loading="isBusy('save')" @click="saveFullAndClose">
+            保存并关闭
+          </NButton>
         </div>
       </template>
     </NModal>
@@ -710,5 +924,28 @@ onBeforeUnmount(() => {
 .pc-code-note, .pc-editor-note { margin-top: 10px; font-size: 11.5px; color: #8e8e93; line-height: 1.8; }
 .pc-editor-note { color: #147a51; }
 .pc-editor-footer { display: flex; align-items: center; gap: 8px; }
-.pc-full { max-height: 460px; }
+.pc-full-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.pc-full-hint { font-size: 11.5px; color: #6e6e73; }
+.pc-full-auto { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #3a3a3c; cursor: pointer; }
+.pc-full-editor { width: 100%; }
+.pc-full-editor :deep(.n-input__textarea-el) { min-height: 360px; }
+.pc-full-status {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-top: 10px; font-size: 12px; color: #6e6e73; line-height: 1.7;
+}
+.pc-full-status strong { color: #1d1d1f; font-weight: 600; }
+.pc-full-dot { font-size: 10px; color: #8e8e93; }
+.pc-full-status.synced .pc-full-dot, .pc-full-status.synced strong { color: #147a51; }
+.pc-full-status.error .pc-full-dot, .pc-full-status.error strong { color: #c0392b; }
+.pc-full-status.syncing .pc-full-dot, .pc-full-status.syncing strong { color: #0066cc; }
+.pc-full-status.dirty .pc-full-dot, .pc-full-status.dirty strong { color: #a06a10; }
+.pc-full-sections { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pc-full-chip {
+  font-size: 11px; color: #6e6e73; padding: 3px 10px;
+  border: 1px solid #e6e6eb; border-radius: 20px; background: #fafafb;
+}
+.pc-full-chip.changed {
+  color: #0066cc; border-color: rgba(0, 102, 204, 0.35); background: rgba(0, 102, 204, 0.06);
+}
+.pc-full-footer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 </style>

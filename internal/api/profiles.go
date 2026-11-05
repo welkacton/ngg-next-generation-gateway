@@ -138,6 +138,35 @@ func (s *Server) handleProfileValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /profiles/split — reverse of Render: take an edited complete config
+// and redistribute it into the six editable sections. Pure computation, no
+// disk writes. The frontend calls this (debounced) while the user types in
+// 「完整配置」, so the section editor stays in sync automatically.
+func (s *Server) handleProfileSplit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Profile profiles.Profile `json:"profile"`
+		Content string           `json:"content"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if body.Profile.Kernel == "" {
+		writeErr(w, http.StatusBadRequest, "缺少 profile.kernel")
+		return
+	}
+	out, err := profiles.Split(body.Profile, body.Content)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "sections": out.Sections, "format": out.Format,
+		"kernel": out.Kernel, "message": out.Message,
+		"warnings": out.Warnings, "changed": out.Changed,
+	})
+}
+
 // POST /profiles/template — return a fresh starter configuration for a kernel.
 func (s *Server) handleProfileTemplate(w http.ResponseWriter, r *http.Request) {
 	var body struct {

@@ -188,6 +188,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/protocols/catalog/refresh", s.handleProtocolCatalogRefresh)
 	m.HandleFunc("GET /api/v1/profiles/options", s.handleProfileOptions)
 	m.HandleFunc("POST /api/v1/profiles/validate", s.handleProfileValidate)
+	m.HandleFunc("POST /api/v1/profiles/split", s.handleProfileSplit)
 	m.HandleFunc("POST /api/v1/profiles/toggle", s.handleProfilesToggle)
 	m.HandleFunc("POST /api/v1/profiles/template", s.handleProfileTemplate)
 	m.HandleFunc("GET /api/v1/profiles", s.handleProfiles)
