@@ -36,7 +36,9 @@
 
 ## 2. 方式 A：GUI 安装包（推荐给本机使用）
 
-1. 从 Release 下载 `NGG-Setup-v1.0.0.exe`（或按第 4 节自行构建）。
+1. 从 Release 下载 `NGG-Setup-v1.0.0.exe`：
+   <https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v1.0.0>
+   （私有仓库需登录有权限的 GitHub 账号；同页有 `SHA256SUMS` 可校验；也可按第 4 节自行构建）。
 2. 双击 → UAC 确认 → 选择安装目录（默认 `C:\Program Files\NGG`）→ 完成。
 3. 安装器会自动执行 `install.ps1 -ConfigureOnly -Silent -OpenBrowser`：
    - 生成 `configs\ngg.yaml`（绝对路径 + 随机 API Token）；

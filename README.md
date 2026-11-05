@@ -16,6 +16,10 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 仓库当前为 `private`，只有仓库所有者授权账号可以 clone；部署到自己的服务器、电脑、NAS 或软路由时，
 请先用有权限的账号完成克隆或下载 Release 产物。若日后要共享，由所有者手动改为 Public。
 
+> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v1.0.0>
+> → `NGG-Setup-v1.0.0.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v1.0.0-windows-amd64.zip`
+> （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
+
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
