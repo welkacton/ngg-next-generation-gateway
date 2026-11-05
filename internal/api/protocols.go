@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/ngg-project/ngg/internal/protocols"
 )
@@ -32,6 +33,76 @@ func (s *Server) handleProtocolMeta(w http.ResponseWriter, _ *http.Request) {
 		},
 		"kernels": []string{"mihomo", "sing-box", "xray-core", "ngg-native", "external-helper"},
 		"formats": protocols.Formats(),
+	})
+}
+
+// GET /protocols/schema exposes the three kernels' real field definitions,
+// what each field means and the official documentation URL. The visual editor
+// renders itself from this instead of hard-coding kernel-specific syntax.
+func (s *Server) handleProtocolSchema(w http.ResponseWriter, r *http.Request) {
+	kernel := r.URL.Query().Get("kernel")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"schemas": protocols.Schemas(),
+		"schema":  protocols.SchemaFor(kernel),
+	})
+}
+
+// POST /protocols/annotate adds/removes the inline field comments shown in the
+// code editor. Annotated text is a readable view only; persisted configs are
+// always stripped back to plain JSON/YAML/CONF.
+func (s *Server) handleProtocolAnnotate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Content string `json:"content"`
+		Format  string `json:"format"`
+		Kernel  string `json:"kernel"`
+		On      bool   `json:"on"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	plain := protocols.StripComments([]byte(body.Content), body.Format)
+	shown := string(plain)
+	if body.On {
+		shown = string(protocols.Annotate(plain, body.Format, body.Kernel))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "content": shown, "plain": string(plain),
+		"doc_url": protocols.DocFor(body.Kernel),
+	})
+}
+
+// POST /protocols/preview generates a real kernel config for a protocol that
+// is still being defined in the visual editor (not registered yet).
+func (s *Server) handleProtocolPreview(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Spec   protocols.Spec `json:"spec"`
+		Kernel string         `json:"kernel"`
+		Params map[string]any `json:"params"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Spec.ID) == "" {
+		writeErr(w, http.StatusBadRequest, "spec.id is required")
+		return
+	}
+	content, format, err := protocols.GeneratePreview(body.Spec, body.Kernel, body.Params)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := protocols.ValidateConfig(content, format); err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "protocol": body.Spec.ID, "kernel": body.Kernel,
+		"format": format, "content": string(content), "validated": true,
+		"annotated_content": string(protocols.Annotate(content, format, body.Kernel)),
+		"doc_url":           protocols.DocFor(body.Kernel),
+		"customized":        false,
 	})
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -29,11 +30,22 @@ func TestProtocolCenterCRUDConfigAndBatchToggle(t *testing.T) {
 		t.Fatal("meta missing groups")
 	}
 
-	// Group filtering really splits the catalog into the three families.
-	resp, body = req(t, "GET", base+"/protocols?group=plaintext", token, "")
+	// The directory now excludes plaintext / plain-proxy groups by default;
+	// include_all=true is the explicit compatibility escape hatch.
+	resp, body = req(t, "GET", base+"/protocols", token, "")
+	var listed []map[string]any
+	if err := json.Unmarshal([]byte(body), &listed); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("list protocols: status=%d err=%v body=%s", resp.StatusCode, err, body)
+	}
+	for _, p := range listed {
+		if p["group"] == "plaintext" || p["group"] == "plain-proxy" {
+			t.Fatalf("default directory must exclude plaintext/plain-proxy, got %v", p["id"])
+		}
+	}
+	resp, body = req(t, "GET", base+"/protocols?group=plaintext&include_all=true", token, "")
 	var plain []map[string]any
 	if err := json.Unmarshal([]byte(body), &plain); err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("list plaintext: status=%d err=%v body=%s", resp.StatusCode, err, body)
+		t.Fatalf("list plaintext with include_all: status=%d err=%v body=%s", resp.StatusCode, err, body)
 	}
 	if len(plain) < 5 {
 		t.Fatalf("plaintext group too small: %d", len(plain))
@@ -42,6 +54,23 @@ func TestProtocolCenterCRUDConfigAndBatchToggle(t *testing.T) {
 		if p["group"] != "plaintext" {
 			t.Fatalf("group filter leaked %v", p["id"])
 		}
+	}
+
+	// Kernel filter + schema + annotate are real endpoints.
+	resp, body = req(t, "GET", base+"/protocols/schema?kernel=mihomo", token, "")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "wiki.metacubex.one") {
+		t.Fatalf("schema endpoint: status=%d body=%s", resp.StatusCode, body)
+	}
+	annotateBody := `{"content":"{\"server\":\"https://example.com/x\"}","format":"json","kernel":"sing-box","on":true}`
+	resp, body = req(t, "POST", base+"/protocols/annotate", token, annotateBody)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "官方文档") {
+		t.Fatalf("annotate endpoint: status=%d body=%s", resp.StatusCode, body)
+	}
+	resp, body = req(t, "GET", base+"/protocols?kernel=mihomo", token, "")
+	var mihomoOnly []map[string]any
+	_ = json.Unmarshal([]byte(body), &mihomoOnly)
+	if resp.StatusCode != http.StatusOK || len(mihomoOnly) == 0 {
+		t.Fatalf("kernel filter: status=%d body=%s", resp.StatusCode, body)
 	}
 
 	// Create a custom protocol from a raw JSON body.

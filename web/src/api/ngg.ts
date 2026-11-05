@@ -613,7 +613,42 @@ export interface ProtocolConfigResult {
   format: string
   validated: boolean
   customized?: boolean
+  annotated_content?: string
+  doc_url?: string
   [key: string]: unknown
+}
+
+export interface ProtocolField {
+  key: string
+  label: string
+  type: string
+  options?: string[]
+  default: string
+  description: string
+  required: boolean
+}
+
+export interface KernelSchema {
+  kernel: string
+  label: string
+  syntax: string
+  format: string
+  doc_url: string
+  doc_name: string
+  description: string
+  fields: ProtocolField[]
+}
+
+export interface ProtocolSchemaResult {
+  schemas: KernelSchema[]
+  schema: KernelSchema
+}
+
+export interface ProtocolAnnotateResult {
+  ok: boolean
+  content: string
+  plain: string
+  doc_url?: string
 }
 
 export interface ProtocolMeta {
@@ -629,6 +664,8 @@ export interface ProtocolListFilter {
   group?: string
   search?: string
   enabled?: string
+  kernel?: string
+  include_all?: string
 }
 
 export type ProtocolToggleResult = GenericResult & {
@@ -649,6 +686,18 @@ const protocol = (id: string) => `/protocols/${encodeURIComponent(id)}`
 export const listProtocols = (filter: ProtocolListFilter = {}) =>
   get<Protocol[]>('/protocols', { params: filter })
 export const getProtocolMeta = () => get<ProtocolMeta>('/protocols/meta')
+export const getProtocolSchemas = () => get<ProtocolSchemaResult>('/protocols/schema')
+export const annotateProtocolConfig = (payload: {
+  content: string
+  format: string
+  kernel: string
+  on: boolean
+}) => post<ProtocolAnnotateResult>('/protocols/annotate', payload)
+export const previewProtocolConfig = (payload: {
+  spec: Partial<Protocol>
+  kernel: string
+  params: Record<string, unknown>
+}) => post<ProtocolConfigResult>('/protocols/preview', payload)
 export const getProtocol = (id: string) => get<Protocol>(protocol(id))
 export const enableProtocol = (id: string, enabled: boolean) =>
   post<GenericResult>(`${protocol(id)}/enable`, { enabled })

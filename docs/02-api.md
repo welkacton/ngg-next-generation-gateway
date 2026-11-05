@@ -181,11 +181,14 @@
 | 48 | POST | `/network/selftest` | 真实端到端自检（echo 逐字回显） | Stage 2 |
 | 49 | POST | `/network/packettest` | 喂真实 IPv4/UDP/53 包给 PacketProcessor | Stage 2 |
 | 50 | GET | `/stages` | 五个阶段的如实实现状态 | Stage 4 |
-| 51 | GET | `/protocols` | 协议目录（可按 `category` / `group` / `search` / `enabled` 过滤） | Stage 4 |
+| 51 | GET | `/protocols` | 协议目录；默认排除 plaintext / plain-proxy，可按 `kernel` / `category` / `group` / `search` / `enabled` 过滤，`include_all=true` 返回全部 | Stage 4 |
 | 51a | GET | `/protocols/meta` | 大类 / 分类 / 内核 / 配置格式元数据 | Stage 4 |
+| 51a2 | GET | `/protocols/schema` | 三个内核的字段定义、中文含义与官方文档链接 | Stage 4 |
 | 51b | POST | `/protocols` | 新建自定义协议（原始 JSON Spec，缺省 `enabled` 视为 true） | Stage 4 |
 | 51c | POST | `/protocols/toggle` | 单条 / 多选 / 全部启停（`ids` 或 `all` + `enabled`） | Stage 4 |
-| 51d | POST | `/protocols/validate` | 校验手写 JSON / YAML / CONF，不落盘 | Stage 4 |
+| 51d | POST | `/protocols/validate` | 校验手写 JSON / YAML / CONF（自动剥离整行注释），不落盘 | Stage 4 |
+| 51d2 | POST | `/protocols/annotate` | 给配置加/去逐字段注释，返回带注释文本与纯净文本 | Stage 4 |
+| 51d3 | POST | `/protocols/preview` | 未注册协议的真实配置预览（可视化新建用），附 `annotated_content` | Stage 4 |
 | 52 | GET | `/protocols/{id}` | 单个协议 Spec | Stage 4 |
 | 52a | PUT | `/protocols/{id}` | 更新自定义协议；内置协议仅更新可编辑状态 | Stage 4 |
 | 52b | DELETE | `/protocols/{id}` | 删除自定义协议（内置协议拒绝删除） | Stage 4 |
@@ -218,12 +221,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.1.1", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.1.2", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.1.1），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.1.2），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
