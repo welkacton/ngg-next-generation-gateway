@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # NGG VPS deployment helper (systemd-based Linux, no Go/Node needed on the VPS).
 #
-#   sudo ./scripts/deploy-vps.sh install   --version v2.0.0 --public
-#   sudo ./scripts/deploy-vps.sh install   --version v2.0.0 --domain ngg.example.com --with-tls
-#   sudo ./scripts/deploy-vps.sh install   --file ./ngg-v2.0.0-linux-amd64.tar.gz
+#   sudo ./scripts/deploy-vps.sh install   --version v2.1.0 --public
+#   sudo ./scripts/deploy-vps.sh install   --version v2.1.0 --domain ngg.example.com --with-tls
+#   sudo ./scripts/deploy-vps.sh install   --file ./ngg-v2.1.0-linux-amd64.tar.gz
 #   ./scripts/deploy-vps.sh docker        # Docker Compose path (Alpine / no systemd)
 #   sudo ./scripts/deploy-vps.sh status
 #   sudo ./scripts/deploy-vps.sh upgrade   --version v1.0.1
@@ -63,7 +63,7 @@ usage() {
   uninstall   停止并移除服务与程序文件（默认需确认；--keep-data 保留数据）
 
 选项:
-  --version v2.0.0        Release tag（install / upgrade 必填，除非用 --file）
+  --version v2.1.0        Release tag（install / upgrade 必填，除非用 --file）
   --file PATH             使用本地 Release tar.gz（离线部署；跳过下载）
   --token TOKEN           GitHub PAT（私有仓库；也可用环境变量 GITHUB_TOKEN）
   --public                公网访问：Nginx 监听 WEB_PORT，URL = http://公网IP:端口/16位随机后缀

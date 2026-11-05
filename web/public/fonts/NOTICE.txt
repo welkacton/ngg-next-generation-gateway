@@ -1,0 +1,25 @@
+SF Mono Nerd Font Ligaturized
+=============================
+
+Source project : https://github.com/shaunsingh/SFMono-Nerd-Font-Ligaturized
+Files          : LigaSFMonoNerdFont-{Regular,Medium,Semibold,Bold}.woff2
+                 (WOFF2 re-encodings of the upstream .otf files; no glyphs
+                  were added or removed, only the container was compressed)
+Upstream files : LigaSFMonoNerdFont-*.otf from the repository's main branch
+Purpose        : the only Western / Latin font used by the NGG Web UI;
+                 Chinese text falls back to the operating system's CJK font.
+
+Licensing note
+--------------
+"SF Mono" is an Apple typeface; the upstream repository redistributes a
+Nerd Fonts patched + ligaturized build of it. Nerd Fonts patches are MIT
+licensed, but the base SF Mono outlines remain subject to Apple's font
+license terms. This bundle is included because the project owner explicitly
+requested that exact font. Before redistributing NGG commercially or
+publicly shipping the font, review Apple's SF Mono license and the upstream
+repository's LICENSE / README, and replace the files if needed.
+
+Conversion
+----------
+fontTools + brotli:
+    TTFont("LigaSFMonoNerdFont-<weight>.otf"); font.flavor = "woff2"; font.save(...)

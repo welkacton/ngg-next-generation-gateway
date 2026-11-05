@@ -2,7 +2,7 @@
 
 > 官方文档：`internal/version/version.go` 是代际与 Release 的单一事实来源；
 > `internal/update` 负责真实的 GitHub Release 检查、校验下载与更新交接。
-> 界面顶栏的「Gen 2 · v2.0.0」徽章与「系统更新」按钮读取的都是这两个模块的真实数据。
+> 界面顶栏的「Gen 2 · v2.1.0」徽章与「系统更新」按钮读取的都是这两个模块的真实数据。
 
 ---
 
@@ -12,7 +12,7 @@
 
 | 元素 | 行为 |
 | --- | --- |
-| `Gen 2 · v2.0.0` 徽章 | 来自 `GET /api/v1/update/status`，显示代际、版本号与代际名称 |
+| `Gen 2 · v2.1.0` 徽章 | 来自 `GET /api/v1/update/status`，显示代际、版本号与代际名称 |
 | 「系统更新」胶囊按钮 | 打开更新面板；发现新版本时显示蓝点与「有新版本」 |
 | 更新面板 | 当前版本 / 仓库 / 平台、手动「检查更新」、自动检查开关、「下载更新」「应用更新」、Release 说明、校验结果、应用日志路径 |
 
@@ -44,14 +44,14 @@
 
 ```json
 {
-  "current": "2.0.0",
+  "current": "2.1.0",
   "latest": "v2.0.1",
   "update_available": true,
   "source": "github-api",
   "checked_at": "2026-11-05T03:00:00Z",
   "release": { "tag_name": "v2.0.1", "published_at": "...", "body": "...", "assets": [] },
   "asset": { "name": "NGG-Setup-v2.0.1.exe", "size": 9866685, "url": "..." },
-  "status": { "generation": 2, "generation_label": "Gen 2", "release": "2.0.0",
+  "status": { "generation": 2, "generation_label": "Gen 2", "release": "2.1.0",
               "platform": "windows/amd64", "script_ready": true }
 }
 ```

@@ -4,7 +4,8 @@ import type { GlobalThemeOverrides } from 'naive-ui'
  * Visual language: Apple / Ubiquiti (ui.com) inspired minimalism.
  * - near-white surfaces, 1px hairline borders, generous whitespace
  * - near-black text with a strict grey scale, ONE restrained blue accent
- * - system font stack, small radii, almost no shadows or gradients
+ * - SF Mono Nerd Font Ligaturized for every Western glyph (CJK falls back)
+ * - small radii, almost no shadows or gradients
  */
 export const themeOverrides: GlobalThemeOverrides = {
   common: {
@@ -35,9 +36,9 @@ export const themeOverrides: GlobalThemeOverrides = {
     placeholderColor: '#aeaeb2',
     borderRadius: '10px',
     fontFamily:
-      "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+      "'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', sans-serif",
     fontFamilyMono:
-      "'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace",
+      "'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace",
   },
   Menu: {
     itemColorActive: 'rgba(0, 102, 204, 0.075)',

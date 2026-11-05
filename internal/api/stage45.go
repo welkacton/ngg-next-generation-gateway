@@ -27,7 +27,14 @@ func (s *Server) handleStages(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------- protocols ---
 
 func (s *Server) handleProtocols(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.engine.Protocols().List(r.URL.Query().Get("category")))
+	q := r.URL.Query()
+	list := s.engine.Protocols().Query(protocols.Filter{
+		Category: q.Get("category"),
+		Group:    q.Get("group"),
+		Search:   q.Get("search"),
+		Enabled:  q.Get("enabled"),
+	})
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (s *Server) handleProtocolByID(w http.ResponseWriter, r *http.Request) {
@@ -50,14 +57,15 @@ func (s *Server) handleProtocolByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(r.URL.Path, "/config") {
 		var body struct {
-			Kernel string         `json:"kernel"`
-			Params map[string]any `json:"params"`
+			Kernel     string         `json:"kernel"`
+			Params     map[string]any `json:"params"`
+			Regenerate bool           `json:"regenerate"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		content, format, err := protocols.GenerateConfig(id, body.Kernel, body.Params)
+		content, format, err := s.engine.Protocols().GenerateFor(id, body.Kernel, body.Params, body.Regenerate)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -66,9 +74,11 @@ func (s *Server) handleProtocolByID(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
+		spec, _ := s.engine.Protocols().Get(id)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": true, "protocol": id, "kernel": body.Kernel,
 			"format": format, "content": string(content), "validated": true,
+			"customized": spec.ConfigContent != "" && !body.Regenerate,
 		})
 		return
 	}

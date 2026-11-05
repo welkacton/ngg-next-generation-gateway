@@ -65,7 +65,10 @@ func (a *pluginHookAdapter) OnDNS(ctx context.Context, name string) error {
 func (a *pluginHookAdapter) Count() int { return a.m.Count() }
 
 func (e *Engine) initStage45() {
-	e.protocols = protocols.NewRegistry()
+	e.protocols = protocols.NewRegistry(filepath.Join(e.cfg.Storage.Dir, "protocols-config.json"))
+	if err := e.protocols.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted protocols: %v\n", err)
+	}
 	e.plugins = plugins.NewManager(filepath.Join(e.cfg.Storage.Dir, "plugins"))
 	e.sdwan = sdwan.NewManager(sdwan.PolicyLowestLatency, 3*time.Second)
 	e.tenants = tenants.NewRegistry()

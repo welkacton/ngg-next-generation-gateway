@@ -1,7 +1,42 @@
+/* ---------------------------------------------------------------------------
+ * SF Mono Nerd Font Ligaturized — the only Western font used by the console.
+ * Source: https://github.com/shaunsingh/SFMono-Nerd-Font-Ligaturized
+ * The font has no CJK outlines, so Chinese text falls through to the OS CJK
+ * font listed after it. WOFF2 files live in web/public/fonts (see NOTICE.txt).
+ * ------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'SF Mono Nerd Font';
+  src: url('/fonts/LigaSFMonoNerdFont-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'SF Mono Nerd Font';
+  src: url('/fonts/LigaSFMonoNerdFont-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'SF Mono Nerd Font';
+  src: url('/fonts/LigaSFMonoNerdFont-Semibold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'SF Mono Nerd Font';
+  src: url('/fonts/LigaSFMonoNerdFont-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
-    'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-feature-settings: 'calt' 1, 'liga' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -62,17 +97,30 @@ body {
 }
 
 .mono {
-  font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas,
-    'Courier New', monospace;
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace;
 }
 
-/* 配置编辑器：等宽字体，不引入 Monaco。 */
+/* 配置编辑器：同一个字体，但关闭连字，保证 JSON / YAML 里 !=、=> 等字符
+   按原样显示，编辑时不会被合成连字误导。不引入 Monaco 等重型编辑器。 */
 .code-editor .n-input__textarea-el {
-  font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas,
-    'Courier New', monospace !important;
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace !important;
+  font-feature-settings: 'calt' 0, 'liga' 0 !important;
+  font-variant-ligatures: none !important;
   font-size: 13px !important;
   line-height: 1.6 !important;
   tab-size: 2;
+}
+
+.code-editor-large .n-input__textarea-el {
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace !important;
+  font-feature-settings: 'calt' 0, 'liga' 0 !important;
+  font-variant-ligatures: none !important;
+  font-size: 12.5px !important;
+  line-height: 1.65 !important;
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
 }
 
 .output-block {
@@ -82,8 +130,9 @@ body {
   border: 1px solid #e6e6eb;
   border-radius: 10px;
   color: #3a3a3c;
-  font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas,
-    'Courier New', monospace;
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace;
+  font-feature-settings: 'calt' 0, 'liga' 0;
+  font-variant-ligatures: none;
   font-size: 12.5px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -101,8 +150,7 @@ body {
   border: 1px solid #e6e6eb;
   border-radius: 10px;
   padding: 12px 14px;
-  font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas,
-    'Courier New', monospace;
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace;
   font-size: 12.5px;
   line-height: 1.7;
 }
@@ -329,4 +377,101 @@ body {
 }
 .n-data-table .n-data-table-th {
   font-weight: 500;
+}
+
+/* ---- Protocol center: classification tabs, editors, stat strips ---- */
+
+.proto-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 3px;
+  background: #f7f7f9;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+}
+
+.proto-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #6e6e73;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 13px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.proto-tab:hover {
+  color: #1d1d1f;
+  background: rgba(0, 102, 204, 0.05);
+}
+
+.proto-tab.active {
+  background: #ffffff;
+  color: #0066cc;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.proto-tab .tab-count {
+  margin-left: 6px;
+  color: #a1a1a6;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.proto-stats {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.proto-stat-label {
+  font-size: 11px;
+  color: #8e8e93;
+  margin-bottom: 3px;
+}
+
+.proto-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1d1d1f;
+  font-variant-numeric: tabular-nums;
+}
+
+.proto-sec {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.proto-sec-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+
+.proto-editor {
+  width: 100%;
+}
+
+.proto-tag-encrypted { background: rgba(0, 102, 204, 0.08) !important; color: #0066cc !important; }
+.proto-tag-plaintext { background: rgba(199, 135, 26, 0.10) !important; color: #a06a10 !important; }
+.proto-tag-plain-proxy { background: rgba(29, 154, 104, 0.10) !important; color: #147a51 !important; }
+
+.proto-checkcell {
+  display: inline-flex;
+  align-items: center;
 }

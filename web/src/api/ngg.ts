@@ -588,11 +588,22 @@ export interface Protocol {
   id: string
   name: string
   category: string
+  group: string
+  security: string
   transport: string
+  config_kind: string
   default_port: number
+  ports: string[]
   kernels: string[]
+  features: string[]
   pq_capable: boolean
+  requires_root: boolean
+  description: string
   enabled: boolean
+  custom: boolean
+  params?: Record<string, unknown>
+  config_content?: string
+  config_format?: string
   [key: string]: unknown
 }
 
@@ -600,23 +611,72 @@ export interface ProtocolConfigResult {
   content: string
   format: string
   validated: boolean
+  customized?: boolean
   [key: string]: unknown
 }
 
-export const listProtocols = (category?: string) =>
-  get<Protocol[]>('/protocols', category ? { params: { category } } : undefined)
-export const getProtocol = (id: string) =>
-  get<Protocol>(`/protocols/${encodeURIComponent(id)}`)
+export interface ProtocolMeta {
+  groups: { value: string; label: string }[]
+  categories: { value: string; label: string }[]
+  config_kinds: string[]
+  kernels: string[]
+  formats: string[]
+}
+
+export interface ProtocolListFilter {
+  category?: string
+  group?: string
+  search?: string
+  enabled?: string
+}
+
+export type ProtocolToggleResult = GenericResult & {
+  changed: number
+  enabled: boolean
+  scope: string
+}
+
+export interface ProtocolValidateResult {
+  ok: boolean
+  valid: boolean
+  format: string
+  error?: string
+}
+
+const protocol = (id: string) => `/protocols/${encodeURIComponent(id)}`
+
+export const listProtocols = (filter: ProtocolListFilter = {}) =>
+  get<Protocol[]>('/protocols', { params: filter })
+export const getProtocolMeta = () => get<ProtocolMeta>('/protocols/meta')
+export const getProtocol = (id: string) => get<Protocol>(protocol(id))
 export const enableProtocol = (id: string, enabled: boolean) =>
-  post<GenericResult>(`/protocols/${encodeURIComponent(id)}/enable`, { enabled })
+  post<GenericResult>(`${protocol(id)}/enable`, { enabled })
+export const toggleProtocols = (payload: {
+  ids?: string[]
+  all?: boolean
+  enabled: boolean
+}) => post<ProtocolToggleResult>('/protocols/toggle', payload)
+export const createProtocol = (spec: Partial<Protocol>) =>
+  post<GenericResult>('/protocols', spec)
+export const updateProtocol = (id: string, spec: Partial<Protocol>) =>
+  put<GenericResult>(protocol(id), spec)
+export const deleteProtocol = (id: string) => del<GenericResult>(protocol(id))
+export const validateProtocolConfig = (content: string, format: string) =>
+  post<ProtocolValidateResult>('/protocols/validate', { content, format })
+export const saveProtocolConfig = (id: string, content: string, format: string) =>
+  put<GenericResult>(`${protocol(id)}/config`, { content, format })
+export const clearProtocolConfig = (id: string) =>
+  del<GenericResult>(`${protocol(id)}/config`)
 export const generateProtocolConfig = (
   id: string,
   kernel: string,
   params: Record<string, unknown>,
+  regenerate = false,
 ) =>
-  post<ProtocolConfigResult>(`/protocols/${encodeURIComponent(id)}/config`, {
+  post<ProtocolConfigResult>(`${protocol(id)}/config`, {
     kernel,
     params,
+    regenerate,
   })
 
 /* ------------------------------------------------------------------ *
