@@ -228,8 +228,34 @@ export const getCore = (id: string) => get<CoreStatus>(core(id))
 export const startCore = (id: string) => post<ActionResult>(`${core(id)}/start`)
 export const stopCore = (id: string) => post<ActionResult>(`${core(id)}/stop`)
 export const restartCore = (id: string) => post<ActionResult>(`${core(id)}/restart`)
+export interface InstallTask {
+  id: string
+  core_id: string
+  version: string
+  status: 'running' | 'succeeded' | 'failed'
+  message: string
+  started_at: string
+  finished_at?: string
+  result?: unknown
+  error?: string
+}
+
+export interface InstallAccepted {
+  ok: boolean
+  accepted: boolean
+  task_id: string
+  status: string
+  core_id: string
+  message: string
+}
+
+/** Installs are background tasks: the POST returns 202 immediately. */
 export const installCore = (id: string, version?: string) =>
-  post<ActionResult>(`${core(id)}/install`, version ? { version } : {})
+  post<InstallAccepted>(`${core(id)}/install`, version ? { version } : {})
+export const getInstallStatus = (coreId: string) =>
+  get<InstallTask | { tasks: InstallTask[]; total: number }>('/cores/install/status', {
+    params: { core: coreId },
+  })
 export const uninstallCore = (id: string) => del<ActionResult>(core(id))
 export const upgradeCore = (id: string, version: string) =>
   post<ActionResult>(`${core(id)}/upgrade`, { version })
@@ -846,6 +872,19 @@ export const activateProfile = (id: string) =>
   post<GenericResult>(`/profiles/${encodeURIComponent(id)}/activate`, {})
 export const renderProfile = (id: string) =>
   post<ProfileRenderResult>(`/profiles/${encodeURIComponent(id)}/render`, {})
+export interface ProfileToggleResult {
+  ok: boolean
+  changed: number
+  enabled: boolean
+  scope: string
+  profiles: Profile[]
+  active: string
+}
+export const toggleProfiles = (payload: {
+  ids?: string[]
+  all?: boolean
+  enabled: boolean
+}) => post<ProfileToggleResult>('/profiles/toggle', payload)
 
 /* ------------------------------------------------------------------ *
  * 后量子 /pq

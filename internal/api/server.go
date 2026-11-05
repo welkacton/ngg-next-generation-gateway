@@ -35,6 +35,7 @@ type Server struct {
 	catalog      *protocols.CatalogSyncer
 	profileStore *profiles.Store
 	githubIndex  *rulesets.GitHubIndex
+	installs     *installManager
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -59,6 +60,7 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 		cfg: cfg, engine: eng, mux: http.NewServeMux(),
 		updater: update.New(dataDir), catalog: catalog, profileStore: store,
 		githubIndex: rulesets.NewGitHubIndex(dataDir, gitToken),
+		installs:    newInstallManager(),
 	}
 	s.hub = newWSHub(eng)
 	s.routes()
@@ -95,6 +97,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/cores/{id}/stop", s.handleStop)
 	m.HandleFunc("POST /api/v1/cores/{id}/restart", s.handleRestart)
 	m.HandleFunc("POST /api/v1/cores/{id}/install", s.handleInstall)
+	m.HandleFunc("GET /api/v1/cores/install/status", s.handleInstallStatus)
 	m.HandleFunc("DELETE /api/v1/cores/{id}", s.handleUninstall)
 	m.HandleFunc("POST /api/v1/cores/{id}/upgrade", s.handleVersionOp)
 	m.HandleFunc("POST /api/v1/cores/{id}/rollback", s.handleVersionOp)
@@ -185,6 +188,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/protocols/catalog/refresh", s.handleProtocolCatalogRefresh)
 	m.HandleFunc("GET /api/v1/profiles/options", s.handleProfileOptions)
 	m.HandleFunc("POST /api/v1/profiles/validate", s.handleProfileValidate)
+	m.HandleFunc("POST /api/v1/profiles/toggle", s.handleProfilesToggle)
 	m.HandleFunc("POST /api/v1/profiles/template", s.handleProfileTemplate)
 	m.HandleFunc("GET /api/v1/profiles", s.handleProfiles)
 	m.HandleFunc("POST /api/v1/profiles", s.handleProfiles)

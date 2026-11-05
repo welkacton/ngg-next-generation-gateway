@@ -1,13 +1,13 @@
 # 协议配置（Protocol Config）
 
-> 适用版本：Gen 2 / v2.2.0 起。菜单名与页面标题为 **「协议配置」**（旧称「协议中心」）。
+> 适用版本：Gen 2 / v2.2.1 起。菜单名与页面标题为 **「协议配置」**（旧称「协议中心」）。
 
 这一页只做两件事，避免「不知道从哪下手」：
 
 | 区块 | 能做什么 | 是否可编辑 |
 | --- | --- | --- |
 | **内核支持协议** | 用纯文字列出 Mihomo / sing-box / Xray-core 各自支持的协议名称 | ❌ 只读，定时从内核官方文档自动同步 |
-| **配置文件** | 卡片列表（类似 Clash Verge / Shadowrocket 的 Profile），点开编辑完整内核配置 | ✅ 可新建、复制、编辑、校验、导出、删除、设为默认 |
+| **配置文件** | 卡片列表（类似 Clash Verge / Shadowrocket 的 Profile），点开编辑完整内核配置 | ✅ 可新建、复制、编辑、校验、导出、删除、设为默认、启用/停用、多选批量启停 |
 
 旧版的可视化表单、协议 JSON 编辑器、params 输入框、单条详情卡片、批量启停开关**已全部移除**。
 
@@ -50,16 +50,17 @@
 
 ### 六个分区
 
-一个配置文件按目标内核的**官方语法**拆成 6 个可编辑分区，每个分区都有中文说明与带注释的模板：
+一个配置文件按目标内核的**官方语法**拆成 6 个可编辑分区，每个分区都有中文说明与带注释的模板。
+编辑器里的顺序固定为 **协议 → 入站 → 出站 → 路由规则 → DNS → 其他 → 重建模板**（旧版本保存的文件读取时也会自动规范化到这个顺序）：
 
-| 分区 | 含义 | Mihomo (YAML) | sing-box (JSON) | Xray-core (JSON) |
-| --- | --- | --- | --- | --- |
-| 协议内容 | 代理节点 / 协议条目 | `proxies:` | `outbounds` 中的代理项 | `outbounds` 中的代理项 |
-| 出站 | 选择器 / 直连 / 阻断 | `proxy-groups:` | `outbounds` 中的 selector/direct/block | `outbounds` 中的 freedom/blackhole |
-| 入站 | 本地监听入口 | `listeners:` | `inbounds:` | `inbounds:` |
-| 路由规则 | 分流规则 | `rules:` | `route.rules` | `routing.rules` |
-| DNS | DNS 设置 | `dns:` | `dns:` | `dns:` |
-| 其他 | 日志与全局 | `mode` / `log-level` | `log` | `log` |
+| 序 | 分区 | 含义 | Mihomo (YAML) | sing-box (JSON) | Xray-core (JSON) |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 协议 | 代理节点 / 协议条目 | `proxies:` | `outbounds` 中的代理项 | `outbounds` 中的代理项 |
+| 2 | 入站 | 本地监听入口 | `listeners:` | `inbounds:` | `inbounds:` |
+| 3 | 出站 | 选择器 / 直连 / 阻断 | `proxy-groups:` | `outbounds` 中的 selector/direct/block | `outbounds` 中的 freedom/blackhole |
+| 4 | 路由规则 | 分流规则 | `rules:` | `route.rules` | `routing.rules` |
+| 5 | DNS | DNS 设置 | `dns:` | `dns:` | `dns:` |
+| 6 | 其他 | 日志与全局 | `mode` / `log-level` | `log` | `log` |
 
 > 注意：sing-box / Xray-core 的「协议内容」与「出站」都属于 `outbounds` 数组。
 > 保存时后端会**把两个分区的同名数组真实合并**，而不是生成重复 JSON key。
@@ -75,6 +76,8 @@
 
 - 校验逐段做真实解析，再校验合并后的完整配置；语法错误不会写入磁盘。
 - 默认配置文件不能删除，需先把另一份设为默认。
+- **启用 / 停用**：每张卡片可单独启停，也可勾选多张后「启用选中 / 停用选中 / 全部启用 / 全部停用」。不同内核的配置文件可同时启用，各自只对应自己的内核，不存在互斥。状态一次落盘，写入失败整体回滚。
+- 页面左右保留 26px 留白，避免内容顶到侧栏。
 - 所有数据保存在 `<storage.dir>/profiles.json`（0600，原子写 + 失败回滚）；新建时自动生成 `Default-Profile`。
 
 ### 相关 API
@@ -89,6 +92,7 @@
 | POST | `/profiles/{id}/render` | 由已保存内容生成完整配置 |
 | POST | `/profiles/{id}/duplicate` | 复制 |
 | POST | `/profiles/{id}/activate` | 设为默认 |
+| POST | `/profiles/toggle` | 批量启停：`{ids:[], all:bool, enabled:bool}`，返回变更数与全量列表 |
 | GET | `/profiles/options` | 内核选项、分区定义、官方文档链接 |
 
 ---

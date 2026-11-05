@@ -80,18 +80,18 @@ chmod +x deploy-vps.sh
 export GITHUB_TOKEN='ghp_xxx'
 
 # 在线安装指定 Release（脚本自动识别 amd64 / arm64 / arm / 386 与发行版）
-sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.0
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.1
 
 # 「先用公网 IP + 端口 + 16 位随机后缀访问」（最常用）
-sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.0 \
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.1 \
   --public --web-port 8080 --configure-firewall
 
 # 之后把域名 A 记录指向 VPS，再补 SSL（相同或再次执行 install 均可）
-sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.0 \
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.1 \
   --domain ngg.example.com --with-tls --email you@example.com --configure-firewall
 
 # 离线 / 内网：在有网机器下载 Release 包与 SHA256SUMS，scp 到 VPS 后
-sudo ./scripts/deploy-vps.sh install --file /root/ngg-v2.2.0-linux-amd64.tar.gz --public
+sudo ./scripts/deploy-vps.sh install --file /root/ngg-v2.2.1-linux-amd64.tar.gz --public
 ```
 
 `--public` 会打印形如 `http://203.0.113.7:8080/9f3ac1b27e4d6058` 的地址，并把秘密路径、
@@ -185,7 +185,7 @@ docker compose logs -f ngg          # 日志里会打印自动生成的 API Toke
 
 ```bash
 # 1) 下载并校验 Release
-export VERSION=v2.2.0 ARCH=amd64 TOKEN=ghp_xxx
+export VERSION=v2.2.1 ARCH=amd64 TOKEN=ghp_xxx
 BASE="https://github.com/welkacton/ngg-next-generation-gateway/releases/download/${VERSION}"
 curl -fL -o /tmp/ngg.tgz "$BASE/ngg-${VERSION}-linux-${ARCH}.tar.gz"
 curl -fL -o /tmp/SHA256SUMS "$BASE/SHA256SUMS"
@@ -240,7 +240,7 @@ ssh -N -L 9090:127.0.0.1:9090 nggadmin@<VPS_IP>      # 保持窗口打开
 ### 5.2 公网 IP + 端口 + 16 位随机后缀（阶段一）
 
 ```bash
-sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.0 \
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.1 \
   --public --web-port 8080 --configure-firewall
 ```
 
@@ -266,7 +266,7 @@ sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.
 域名 A 记录指向 VPS 公网 IP、80/443 放行后：
 
 ```bash
-sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.0 \
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.1 \
   --domain ngg.example.com --with-tls --email you@example.com --configure-firewall
 # 或仅补证书（脚本会重新生成站点配置，秘密路径会更换并写入 web-gate.txt）
 ```
@@ -318,7 +318,7 @@ firewall-cmd --reload
 
 ```bash
 ls -l /dev/net/tun || modprobe tun
-sudo ./scripts/deploy-vps.sh install --version v2.2.0 --enable-tun   # 或手工把 autoroute 改为 true
+sudo ./scripts/deploy-vps.sh install --version v2.2.1 --enable-tun   # 或手工把 autoroute 改为 true
 ```
 
 - **已知能力边界**：TUN 读环回目前完成真实 L3 解析、IPv4 UDP/53 DNS 应答与 Fail-Closed 记录；

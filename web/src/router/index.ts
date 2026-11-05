@@ -48,13 +48,13 @@ const routes: RouteRecordRaw[] = [
     path: '/rules',
     name: 'rules',
     component: () => import('../views/Rules.vue'),
-    meta: { title: '规则' },
+    meta: { title: '规则配置' },
   },
   {
     path: '/dns',
     name: 'dns',
     component: () => import('../views/DNS.vue'),
-    meta: { title: 'DNS' },
+    meta: { title: 'DNS配置' },
   },
   {
     path: '/inbound',

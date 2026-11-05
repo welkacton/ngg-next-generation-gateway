@@ -65,21 +65,8 @@ type versionBody struct {
 	Version string `json:"version"`
 }
 
-func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
-	var body versionBody
-	if r.ContentLength > 0 {
-		if err := decodeJSON(r, &body); err != nil {
-			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-			return
-		}
-	}
-	info, err := s.engine.Install(r.Context(), s.id(r), strings.TrimSpace(body.Version))
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, contracts.OperationResult{OK: true, Message: "installed " + info.Version, Data: info})
-}
+// handleInstall now lives in installs.go as an asynchronous background task;
+// the synchronous path remains available via ?wait=1 for scripts and tests.
 
 func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	if err := s.engine.Uninstall(r.Context(), s.id(r)); err != nil {

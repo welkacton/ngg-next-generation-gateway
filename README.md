@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.2.0
+### 🏷️ Generation 2 / 第二代 · Release v2.2.1
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -20,10 +20,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.1.0 | 协议中心重构与全站字体 | 三大类全内核协议目录、配置生成可自定义编辑、自定义协议 JSON 编辑、协议批量启停、全站 SF Mono Nerd Font |
 | Gen 2 增补 | v2.1.1 | Web 端一键更新与交互优化 | 界面内填 GitHub Token（私有仓库）→「立即更新」一键完成检查/校验下载/重启/自动刷新；协议目录五类视图；精简表格列；点配置自动定位；取消冗余 params 与单条详情卡片 |
 | Gen 2 增补 | v2.1.2 | 按内核的官方语法配置 | 三内核协议目录、按三份官方文档建立字段 schema、可视化表单 + 带注释代码编辑 |
-| **Gen 2（当前）** | **v2.2.0** | 协议配置与 GitHub 规则集 | 「协议中心」改名**协议配置**：上半部只读纯文字协议目录（每 6 小时从三内核官方文档自动同步、可手动刷新）；下半部改为**配置文件卡片**（Default-Profile 等，点开按 6 个分区编辑协议内容/出站/入站/路由规则/DNS，带中文注释、语法校验、导出）；删除全部可视化表单与协议 JSON 编辑器；规则页新增**GitHub 规则集挂载**（一次发现 668+ 分类，批量侧挂载或自动导入全部分流规则） |
+| Gen 2 增补 | v2.2.0 | 协议配置与 GitHub 规则集 | 「协议中心」改名**协议配置**：上半部只读纯文字协议目录（每 6 小时从三内核官方文档自动同步）；下半部改为**配置文件卡片**（6 分区、带中文注释、语法校验、导出）；规则页新增**GitHub 规则集挂载**（一次发现 668+ 分类） |
+| **Gen 2（当前）** | **v2.2.1** | 内核安装修复与交互整理 | 内核安装改为**异步后台任务**（修掉 30 秒超时导致的三个内核装不上）+ GitHub API 配额治理与 PAT 支持；配置引擎二级重排为 协议配置/规则配置/DNS配置/入口节点/出口节点；配置文件分区改为 协议→入站→出站→路由规则→DNS→其他→重建模板、页面留白、卡片支持单条与批量启停；GitHub 规则集可全选全部并自动分批加载；修复侧栏展开后底部文字覆盖 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.2.0`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.2.1`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -36,19 +37,19 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 仓库当前为 `private`，只有仓库所有者授权账号可以 clone；部署到自己的服务器、电脑、NAS 或软路由时，
 请先用有权限的账号完成克隆或下载 Release 产物。若日后要共享，由所有者手动改为 Public。
 
-> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.2.0>
-> → `NGG-Setup-v2.2.0.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.2.0-windows-amd64.zip`
+> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.2.1>
+> → `NGG-Setup-v2.2.1.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.2.1-windows-amd64.zip`
 > （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
-| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.0 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.1 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
 | VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
 | VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
-| **Windows 安装程序** | 双击 `NGG-Setup-v2.2.0.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
+| **Windows 安装程序** | 双击 `NGG-Setup-v2.2.1.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
-| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.2.0` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
+| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.2.1` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
 `scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →
@@ -197,7 +198,8 @@ installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、�
 | `docs/GENERATIONS.md` | **版本代际**：Gen 1 / Gen 2 沿革、判定标准、代际在 GitHub 与界面上的显示位置 |
 | `docs/10-updates.md` | **系统更新栏**：`/update/*` 端点、自动/手动更新、SHA256 校验、平台更新脚本 |
 | `docs/11-protocol-center.md` | **协议配置**：只读官网协议目录（定时同步）+ 可编辑配置文件卡片（6 分区、按内核官方语法、带注释与校验） |
-| `docs/12-github-rulesets.md` | **GitHub 规则集挂载**：一次发现 668+ 分流规则分类，批量侧挂载或自动导入实时规则表 |
+| `docs/12-github-rulesets.md` | **GitHub 规则集挂载**：一次发现 668+ 分流规则分类，全选全部自动分批加载，批量侧挂载或自动导入实时规则表 |
+| `docs/13-kernel-install.md` | **内核安装**：异步后台任务、安装进度轮询、GitHub API 配额治理与 PAT 配置 |
 | `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
 | `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 

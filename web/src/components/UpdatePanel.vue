@@ -303,7 +303,7 @@ onMounted(() => {
           <div class="upd-h">当前版本</div>
           <div class="upd-v">
             {{ status?.generation_label || 'Gen 2' }} ·
-            v{{ status?.release || '2.2.0' }}
+            v{{ status?.release || '2.2.1' }}
             <NTag size="small" :bordered="false">{{ status?.generation_name || '第二代' }}</NTag>
           </div>
         </div>

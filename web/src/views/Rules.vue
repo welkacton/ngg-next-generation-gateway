@@ -656,25 +656,33 @@ const ghModeOptions = [
 ]
 const ghActionOptions = ['PROXY', 'DIRECT', 'REJECT'].map((v) => ({ label: v, value: v }))
 
+const ghShowAll = ref(false)
 const ghVisible = computed(() => {
   const q = ghSearch.value.trim().toLowerCase()
   const all = ghCatalog.value?.categories ?? []
   if (!q) return all
   return all.filter((c) => c.name.toLowerCase().includes(q))
 })
-const ghShown = computed(() => ghVisible.value.slice(0, 150))
+// Default to a bounded list so 668 chips don't stall the page; the user can
+// expand to the full catalogue with one click and still select every item.
+const ghShown = computed(() =>
+  ghShowAll.value ? ghVisible.value : ghVisible.value.slice(0, 150),
+)
 
 function toggleGhCategory(name: string) {
   const i = ghSelected.value.indexOf(name)
   if (i >= 0) ghSelected.value.splice(i, 1)
-  else if (ghSelected.value.length < 50) ghSelected.value.push(name)
-  else window.$message?.warning('单次最多选择 50 个分类，请分批挂载')
+  else ghSelected.value.push(name)
+}
+function selectAllGhAll() {
+  ghSelected.value = (ghCatalog.value?.categories ?? []).map((c) => c.name)
+  window.$message?.success(`已全选 ${ghSelected.value.length} 个分类；挂载时会自动分批执行`)
 }
 function selectAllGhVisible() {
-  for (const c of ghVisible.value.slice(0, 50)) {
-    if (!ghSelected.value.includes(c.name)) ghSelected.value.push(c.name)
-  }
-  if (ghSelected.value.length >= 50) window.$message?.info('已达到单次上限 50 个分类')
+  const names = new Set(ghVisible.value.map((c) => c.name))
+  ghSelected.value = (ghCatalog.value?.categories ?? [])
+    .filter((c) => names.has(c.name))
+    .map((c) => c.name)
 }
 function clearGhSelection() {
   ghSelected.value = []
@@ -710,27 +718,58 @@ function choosePreset(repo: string) {
   loadGhCatalog(false)
 }
 
+const ghBatchSize = 50 // backend hard cap per request
+const ghProgress = ref('')
+
 async function mountGh() {
   if (!ghSelected.value.length) {
     window.$message?.warning('请先勾选要挂载的分流规则分类')
     return
   }
   ghResult.value = null
-  const data = await run('gh-mount', () =>
-    api.mountGitHubRuleSets({
-      repo: ghRepo.value,
-      branch: ghBranch.value,
-      format: ghFormat.value,
-      categories: ghSelected.value,
-      mode: ghMode.value,
-      action: ghAction.value,
-      core_id: ghCore.value,
-      enabled: true,
-    }),
-  )
-  if (!data) return
-  ghResult.value = data
-  window.$message?.info(data.message)
+  const batches: string[][] = []
+  for (let i = 0; i < ghSelected.value.length; i += ghBatchSize) {
+    batches.push(ghSelected.value.slice(i, i + ghBatchSize))
+  }
+  const combined: GitHubMountResult = {
+    ok: true, mode: ghMode.value, results: [], categories: 0,
+    recognised: 0, rules_added: 0, mounted: 0, failed: 0, message: '',
+  }
+  let done = 0
+  for (const batch of batches) {
+    ghProgress.value = `正在处理第 ${++done} / ${batches.length} 批（${batch.length} 个分类）…`
+    const data = await run('gh-mount', () =>
+      api.mountGitHubRuleSets({
+        repo: ghRepo.value,
+        branch: ghBranch.value,
+        format: ghFormat.value,
+        categories: batch,
+        mode: ghMode.value,
+        action: ghAction.value,
+        core_id: ghCore.value,
+        enabled: true,
+      }),
+    )
+    if (!data) {
+      ghProgress.value = `第 ${done} 批失败，已停止；前面批次的结果保留。`
+      ghResult.value = combined
+      await Promise.all([refreshRules(), refreshRuleSets()])
+      return
+    }
+    combined.results.push(...data.results)
+    combined.categories += data.categories
+    combined.recognised += data.recognised
+    combined.rules_added += data.rules_added
+    combined.mounted += data.mounted
+    combined.failed += data.failed
+    ghResult.value = { ...combined, results: [...combined.results] }
+  }
+  combined.message = `全选全部加载完成：${batches.length} 批 · ${combined.categories} 个分类 · ` +
+    `识别 ${combined.recognised} 条规则 · 新增 ${combined.rules_added} 条 · ` +
+    `挂载 ${combined.mounted} 个规则集 · 失败 ${combined.failed} 个。`
+  ghResult.value = combined
+  ghProgress.value = ''
+  window.$message?.success(combined.message)
   await Promise.all([refreshRules(), refreshRuleSets()])
 }
 
@@ -746,7 +785,7 @@ onMounted(() => {
   <div class="page">
     <div class="page-head">
       <div>
-        <h2 class="page-title">规则</h2>
+        <h2 class="page-title">规则配置</h2>
         <p class="page-subtitle">配置引擎 · 分流规则、自定义规则集、订阅链接与文档附件自动识别</p>
       </div>
       <NSpace>
@@ -801,10 +840,17 @@ onMounted(() => {
 
       <div class="gh-bar">
         <NInput v-model:value="ghSearch" size="small" placeholder="搜索分类（Google / OpenAI / YouTube …）" clearable style="width: 260px" />
-        <NButton size="small" quaternary @click="selectAllGhVisible">选择前 50 个</NButton>
+        <NButton size="small" quaternary @click="selectAllGhVisible">全选搜索结果</NButton>
+        <NButton size="small" type="primary" tertiary @click="selectAllGhAll">
+          全选全部（{{ ghCatalog?.total ?? 0 }}）
+        </NButton>
         <NButton size="small" quaternary @click="clearGhSelection">清空</NButton>
-        <span class="gh-count">已选 <strong>{{ ghSelected.length }}</strong> / 50</span>
+        <NButton size="small" quaternary @click="ghShowAll = !ghShowAll">
+          {{ ghShowAll ? '收起列表' : `显示全部 ${ghCatalog?.total ?? 0} 个` }}
+        </NButton>
+        <span class="gh-count">已选 <strong>{{ ghSelected.length }}</strong> / {{ ghCatalog?.total ?? 0 }}</span>
       </div>
+      <div v-if="ghProgress" class="gh-progress">{{ ghProgress }}</div>
 
       <div class="gh-cats">
         <button
@@ -820,7 +866,7 @@ onMounted(() => {
         <div v-if="!ghShown.length" class="hint">没有匹配的分类，或目录尚未加载。</div>
       </div>
       <div v-if="ghVisible.length > ghShown.length" class="hint" style="margin-top: 8px">
-        仅显示前 {{ ghShown.length }} 个（共 {{ ghVisible.length }} 个），用搜索框缩小范围。
+        仅显示前 {{ ghShown.length }} 个（共 {{ ghVisible.length }} 个）；点「显示全部」可展开全部，或用搜索框缩小范围。
       </div>
 
       <div class="gh-bar gh-mount">
@@ -831,7 +877,7 @@ onMounted(() => {
         <span class="kv-label">执行内核</span>
         <NInput v-model:value="ghCore" size="small" placeholder="mihomo" style="width: 120px" />
         <NButton size="small" type="primary" :loading="isBusy('gh-mount')" :disabled="!ghSelected.length" @click="mountGh">
-          挂载所选（{{ ghSelected.length }}）
+          加载所选（{{ ghSelected.length }}）
         </NButton>
       </div>
 

@@ -13,17 +13,13 @@ import (
 
 // --------------------------------------------------------- protocol catalog ---
 
-// GET /protocols/catalog — text-only directory of protocols each kernel
-// supports, synced from the kernels' official documentation. Never editable.
+// GET /protocols/catalog — pure read of the cached directory. It NEVER hits
+// GitHub: the frontend polls this endpoint every 60s, and a lazy refresh here
+// used to fire 3 GitHub API calls a minute, exhausting the anonymous 60/hour
+// quota and making kernel installs fail with HTTP 403. Refreshes are owned by
+// the 6h background timer (StartCatalogSync) and the explicit refresh button.
 func (s *Server) handleProtocolCatalog(w http.ResponseWriter, r *http.Request) {
-	snap := s.catalog.Current()
-	// Lazy refresh: if the snapshot is stale and we have not tried recently,
-	// kick off one background refresh. The current (cached) data is still
-	// returned immediately so the page never blocks on the network.
-	if snap.Stale && !strings.EqualFold(r.URL.Query().Get("refresh"), "false") {
-		go s.catalog.Refresh(context.Background())
-	}
-	writeJSON(w, http.StatusOK, snap)
+	writeJSON(w, http.StatusOK, s.catalog.Current())
 }
 
 // POST /protocols/catalog/refresh — force an immediate sync.
@@ -57,6 +53,39 @@ func (s *Server) handleProfileOptions(w http.ResponseWriter, _ *http.Request) {
 		"section_keys": profiles.SectionKeys,
 		"section_defs": profiles.SectionDefs("mihomo"),
 		"doc_urls":     map[string]string{"mihomo": protocols.DocMihomo, "sing-box": protocols.DocSingbox, "xray-core": protocols.DocXray},
+	})
+}
+
+// POST /profiles/toggle — enable/disable one, a selection, or all profiles.
+// Each profile keeps its own kernel; several kernels can be enabled at once.
+func (s *Server) handleProfilesToggle(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.profilesOrErr(w)
+	if !ok {
+		return
+	}
+	var body struct {
+		IDs     []string `json:"ids"`
+		All     bool     `json:"all"`
+		Enabled bool     `json:"enabled"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if !body.All && len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "请提供 ids 或设置 all=true")
+		return
+	}
+	changed, err := st.SetEnabled(body.IDs, body.All, body.Enabled)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	list, active := st.List()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "changed": changed, "enabled": body.Enabled,
+		"scope":    map[bool]string{true: "all", false: "selected"}[body.All],
+		"profiles": list, "active": active,
 	})
 }
 

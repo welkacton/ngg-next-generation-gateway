@@ -416,6 +416,11 @@ func (v *versionManager) downloadSHA256(ctx context.Context, rawURL, dest string
 func (v *versionManager) doJSON(req *http.Request, out any) error {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "NGG-Gateway/1.0")
+	// Anonymous GitHub API allows only 60 requests/hour. A PAT raises that to
+	// 5000/hour and also lets private/mirrored installs work. Never logged.
+	if t := githubToken(); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
 	resp, err := v.client.Do(req)
 	if err != nil {
 		return err
@@ -423,9 +428,23 @@ func (v *versionManager) doJSON(req *http.Request, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			return fmt.Errorf("GitHub API 限流 (HTTP %d)：匿名配额 60 次/小时已用完。请在服务端设置 NGG_GITHUB_TOKEN 或 GITHUB_TOKEN 后重试，或稍后再试", resp.StatusCode)
+		}
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+}
+
+// githubToken reads a PAT from the environment on every call so that changing
+// it does not require recompiling or embedding credentials in the binary.
+func githubToken() string {
+	for _, k := range []string{"NGG_GITHUB_TOKEN", "GITHUB_TOKEN"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // assertTrustedDownloadURL is the "source verification" leg: only official

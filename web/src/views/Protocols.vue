@@ -68,6 +68,7 @@ const profiles = ref<Profile[]>([])
 const activeId = ref('')
 const options = ref<ProfileOptions | null>(null)
 const search = ref('')
+const checkedIds = ref<string[]>([])
 
 const visibleProfiles = computed(() => {
   const q = search.value.trim().toLowerCase()
@@ -85,7 +86,34 @@ async function loadProfiles() {
   if (data) {
     profiles.value = data.profiles ?? []
     activeId.value = data.active ?? ''
+    const valid = new Set(profiles.value.map((p) => p.id))
+    checkedIds.value = checkedIds.value.filter((id) => valid.has(id))
   }
+}
+
+async function applyToggle(ids: string[], all: boolean, enabled: boolean) {
+  if (!all && !ids.length) {
+    window.$message?.warning('请先勾选要操作的配置文件')
+    return
+  }
+  const res = await run(
+    `toggle:${all ? 'all' : 'selected'}:${enabled}`,
+    () => api.toggleProfiles({ ids, all, enabled }),
+    `${enabled ? '启用' : '停用'}完成`,
+  )
+  if (!res) return
+  profiles.value = res.profiles ?? profiles.value
+  activeId.value = res.active ?? activeId.value
+}
+
+async function toggleOne(p: Profile, enabled: boolean) {
+  await applyToggle([p.id], false, enabled)
+}
+
+function toggleChecked(id: string, on: boolean) {
+  checkedIds.value = on
+    ? [...checkedIds.value, id]
+    : checkedIds.value.filter((x) => x !== id)
 }
 
 async function loadOptions() {
@@ -359,7 +387,7 @@ onBeforeUnmount(() => {
     <section class="pc-section">
       <div class="major-head">
         <span class="major-title">配置文件</span>
-        <span class="major-sub">点击卡片编辑 · 内含协议内容 / 出站 / 入站 / 路由规则</span>
+        <span class="major-sub">点击卡片编辑 · 内含协议内容 / 入站 / 出站 / 路由规则 / DNS</span>
       </div>
 
       <div class="pc-toolbar">
@@ -370,9 +398,42 @@ onBeforeUnmount(() => {
           clearable
           style="width: 220px"
         />
+        <NButton size="small" quaternary @click="checkedIds = visibleProfiles.map((p) => p.id)">
+          全选
+        </NButton>
+        <NButton size="small" quaternary @click="checkedIds = []">清空选择</NButton>
+        <span class="pc-selected">已选 {{ checkedIds.length }}</span>
         <div class="pc-toolbar-spacer" />
-        <NButton size="small" quaternary @click="loadProfiles">刷新</NButton>
+        <NButton size="small" @click="loadProfiles">刷新</NButton>
         <NButton size="small" type="primary" @click="openNew">+ 新建</NButton>
+      </div>
+
+      <div class="pc-toolbar pc-bulk">
+        <span class="hint">批量启停（不同内核的配置文件可同时启用，各自对应自己的内核）：</span>
+        <NButton
+          size="small"
+          :disabled="!checkedIds.length"
+          :loading="isBusy('toggle:selected:true')"
+          @click="applyToggle(checkedIds, false, true)"
+        >启用选中</NButton>
+        <NButton
+          size="small"
+          :disabled="!checkedIds.length"
+          :loading="isBusy('toggle:selected:false')"
+          @click="applyToggle(checkedIds, false, false)"
+        >停用选中</NButton>
+        <NButton
+          size="small"
+          :disabled="!profiles.length"
+          :loading="isBusy('toggle:all:true')"
+          @click="applyToggle([], true, true)"
+        >全部启用</NButton>
+        <NButton
+          size="small"
+          :disabled="!profiles.length"
+          :loading="isBusy('toggle:all:false')"
+          @click="applyToggle([], true, false)"
+        >全部停用</NButton>
       </div>
 
       <div class="pc-cards">
@@ -383,11 +444,21 @@ onBeforeUnmount(() => {
           :class="{ active: p.id === activeId }"
           @click="openEditor(p.id)"
         >
+          <div class="pc-card-check" @click.stop>
+            <input
+              type="checkbox"
+              :checked="checkedIds.includes(p.id)"
+              @change="toggleChecked(p.id, ($event.target as HTMLInputElement).checked)"
+            />
+          </div>
           <div class="pc-card-main">
             <div class="pc-card-title">
               <span class="pc-card-name">{{ p.name }}</span>
               <NTag v-if="p.default" size="small" :bordered="false" type="primary">默认</NTag>
               <NTag size="small" :bordered="false">{{ kernelOf(p)?.label ?? p.kernel }}</NTag>
+              <NTag size="small" :bordered="false" :type="p.enabled ? 'success' : 'default'">
+                {{ p.enabled ? '已启用' : '已停用' }}
+              </NTag>
             </div>
             <div class="pc-card-desc">{{ p.description || '—' }}</div>
             <div class="pc-card-meta">
@@ -399,6 +470,10 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="pc-card-actions" @click.stop>
+            <NButton size="tiny" :type="p.enabled ? 'default' : 'success'" quaternary
+              @click="toggleOne(p, !p.enabled)">
+              {{ p.enabled ? '停用' : '启用' }}
+            </NButton>
             <NButton size="tiny" quaternary @click="openEditor(p.id)">编辑</NButton>
             <NButton size="tiny" quaternary :disabled="p.default" @click="activate(p)">设为默认</NButton>
             <NButton size="tiny" quaternary @click="duplicate(p)">复制</NButton>
@@ -411,7 +486,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="pc-help">
-        每个配置文件按目标内核的官方语法分成 6 个可编辑分区：协议内容、出站、入站、路由规则、DNS、其他。
+        每个配置文件按目标内核的官方语法分成 6 个可编辑分区，顺序为：协议 → 入站 → 出站 → 路由规则 → DNS → 其他。
         分区内已写好带中文注释的模板，修改后先「校验语法」再「保存」；「查看完整配置」可得到合并后的 YAML / JSON。
       </div>
     </section>
@@ -554,7 +629,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.pc-page { display: flex; flex-direction: column; gap: 28px; }
+.pc-page {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  /* 内容不要顶到最左侧：与页面其它视图保持一致的水平留白 */
+  padding: 4px 26px 28px 26px;
+}
 .pc-section { min-width: 0; }
 .pc-sync-bar {
   display: flex; align-items: center; justify-content: space-between;
@@ -585,6 +666,17 @@ onBeforeUnmount(() => {
 
 .pc-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
 .pc-toolbar-spacer { flex: 1; }
+.pc-selected { font-size: 12px; color: #6e6e73; white-space: nowrap; }
+.pc-bulk {
+  padding: 10px 12px;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  background: #fafafb;
+}
+.pc-card-check { flex: 0 0 auto; display: flex; align-items: center; }
+.pc-card-check input {
+  width: 15px; height: 15px; cursor: pointer; accent-color: #0066cc;
+}
 .pc-cards { display: flex; flex-direction: column; gap: 10px; }
 .pc-card {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;

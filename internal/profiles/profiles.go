@@ -44,7 +44,8 @@ type Profile struct {
 
 // SectionKeys is the fixed display order. Keeping it server-side stops the UI
 // from inventing sections and makes save/validate deterministic.
-var SectionKeys = []string{"protocols", "outbounds", "inbounds", "routes", "dns", "extra"}
+// Order is user-visible: 协议 → 入站 → 出站 → 路由规则 → DNS → 其他.
+var SectionKeys = []string{"protocols", "inbounds", "outbounds", "routes", "dns", "extra"}
 
 var sectionMeta = map[string]struct{ Label, Hint, Doc string }{
 	"protocols": {"协议内容", "代理节点 / 出站协议条目；每个内核的字段名不同，切换内核会整段换成对应官方语法。", ""},
@@ -394,6 +395,37 @@ func orderedBodies(p Profile) []string {
 	return out
 }
 
+// normalizeSections keeps the user-visible order stable even for profiles
+// saved by an older release (or edited through the raw API). Unknown sections
+// are appended at the end rather than silently dropped.
+func normalizeSections(p *Profile) {
+	byKey := map[string]Section{}
+	for _, s := range p.Sections {
+		byKey[s.Key] = s
+	}
+	out := make([]Section, 0, len(byKey))
+	for _, k := range SectionKeys {
+		if s, ok := byKey[k]; ok {
+			out = append(out, s)
+		} else if m, ok := sectionMeta[k]; ok {
+			out = append(out, Section{Key: k, Label: m.Label, Hint: m.Hint})
+		}
+	}
+	for _, s := range p.Sections {
+		known := false
+		for _, k := range SectionKeys {
+			if s.Key == k {
+				known = true
+				break
+			}
+		}
+		if !known {
+			out = append(out, s)
+		}
+	}
+	p.Sections = out
+}
+
 // Validate checks every section's syntax and the assembled config. It never
 // writes anything to disk.
 func Validate(p Profile) error {
@@ -482,6 +514,9 @@ func (s *Store) List() ([]Profile, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := append([]Profile(nil), s.data.Profiles...)
+	for i := range out {
+		normalizeSections(&out[i])
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, s.data.Active
 }
@@ -491,6 +526,7 @@ func (s *Store) Get(id string) (Profile, bool) {
 	defer s.mu.RUnlock()
 	for _, p := range s.data.Profiles {
 		if p.ID == id {
+			normalizeSections(&p)
 			return p, true
 		}
 	}
@@ -618,6 +654,38 @@ func (s *Store) Duplicate(id, name string) (Profile, error) {
 	cp.ID, cp.Name, cp.Default, cp.Enabled = "", name, false, false
 	cp.Description = src.Description + " (副本)"
 	return s.Create(cp)
+}
+
+// SetEnabled flips one profile, a selection, or all profiles. Profiles of
+// different kernels are independent: enabling several at once is valid, each
+// stays bound to its own kernel. A failed persist rolls every change back.
+func (s *Store) SetEnabled(ids []string, all bool, enabled bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	selected := map[string]bool{}
+	for _, id := range ids {
+		selected[id] = true
+	}
+	before := append([]Profile(nil), s.data.Profiles...)
+	changed := 0
+	for i := range s.data.Profiles {
+		if !all && !selected[s.data.Profiles[i].ID] {
+			continue
+		}
+		if s.data.Profiles[i].Enabled != enabled {
+			s.data.Profiles[i].Enabled = enabled
+			s.data.Profiles[i].UpdatedAt = now()
+			changed++
+		}
+	}
+	if changed == 0 {
+		return 0, nil
+	}
+	if err := s.persist(); err != nil {
+		s.data.Profiles = before
+		return 0, fmt.Errorf("保存启用状态失败: %w", err)
+	}
+	return changed, nil
 }
 
 // SetActive marks one profile as the default/active configuration.

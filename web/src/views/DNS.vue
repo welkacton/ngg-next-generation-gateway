@@ -142,7 +142,7 @@ onMounted(refreshAll)
   <div class="page">
     <div class="page-head">
       <div>
-        <h2 class="page-title">DNS</h2>
+        <h2 class="page-title">DNS配置</h2>
         <p class="page-subtitle">配置引擎 · NGG 自有 DNS 引擎、解析策略与 Hosts 管理</p>
       </div>
       <NSpace>

@@ -245,10 +245,43 @@ export const useCoresStore = defineStore('cores', {
       if (!result) return
       this.installProgress = {
         ...this.installProgress,
-        [id]: '安装任务已提交，等待后端进度事件…',
+        [id]: '安装任务已在后台启动，正在查询官方 Release…',
       }
-      notify('success', `内核 ${id} 安装已开始`)
-      await this.refreshCores()
+      notify('success', `内核 ${id} 安装已开始（后台任务）`)
+      // The download + SHA256 + binary check can take minutes. Poll the task
+      // endpoint instead of blocking a 30s HTTP request; WebSocket events
+      // still update installProgress in real time.
+      void this.pollInstall(id)
+    },
+
+    async pollInstall(id: string): Promise<void> {
+      for (let attempt = 0; attempt < 180; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        const status = await safe(api.getInstallStatus(id))
+        if (!status || !('status' in status)) continue
+        const task = status as { status: string; message?: string; error?: string }
+        if (task.status === 'running') {
+          if (task.message) {
+            this.installProgress = { ...this.installProgress, [id]: task.message }
+          }
+          continue
+        }
+        this.installProgress = {
+          ...this.installProgress,
+          [id]:
+            task.status === 'succeeded'
+              ? '安装完成'
+              : `安装失败：${task.error || task.message || '未知错误'}`,
+        }
+        if (task.status === 'succeeded') notify('success', `内核 ${id} 安装完成`)
+        else notify('error', `内核 ${id} 安装失败：${task.error || ''}`)
+        await this.refreshCores()
+        return
+      }
+      this.installProgress = {
+        ...this.installProgress,
+        [id]: '安装任务仍在运行；进度可继续通过 WebSocket 查看。',
+      }
     },
 
     async uninstallCoreAction(id: string): Promise<void> {

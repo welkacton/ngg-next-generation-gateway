@@ -84,9 +84,9 @@ const menuOptions: MenuOption[] = [
     key: 'group-config-engine',
     icon: menuIcon,
     children: [
-      { label: '规则', key: 'rules', icon: menuIcon },
-      { label: 'DNS', key: 'dns', icon: menuIcon },
       { label: '协议配置', key: 'protocols', icon: menuIcon },
+      { label: '规则配置', key: 'rules', icon: menuIcon },
+      { label: 'DNS配置', key: 'dns', icon: menuIcon },
       { label: '入口节点', key: 'inbound', icon: menuIcon },
       { label: '出口节点', key: 'outbound', icon: menuIcon },
     ],
@@ -267,30 +267,35 @@ onUnmounted(() => {
     <NGlobalStyle />
     <NLayout has-sider style="height: 100vh">
       <NLayoutSider
+        class="app-sider"
         bordered
         :width="236"
         :native-scrollbar="false"
-        content-style="position: relative; min-height: 100%;"
+        content-style="height: 100%;"
       >
-        <div class="brand">
-          <div class="brand-logo">N</div>
-          <div>
-            <div class="brand-title">NGG 管理中心</div>
-            <div class="brand-sub">Next-Generation Gateway</div>
+        <div class="sider-inner">
+          <div class="brand">
+            <div class="brand-logo">N</div>
+            <div>
+              <div class="brand-title">NGG 管理中心</div>
+              <div class="brand-sub">Next-Generation Gateway</div>
+            </div>
           </div>
-        </div>
-        <NMenu
-          :options="menuOptions"
-          :value="activeKey"
-          :expanded-keys="expandedKeys"
-          :root-indent="22"
-          :indent="18"
-          @update:value="handleMenu"
-          @update:expanded-keys="handleExpandedKeys"
-        />
-        <div class="sider-footer">
-          NGG · 统一网络引擎<br />
-          多内核协议运行时 / 统一出入口调度
+          <div class="sider-menu-scroll">
+            <NMenu
+              :options="menuOptions"
+              :value="activeKey"
+              :expanded-keys="expandedKeys"
+              :root-indent="22"
+              :indent="18"
+              @update:value="handleMenu"
+              @update:expanded-keys="handleExpandedKeys"
+            />
+          </div>
+          <div class="sider-footer">
+            NGG · 统一网络引擎<br />
+            多内核协议运行时 / 统一出入口调度
+          </div>
         </div>
       </NLayoutSider>
 

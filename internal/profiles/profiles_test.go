@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,6 +105,88 @@ func TestCommentsAreStrippedButURLsSurvive(t *testing.T) {
 "outbounds": [ { "type": "direct", "tag": "d" } ]`
 	if err := Validate(p); err != nil {
 		t.Fatalf("line comments must be stripped before validation: %v", err)
+	}
+}
+
+func TestSectionOrderIsUserVisibleOrder(t *testing.T) {
+	want := []string{"protocols", "inbounds", "outbounds", "routes", "dns", "extra"}
+	if strings.Join(SectionKeys, ",") != strings.Join(want, ",") {
+		t.Fatalf("section order: got %v want %v", SectionKeys, want)
+	}
+	for _, kernel := range []string{"mihomo", "sing-box", "xray-core"} {
+		p := Template(kernel, "order")
+		for i, s := range p.Sections {
+			if s.Key != want[i] {
+				t.Fatalf("%s section %d = %s, want %s", kernel, i, s.Key, want[i])
+			}
+		}
+	}
+	// Profiles saved by older releases are normalised on read.
+	st, _ := NewStore(t.TempDir())
+	p := Template("mihomo", "legacy")
+	p.Sections[0], p.Sections[1] = p.Sections[1], p.Sections[0]
+	p.Sections[2], p.Sections[3] = p.Sections[3], p.Sections[2]
+	created, err := st.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := st.Get(created.ID)
+	if !ok {
+		t.Fatal("profile missing")
+	}
+	for i, s := range got.Sections {
+		if s.Key != want[i] {
+			t.Fatalf("normalised section %d = %s, want %s", i, s.Key, want[i])
+		}
+	}
+}
+
+func TestStoreBulkToggle(t *testing.T) {
+	st, _ := NewStore(t.TempDir())
+	a, _ := st.Create(Template("mihomo", "A"))
+	b, _ := st.Create(Template("sing-box", "B"))
+	c, _ := st.Create(Template("xray-core", "C"))
+
+	changed, err := st.SetEnabled([]string{a.ID, c.ID}, false, false)
+	if err != nil || changed != 2 {
+		t.Fatalf("selection toggle: changed=%d err=%v", changed, err)
+	}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{{a.ID, false}, {b.ID, true}, {c.ID, false}} {
+		p, _ := st.Get(tc.id)
+		if p.Enabled != tc.want {
+			t.Fatalf("%s enabled=%v want %v", tc.id, p.Enabled, tc.want)
+		}
+	}
+	// Different kernels can be enabled together — no mutual exclusion.
+	changed, err = st.SetEnabled(nil, true, true)
+	if err != nil || changed != 2 {
+		t.Fatalf("enable all: changed=%d err=%v", changed, err)
+	}
+	list, _ := st.List()
+	for _, p := range list {
+		if !p.Enabled {
+			t.Fatalf("%s should be enabled", p.ID)
+		}
+	}
+	// 4 profiles total: the auto-created Default-Profile plus A/B/C.
+	changed, err = st.SetEnabled(nil, true, false)
+	if err != nil || changed != 4 {
+		t.Fatalf("disable all: changed=%d err=%v", changed, err)
+	}
+	list, _ = st.List()
+	for _, p := range list {
+		if p.Enabled {
+			t.Fatalf("%s should be disabled", p.ID)
+		}
+	}
+	// Reopen: the enabled flags survived the atomic persist.
+	st2, _ := NewStore(filepath.Dir(st.path))
+	b2, _ := st2.Get(b.ID)
+	if b2.Enabled {
+		t.Fatal("disable-all did not persist")
 	}
 }
 
