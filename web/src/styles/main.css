@@ -230,6 +230,15 @@ body {
   max-width: 100%;
 }
 
+/* Global table defence: no cell content may ever paint outside its own column.
+ * Repeated regressions (capability tags, long rule-set ids, GitHub asset URLs)
+ * all came from unconstrained inline content in <td>. Fixed column widths plus
+ * this clip keep the pinned 操作 column readable. */
+.n-data-table .n-data-table-td,
+.n-data-table .n-data-table-th {
+  overflow: hidden;
+}
+
 .cell-clip,
 .core-name__title,
 .core-name__id,

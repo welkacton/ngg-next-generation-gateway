@@ -15,7 +15,6 @@ import (
 	"github.com/ngg-project/ngg/internal/pq"
 	"github.com/ngg-project/ngg/internal/protocols"
 	"github.com/ngg-project/ngg/internal/sdwan"
-	"github.com/ngg-project/ngg/internal/tenants"
 )
 
 // ------------------------------------------------------------- stages ---
@@ -260,36 +259,6 @@ func (s *Server) handleSDWANAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusNotFound, "unknown SD-WAN action: "+action)
 	}
-}
-
-// ------------------------------------------------------------ tenants ---
-
-func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, s.engine.Tenants().List())
-		return
-	}
-	var t tenants.Tenant
-	if err := decodeJSON(r, &t); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-		return
-	}
-	if err := s.engine.Tenants().Add(t); err != nil {
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	if stored, ok := s.engine.Tenants().Get(t.ID); ok {
-		t = stored
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tenant": t})
-}
-
-func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
-	if !s.engine.Tenants().Remove(r.PathValue("id")) {
-		writeErr(w, http.StatusNotFound, "tenant not found or protected")
-		return
-	}
-	writeOK(w, "tenant removed")
 }
 
 // ---------------------------------------------------------- platforms ---

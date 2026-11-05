@@ -58,11 +58,14 @@ function confirmRollbackVersion(): void {
   store.rollbackVersionAction(selected.value, targetVersion.value.trim())
 }
 
+// Long asset/digest URLs used to overflow into the pinned 操作 column. Every
+// column now has a fixed width and the URL cells clip themselves with a title.
 const columns: any[] = [
   {
     title: '版本',
     key: 'version',
-    minWidth: 140,
+    width: 124,
+    ellipsis: { tooltip: true },
     render: (row: VersionInfo) =>
       h(NTag, { size: 'small', bordered: false, type: 'info' }, {
         default: () => row.version || row.raw || '—',
@@ -71,37 +74,42 @@ const columns: any[] = [
   {
     title: '通道',
     key: 'channel',
-    width: 110,
+    width: 92,
+    ellipsis: { tooltip: true },
     render: (row: VersionInfo) => row.channel || '—',
   },
   {
     title: '原始标识',
     key: 'raw',
-    minWidth: 140,
+    width: 140,
+    ellipsis: { tooltip: true },
     render: (row: VersionInfo) => h('span', { class: 'mono' }, row.raw || '—'),
   },
   {
     title: '检测时间',
     key: 'detected_at',
-    minWidth: 180,
+    width: 164,
+    ellipsis: { tooltip: true },
     render: (row: VersionInfo) => formatTime(row.detected_at),
   },
   {
     title: '资源地址（asset_url）',
     key: 'asset_url',
-    minWidth: 220,
-    render: (row: VersionInfo) => h('span', { class: 'mono' }, row.asset_url || '—'),
+    width: 250,
+    render: (row: VersionInfo) =>
+      h('div', { class: 'cell-clip mono', title: row.asset_url || '' }, row.asset_url || '—'),
   },
   {
     title: '摘要地址（digest_url）',
     key: 'digest_url',
-    minWidth: 220,
-    render: (row: VersionInfo) => h('span', { class: 'mono' }, row.digest_url || '—'),
+    width: 250,
+    render: (row: VersionInfo) =>
+      h('div', { class: 'cell-clip mono', title: row.digest_url || '' }, row.digest_url || '—'),
   },
   {
     title: '操作',
     key: 'actions',
-    width: 190,
+    width: 196,
     fixed: 'right',
     render: (row: VersionInfo) =>
       h(NSpace, { size: 4, wrap: false }, {
@@ -229,7 +237,7 @@ onMounted(async () => {
         :data="store.versions"
         :row-key="versionRowKey"
         :bordered="false"
-        :scroll-x="1300"
+        :scroll-x="1216"
         size="small"
         :pagination="false"
       />

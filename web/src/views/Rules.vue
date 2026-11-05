@@ -560,14 +560,22 @@ function shortTime(v?: string): string {
   return String(v).replace('T', ' ').slice(0, 19)
 }
 
+// Fixed widths + per-cell clipping: long GitHub rule-set ids used to paint over
+// the pinned 操作 column when the table was narrower than its scroll width.
 const setColumns: any[] = [
-  { type: 'selection', fixed: 'left', width: 48 },
-  { title: 'ID', key: 'id', minWidth: 170, render: (s: RuleSetDef) => h('span', { class: 'mono' }, s.id) },
-  { title: '名称', key: 'name', minWidth: 150 },
+  { type: 'selection', fixed: 'left', width: 44 },
+  {
+    title: 'ID',
+    key: 'id',
+    width: 210,
+    ellipsis: { tooltip: true },
+    render: (s: RuleSetDef) => h('span', { class: 'mono' }, s.id),
+  },
+  { title: '名称', key: 'name', width: 140, ellipsis: { tooltip: true } },
   {
     title: '来源',
     key: 'source',
-    minWidth: 110,
+    width: 96,
     render: (s: RuleSetDef) =>
       h(
         NTag,
@@ -575,17 +583,17 @@ const setColumns: any[] = [
         { default: () => sourceLabel(s.source) },
       ),
   },
-  { title: '格式', key: 'format', minWidth: 130, render: (s: RuleSetDef) => s.format || '—' },
+  { title: '格式', key: 'format', width: 104, ellipsis: { tooltip: true }, render: (s: RuleSetDef) => s.format || '—' },
   {
     title: '规则数',
     key: 'rule_count',
-    width: 90,
+    width: 84,
     render: (s: RuleSetDef) => s.rule_count ?? (s.rules ? s.rules.length : 0),
   },
   {
     title: '启用',
     key: 'enabled',
-    width: 88,
+    width: 76,
     render: (s: RuleSetDef) =>
       h(NSwitch, {
         value: !!s.enabled,
@@ -594,11 +602,17 @@ const setColumns: any[] = [
         'onUpdate:value': (v: boolean) => toggleSingleSet(s.id, v),
       }),
   },
-  { title: '更新时间', key: 'updated_at', minWidth: 160, render: (s: RuleSetDef) => shortTime(s.updated_at) },
+  {
+    title: '更新时间',
+    key: 'updated_at',
+    width: 156,
+    ellipsis: { tooltip: true },
+    render: (s: RuleSetDef) => shortTime(s.updated_at),
+  },
   {
     title: '操作',
     key: 'actions',
-    width: 250,
+    width: 232,
     fixed: 'right',
     render: (s: RuleSetDef) =>
       h(NSpace, { size: 6 }, { default: () => [
@@ -1089,7 +1103,7 @@ onMounted(() => {
         :bordered="false"
         size="small"
         :pagination="false"
-        :scroll-x="1300"
+        :scroll-x="1142"
       />
       <div v-if="!ruleSets.length" class="hint" style="margin-top: 10px">
         暂无规则集。可以上传文档、填写订阅链接，或在下方新增内联规则集。

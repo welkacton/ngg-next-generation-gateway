@@ -3,7 +3,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
-  NInput,
   NModal,
   NSpace,
   NSwitch,
@@ -16,7 +15,7 @@ import type {
   UpdateApplyResult,
   UpdateStatus,
 } from '../api/ngg'
-import { getGithubToken, getToken, setGithubToken } from '../api/client'
+import { getToken } from '../api/client'
 import { useApiAction } from '../composables/useApi'
 
 const props = defineProps<{
@@ -40,11 +39,6 @@ const downloaded = ref<UpdateDownloadResult | null>(null)
 const applied = ref<UpdateApplyResult | null>(null)
 const errorText = ref('')
 
-/* Private-repo PAT: kept in this browser only, sent ONLY to /update/*.
-   The server never persists or logs it. */
-const tokenDraft = ref('')
-const tokenSaved = ref(false)
-
 type StepState = 'pending' | 'running' | 'done' | 'fail'
 interface Step { label: string; state: StepState; detail?: string }
 const steps = ref<Step[]>([])
@@ -55,10 +49,6 @@ const visible = computed({
   get: () => props.show,
   set: (v: boolean) => emit('update:show', v),
 })
-
-const needToken = computed(() =>
-  !status.value?.token_configured && !tokenSaved.value,
-)
 
 watch(
   () => props.initialResult,
@@ -78,31 +68,13 @@ async function loadStatus() {
   if (s) status.value = s
 }
 
-function saveToken() {
-  setGithubToken(tokenDraft.value)
-  tokenSaved.value = !!getGithubToken()
-  tokenDraft.value = ''
-  errorText.value = ''
-  window.$message?.success(
-    tokenSaved.value ? 'GitHub Token 已保存在本机浏览器，正在重新检查更新' : '已清除 GitHub Token',
-  )
-  if (tokenSaved.value) void doCheck()
-}
-
-function clearToken() {
-  setGithubToken('')
-  tokenSaved.value = false
-  tokenDraft.value = ''
-  window.$message?.success('已清除本机保存的 GitHub Token')
-}
-
 function friendlyError(prefix: string, e: unknown) {
   const raw = e instanceof Error ? e.message : String(e)
-  if (/404|private repo|GitHub Token/i.test(raw)) {
-    return `${prefix}：仓库是私有库，请在上方填写有 repo 权限的 GitHub Token；或确认网络可访问 api.github.com。`
+  if (/404|repository not found/i.test(raw)) {
+    return `${prefix}：GitHub Releases 不可访问（仓库不存在或网络无法访问 api.github.com）。`
   }
-  if (/401|403|invalid|expired|scope/i.test(raw)) {
-    return `${prefix}：GitHub Token 无效、已过期或权限不足，请更换后重试。`
+  if (/403|rate limit/i.test(raw)) {
+    return `${prefix}：GitHub API 触发匿名速率限制，请稍后重试；无头部署可选设置 NGG_GITHUB_TOKEN 提高配额。`
   }
   if (/SHA256SUMS|mismatch/i.test(raw)) {
     return `${prefix}：Release 缺少 SHA256SUMS 或摘要不匹配，出于安全已拒绝下载。`
@@ -120,7 +92,7 @@ async function doCheck() {
     if (r.status) status.value = r.status
     emit('checked', r)
   } else {
-    errorText.value = '检查失败：仓库是私有库，请在上方填写 GitHub Token；或确认本机可访问 api.github.com。'
+    errorText.value = '检查失败：无法访问 GitHub Releases，请确认本机网络可访问 api.github.com。'
   }
   return r
 }
@@ -283,7 +255,6 @@ async function manualApply() {
 }
 
 onMounted(() => {
-  tokenSaved.value = !!getGithubToken()
   loadStatus()
   if (props.autoCheck && !result.value) void doCheck()
 })
@@ -320,44 +291,6 @@ onMounted(() => {
 
     <!-- Private repository: provide a PAT right here instead of forcing a
          server-side environment variable the Web UI cannot set. -->
-    <div class="upd-section upd-token">
-      <div class="proto-sec">
-        <span class="proto-sec-title">GitHub Token（私有仓库必填）</span>
-        <NTag v-if="status?.token_configured" size="small" type="success" :bordered="false">
-          服务端已配置
-        </NTag>
-        <NTag v-else-if="tokenSaved" size="small" type="info" :bordered="false">
-          本机浏览器已保存
-        </NTag>
-        <NTag v-else size="small" type="warning" :bordered="false">未配置 · 检查会失败</NTag>
-      </div>
-      <div v-if="needToken" class="hint" style="margin-bottom: 8px">
-        私有仓库的 GitHub API 匿名访问返回 404。请填一个有 <span class="mono">repo</span> 权限的
-        Personal Access Token，保存后会自动重新检查。也可以改用服务端环境变量
-        <span class="mono">NGG_GITHUB_TOKEN</span> / <span class="mono">GITHUB_TOKEN</span>。
-      </div>
-      <NSpace :size="8" :wrap="true" align="center">
-        <NInput
-          v-model:value="tokenDraft"
-          type="password"
-          show-password-on="click"
-          size="small"
-          clearable
-          placeholder="ghp_… / github_pat_…（repo 权限）"
-          style="width: 330px"
-          @keyup.enter="saveToken"
-        />
-        <NButton size="small" type="primary" :disabled="!tokenDraft.trim()" @click="saveToken">
-          保存并重试
-        </NButton>
-        <NButton v-if="tokenSaved" size="small" @click="clearToken">清除</NButton>
-      </NSpace>
-      <div class="hint" style="margin-top: 6px">
-        Token 只保存在本机浏览器 localStorage，且只随 <span class="mono">/update/*</span> 请求发给本机服务，
-        不写入服务端配置、不写日志。若通过域名 HTTPS 远程管理 VPS，Token 会经过网络，请使用最小权限的 Token。
-      </div>
-    </div>
-
     <div class="upd-section upd-controls">
       <NSpace align="center" :wrap="true" :size="10">
         <NButton

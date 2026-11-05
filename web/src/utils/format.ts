@@ -105,7 +105,7 @@ export function toArray<T = Record<string, unknown>>(value: unknown): T[] {
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
     const keys = [
-      'items', 'sessions', 'endpoints', 'rules', 'links', 'tenants',
+      'items', 'sessions', 'endpoints', 'rules', 'links', 'users',
       'plugins', 'protocols', 'stages', 'results', 'data', 'list',
       'clients', 'targets', 'answers',
     ]

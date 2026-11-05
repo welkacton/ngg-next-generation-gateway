@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -65,6 +66,8 @@ type Engine struct {
 	pluginHook PluginHook
 	tenants    TenantResolver
 	sdwan      LinkSelector
+
+	globalProxy atomic.Bool
 
 	mu         sync.RWMutex
 	running    bool

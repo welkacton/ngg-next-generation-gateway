@@ -30,7 +30,7 @@ import (
 	"github.com/ngg-project/ngg/internal/rulesets"
 	"github.com/ngg-project/ngg/internal/sdwan"
 	"github.com/ngg-project/ngg/internal/store"
-	"github.com/ngg-project/ngg/internal/tenants"
+	"github.com/ngg-project/ngg/internal/users"
 	"github.com/ngg-project/ngg/internal/version"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
@@ -69,9 +69,9 @@ type Engine struct {
 	protocols  *protocols.Registry
 	plugins    *plugins.Manager
 	sdwan      *sdwan.Manager
-	tenants    *tenants.Registry
 	nodeReg    *nodes.Registry
 	hostReg    *hosts.Registry
+	userReg    *users.Registry
 	ruleSets   *rulesets.Registry
 	health     *healthMonitor
 	arch       archDetector

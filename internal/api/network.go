@@ -421,3 +421,46 @@ func syntheticDNSPacket() []byte {
 	b[28+4], b[28+5] = 0, 0
 	return b
 }
+
+// ---------------------------------------------------------------- 接管全局 ---
+
+// GET /network/global/status — real platform capability + current proxy state.
+func (s *Server) handleGlobalStatus(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"proxy": ne.GlobalProxyStatus(),
+		"tun":   ne.TunCapabilities(),
+	})
+}
+
+// POST /network/global/attach — Windows system-proxy takeover (user scope).
+func (s *Server) handleGlobalAttach(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	if err := ne.AttachGlobalProxy(r.Context()); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy": ne.GlobalProxyStatus()})
+}
+
+// POST /network/global/detach — restore the operator's original proxy.
+func (s *Server) handleGlobalDetach(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	if err := ne.DetachGlobalProxy(r.Context()); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy": ne.GlobalProxyStatus()})
+}

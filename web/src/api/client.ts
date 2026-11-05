@@ -9,26 +9,18 @@ declare module 'axios' {
 }
 
 export const TOKEN_KEY = 'ngg_token'
-export const GITHUB_TOKEN_KEY = 'ngg_github_token'
 export const API_BASE = '/api/v1'
+
+// 旧版本曾把 GitHub PAT 保存在这里（私有仓库时期）。仓库已公开，更新面板
+// 不再需要任何 GitHub Token；启动时主动清掉历史遗留凭据，避免长期留在浏览器。
+try {
+  localStorage.removeItem('ngg_github_token')
+} catch {
+  // 隐私模式 / 禁用 localStorage 时忽略
+}
 
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) || ''
-}
-
-/**
- * GitHub PAT for PRIVATE repositories. Only ever attached to /update/*
- * requests, stored in this browser's localStorage (never sent to the repo,
- * never written into the server config or logs by the client).
- */
-export function getGithubToken(): string {
-  return localStorage.getItem(GITHUB_TOKEN_KEY) || ''
-}
-
-export function setGithubToken(token: string): void {
-  const v = token.trim()
-  if (v) localStorage.setItem(GITHUB_TOKEN_KEY, v)
-  else localStorage.removeItem(GITHUB_TOKEN_KEY)
 }
 
 export function setToken(token: string): void {
@@ -54,11 +46,8 @@ client.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
-  // Private-repo PAT is scoped strictly to update endpoints.
-  const gh = getGithubToken()
-  if (gh && (config.url || '').startsWith('/update/')) {
-    config.headers['X-GitHub-Token'] = gh
-  }
+  // Update checks are anonymous: the repository is public and no GitHub token
+  // is stored or attached anymore.
   return config
 })
 

@@ -48,7 +48,7 @@ const routes: RouteRecordRaw[] = [
     path: '/network',
     name: 'network',
     component: () => import('../views/Network.vue'),
-    meta: { title: '网络引擎' },
+    meta: { title: '接管全局' },
   },
   {
     path: '/rules',
@@ -75,6 +75,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '出口节点' },
   },
   {
+    path: '/users',
+    name: 'users',
+    component: () => import('../views/Users.vue'),
+    meta: { title: '用户管理' },
+  },
+  {
     path: '/protocols',
     name: 'protocols',
     component: () => import('../views/Protocols.vue'),
@@ -97,12 +103,6 @@ const routes: RouteRecordRaw[] = [
     name: 'sdwan',
     component: () => import('../views/SDWAN.vue'),
     meta: { title: 'SD-WAN' },
-  },
-  {
-    path: '/tenants',
-    name: 'tenants',
-    component: () => import('../views/Tenants.vue'),
-    meta: { title: '多租户' },
   },
   {
     path: '/platforms',

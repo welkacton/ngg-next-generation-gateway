@@ -39,7 +39,7 @@ func newUpdateAPIServer(t *testing.T, apiBase string) (*httptest.Server, string)
 	return ts, cfg.Server.Token
 }
 
-func postUpdate(t *testing.T, url, apiToken, githubToken string) (*http.Response, string) {
+func postUpdate(t *testing.T, url, apiToken string) (*http.Response, string) {
 	t.Helper()
 	r, err := http.NewRequest(http.MethodPost, url+"/api/v1/update/check", strings.NewReader("{}"))
 	if err != nil {
@@ -47,9 +47,8 @@ func postUpdate(t *testing.T, url, apiToken, githubToken string) (*http.Response
 	}
 	r.Header.Set("Authorization", "Bearer "+apiToken)
 	r.Header.Set("Content-Type", "application/json")
-	if githubToken != "" {
-		r.Header.Set(githubTokenHeader, githubToken)
-	}
+	// Deliberately no X-GitHub-Token: the public repository must work without
+	// any user-supplied credential.
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
@@ -59,21 +58,16 @@ func postUpdate(t *testing.T, url, apiToken, githubToken string) (*http.Response
 	return resp, string(b)
 }
 
-// Regression for the real bug: a private repo returns 404 to anonymous
-// requests, and the Web UI (browser) cannot set server environment variables.
-// The PAT must arrive via X-GitHub-Token and be usable in the same request.
-func TestUpdateCheckAcceptsTokenFromWebUI(t *testing.T) {
+// The repository is public now, so the update panel must reach GitHub Releases
+// automatically with NO token at all. This locks in the removal of the token
+// field that used to block every check on a fresh install.
+func TestUpdateCheckWorksWithoutAnyToken(t *testing.T) {
 	t.Setenv("NGG_GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
-	const pat = "ui-pat-abc"
 
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Header.Get("Authorization") != "Bearer "+pat {
-			w.WriteHeader(http.StatusNotFound) // GitHub hides private repos as 404
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -85,19 +79,9 @@ func TestUpdateCheckAcceptsTokenFromWebUI(t *testing.T) {
 
 	ts, apiToken := newUpdateAPIServer(t, gh.URL)
 
-	// No PAT -> the same 502 the user saw, with an actionable message.
-	resp, body := postUpdate(t, ts.URL, apiToken, "")
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("anonymous check: got %d, body=%s", resp.StatusCode, body)
-	}
-	if !strings.Contains(body, "GitHub Token") {
-		t.Fatalf("error must tell the user where to enter a token: %s", body)
-	}
-
-	// PAT from the Web UI -> real release data.
-	resp, body = postUpdate(t, ts.URL, apiToken, pat)
+	resp, body := postUpdate(t, ts.URL, apiToken)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("check with UI token: got %d, body=%s", resp.StatusCode, body)
+		t.Fatalf("tokenless check: got %d, body=%s", resp.StatusCode, body)
 	}
 	var res struct {
 		Latest          string `json:"latest"`
@@ -113,12 +97,6 @@ func TestUpdateCheckAcceptsTokenFromWebUI(t *testing.T) {
 		t.Fatalf("unexpected check result: %+v", res)
 	}
 	if res.Status.TokenConfigured {
-		t.Fatal("token_configured describes the SERVER env only; a UI token must not be reported as server config")
-	}
-
-	// The status endpoint must never echo the token value.
-	resp, body = req(t, "GET", ts.URL+"/api/v1/update/status", apiToken, "")
-	if resp.StatusCode != http.StatusOK || strings.Contains(body, pat) {
-		t.Fatalf("status leaked the token or failed: %d %s", resp.StatusCode, body)
+		t.Fatal("no token was configured, token_configured must be false")
 	}
 }

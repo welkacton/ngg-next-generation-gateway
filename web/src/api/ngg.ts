@@ -478,6 +478,41 @@ export interface MetricsHistoryResult {
 export const getNetworkMetricsHistory = (minutes = 5) =>
   get<MetricsHistoryResult>(`/network/metrics/history?minutes=${minutes}`)
 
+/* 接管全局：Windows 系统代理（用户态，立即生效）+ TUN 真实能力检测。
+ * TUN 需要 wintun 驱动与管理员权限，后端如实上报，不伪造网卡。 */
+export interface GlobalProxyStatus {
+  supported: boolean
+  attached: boolean
+  server?: string
+  bypass?: string
+  managed?: boolean
+  system_proxy_on?: boolean
+  ingress?: string
+  mode?: string
+  error?: string
+}
+
+export interface TunCapabilities {
+  os: string
+  tun_supported: boolean
+  admin: boolean
+  wintun_dll: string
+  reason: string
+  virtual_adapters: string[]
+  note: string
+}
+
+export interface GlobalTakeoverResult {
+  proxy: GlobalProxyStatus
+  tun: TunCapabilities
+}
+
+export const getGlobalStatus = () => get<GlobalTakeoverResult>('/network/global/status')
+export const attachGlobalProxy = () =>
+  post<{ ok: boolean; proxy: GlobalProxyStatus }>('/network/global/attach')
+export const detachGlobalProxy = () =>
+  post<{ ok: boolean; proxy: GlobalProxyStatus }>('/network/global/detach')
+
 export const getNetworkConfig = () => get<NetworkConfig>('/network/config')
 export const saveNetworkConfig = (config: NetworkConfig) =>
   put<NetworkConfigSaveResult>('/network/config', config)
@@ -1041,30 +1076,6 @@ export const setSdwanPolicy = (policy: string) =>
   post<GenericResult>('/sdwan/policy', { policy })
 
 /* ------------------------------------------------------------------ *
- * 多租户 /tenants
- * ------------------------------------------------------------------ */
-
-export interface Tenant {
-  id: string
-  name: string
-  enabled: boolean
-  max_sessions: number
-  quota_bytes: number
-  used_bytes: number
-  allowed_cores: string[]
-  allowed_protocols: string[]
-  default_core: string
-  rule_set_tag: string
-  [key: string]: unknown
-}
-
-export const listTenants = () => get<Tenant[]>('/tenants')
-export const createTenant = (tenant: Tenant) =>
-  post<GenericResult>('/tenants', tenant)
-export const deleteTenant = (id: string) =>
-  del<GenericResult>(`/tenants/${encodeURIComponent(id)}`)
-
-/* ------------------------------------------------------------------ *
  * 跨平台 /platforms
  * ------------------------------------------------------------------ */
 
@@ -1524,3 +1535,63 @@ export const exportHosts = () =>
   get<{ hosts: RemoteHost[]; count: number }>('/hosts/export')
 export const importHosts = (hosts: RemoteHost[]) =>
   put<GenericResult>('/hosts/import', { hosts })
+
+/* ------------------------------------------------------------------ *
+ * 配置引擎 · 用户管理 /users（替代已移除的多租户）
+ *
+ * 状态由后端根据 enabled / expires_at / data_limit 真实推导；
+ * used_bytes 只由数据面累加，前端不生成任何用量数字。
+ * ------------------------------------------------------------------ */
+
+export type UserStatus = 'active' | 'expired' | 'limited' | 'disabled'
+export type UserResetStrategy = 'never' | 'monthly' | 'weekly'
+
+export interface PortalUser {
+  id: string
+  username: string
+  enabled: boolean
+  email: string
+  telegram_id: string
+  tag: string
+  group: string
+  note: string
+  last_node_id: string
+  last_node_name: string
+  last_seen_at: string
+  expires_at: string
+  data_limit: number
+  used_bytes: number
+  reset_strategy: UserResetStrategy
+  hwid_disabled: boolean
+  hwid_limit: number
+  subscription_url: string
+  created_at: string
+  updated_at: string
+}
+
+export interface UserStats {
+  total: number
+  active: number
+  expired: number
+  limited: number
+  disabled: number
+}
+
+export interface UserListResult {
+  users: PortalUser[]
+  count: number
+  stats: UserStats
+  path: string
+}
+
+const portalUser = (id: string) => `/users/${encodeURIComponent(id)}`
+
+export const listUsers = (status?: UserStatus | 'all') =>
+  get<UserListResult>(status ? `/users?status=${status}` : '/users')
+export const getUserStats = () => get<{ stats: UserStats }>('/users/stats')
+export const addUser = (u: PortalUser) => post<GenericResult>('/users', u)
+export const updateUser = (id: string, u: PortalUser) =>
+  put<GenericResult>(portalUser(id), u)
+export const deleteUser = (id: string) => del<GenericResult>(portalUser(id))
+export const resetUserUsage = (id: string) =>
+  post<GenericResult>(`${portalUser(id)}/reset-usage`)

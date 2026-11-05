@@ -3,9 +3,6 @@ package api
 import (
 	"context"
 	"net/http"
-	"strings"
-
-	"github.com/ngg-project/ngg/internal/update"
 )
 
 // Repository update endpoints. All of them require the same loopback +
@@ -17,25 +14,18 @@ import (
 // POST /update/apply     - launch the platform update script (Windows), or
 //                          return the exact command on systemd hosts
 //
-// Private repositories need a GitHub PAT. It can be supplied either as the
-// NGG_GITHUB_TOKEN / GITHUB_TOKEN environment variable on the server, or from
-// the Web UI via the X-GitHub-Token request header. UI-supplied tokens are
-// scoped to a single request through the context: they are never persisted,
-// never logged and never written into the response.
-
-const githubTokenHeader = "X-GitHub-Token"
-
-func updateCtx(r *http.Request) context.Context {
-	tok := strings.TrimSpace(r.Header.Get(githubTokenHeader))
-	return update.WithToken(r.Context(), tok)
-}
+// The repository is public, so the panel talks to GitHub Releases directly and
+// automatically — there is no token field in the UI and no X-GitHub-Token
+// header anymore. Headless deployments may still set NGG_GITHUB_TOKEN /
+// GITHUB_TOKEN to raise the anonymous API rate limit; that is optional and is
+// never required for the update panel to work.
 
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.updater.Status())
 }
 
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	res, err := s.updater.Check(updateCtx(r))
+	res, err := s.updater.Check(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -68,7 +58,7 @@ func (s *Server) handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	ctx := updateCtx(r)
+	ctx := r.Context()
 	tag, asset := s.resolveUpdateTarget(ctx, body)
 	if tag == "" || asset == "" {
 		writeErr(w, http.StatusBadRequest, "tag/asset missing and no matching release asset could be resolved (private repo needs a GitHub Token)")
@@ -88,7 +78,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	ctx := updateCtx(r)
+	ctx := r.Context()
 	tag, asset := s.resolveUpdateTarget(ctx, body)
 	if tag == "" || asset == "" {
 		writeErr(w, http.StatusBadRequest, "tag/asset missing and no matching release asset could be resolved (private repo needs a GitHub Token)")

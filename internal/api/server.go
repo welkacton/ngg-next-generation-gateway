@@ -145,6 +145,9 @@ func (s *Server) routes() {
 	// Stage 2-3: Unified Network Engine
 	m.HandleFunc("GET /api/v1/network/status", s.handleNetworkStatus)
 	m.HandleFunc("GET /api/v1/network/metrics/history", s.handleNetworkMetricsHistory)
+	m.HandleFunc("GET /api/v1/network/global/status", s.handleGlobalStatus)
+	m.HandleFunc("POST /api/v1/network/global/attach", s.handleGlobalAttach)
+	m.HandleFunc("POST /api/v1/network/global/detach", s.handleGlobalDetach)
 	m.HandleFunc("POST /api/v1/network/start", s.handleNetworkStart)
 	m.HandleFunc("POST /api/v1/network/stop", s.handleNetworkStop)
 	m.HandleFunc("GET /api/v1/network/config", s.handleNetworkConfig)
@@ -207,6 +210,16 @@ func (s *Server) routes() {
 	m.HandleFunc("PUT /api/v1/hosts/{id}", s.handleHostByID)
 	m.HandleFunc("DELETE /api/v1/hosts/{id}", s.handleHostByID)
 
+	// 配置引擎 · 用户管理（本地账号目录，替代已移除的多租户）
+	m.HandleFunc("GET /api/v1/users", s.handleUsers)
+	m.HandleFunc("POST /api/v1/users", s.handleUsers)
+	m.HandleFunc("GET /api/v1/users/stats", s.handleUserStats)
+	m.HandleFunc("POST /api/v1/users/{id}/reset-usage", s.handleUserResetUsage)
+	m.HandleFunc("POST /api/v1/users/{id}/usage", s.handleUserUsage)
+	m.HandleFunc("GET /api/v1/users/{id}", s.handleUserByID)
+	m.HandleFunc("PUT /api/v1/users/{id}", s.handleUserByID)
+	m.HandleFunc("DELETE /api/v1/users/{id}", s.handleUserByID)
+
 	// 协议配置：官网协议目录（只读文字）+ 可编辑配置文件
 	m.HandleFunc("GET /api/v1/protocols/catalog", s.handleProtocolCatalog)
 	m.HandleFunc("POST /api/v1/protocols/catalog/refresh", s.handleProtocolCatalogRefresh)
@@ -256,9 +269,6 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/sdwan/links", s.handleSDWANLinks)
 	m.HandleFunc("DELETE /api/v1/sdwan/links/{id}", s.handleSDWANLinkByID)
 	m.HandleFunc("POST /api/v1/sdwan/{action}", s.handleSDWANAction)
-	m.HandleFunc("GET /api/v1/tenants", s.handleTenants)
-	m.HandleFunc("POST /api/v1/tenants", s.handleTenants)
-	m.HandleFunc("DELETE /api/v1/tenants/{id}", s.handleTenantByID)
 	m.HandleFunc("GET /api/v1/platforms", s.handlePlatforms)
 	m.HandleFunc("POST /api/v1/platforms/build", s.handlePlatformBuild)
 

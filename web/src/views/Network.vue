@@ -30,6 +30,7 @@ import { prettyJson, toArray } from '../utils/format'
 const { isBusy, run } = useApiAction()
 
 const status = ref<NetworkStatus | null>(null)
+const globalStatus = ref<api.GlobalTakeoverResult | null>(null)
 const sessions = ref<NetworkSession[]>([])
 const endpoints = ref<NetworkEndpoint[]>([])
 const selftestResult = ref<unknown>(null)
@@ -79,7 +80,21 @@ async function refreshConfig() {
     }
   }
 }
+async function loadGlobal() {
+  const d = await run('global', () => api.getGlobalStatus())
+  if (d) globalStatus.value = d
+}
+async function attachGlobal() {
+  const r = await run('attach', () => api.attachGlobalProxy(), '系统代理已接管，本机流量将走 NGG 入口')
+  if (r) await loadGlobal()
+}
+async function detachGlobal() {
+  const r = await run('detach', () => api.detachGlobalProxy(), '已解除接管并恢复原有代理设置')
+  if (r) await loadGlobal()
+}
+
 function refreshAll() {
+  loadGlobal()
   refreshStatus()
   refreshSessions()
   refreshEndpoints()
@@ -152,8 +167,8 @@ onUnmounted(() => {
   <div class="page">
     <div class="page-head">
       <div>
-        <h2 class="page-title">统一网络引擎</h2>
-        <p class="page-subtitle">Stage 2 · 状态、自检、会话、健康端点与引擎配置</p>
+        <h2 class="page-title">接管全局</h2>
+        <p class="page-subtitle">接管本机全局流量 · 系统代理一键接管与 TUN 真实能力检测</p>
       </div>
       <NSpace>
         <NButton size="small" :loading="isBusy('status')" @click="refreshAll">
@@ -164,9 +179,63 @@ onUnmounted(() => {
 
     <NAlert type="info" :bordered="false" class="section-gap">
       <template #header>能力边界说明</template>
-      Stage 2 的 <strong>TUN 模式依赖 Linux + CAP_NET_ADMIN</strong>；在 Windows 上使用
-      <strong>userspace ingress</strong> 接管流量。页面所有数据均来自真实后端接口，不做任何模拟。
+      「接管全局」提供两条真实路径：<strong>系统代理接管</strong>（Windows 用户态，立即生效，无需驱动与提权）与
+      <strong>TUN 虚拟网卡</strong>（需要 wintun 驱动 + 管理员权限）。后端会如实上报本机能力与原因，
+      无法创建时不会伪造网卡。页面所有数据均来自真实后端接口。
     </NAlert>
+
+    <NCard size="small" title="接管全局" class="section-gap">
+      <NGrid cols="1 s:2" responsive="screen" :x-gap="14" :y-gap="14">
+        <NGi>
+          <div class="proto-sec-title">系统代理（用户态 · 立即生效）</div>
+          <div class="hint" style="margin-top: 6px">
+            接管后本机 WinINET 应用（浏览器等）的流量会走 NGG 入口；解除时恢复原有代理设置，
+            全程不需要驱动或管理员权限。
+          </div>
+          <NSpace align="center" :size="10" :wrap="true" style="margin-top: 10px">
+            <NTag :type="globalStatus?.proxy?.attached ? 'success' : 'default'" :bordered="false" size="small">
+              {{ globalStatus?.proxy?.attached ? '已接管' : '未接管' }}
+            </NTag>
+            <span class="hint mono">{{ globalStatus?.proxy?.server || '—' }}</span>
+            <NButton
+              size="small"
+              type="primary"
+              :disabled="!globalStatus?.proxy?.supported || globalStatus?.proxy?.attached"
+              :loading="isBusy('attach')"
+              @click="attachGlobal"
+            >一键接管</NButton>
+            <NButton
+              size="small"
+              :disabled="!globalStatus?.proxy?.attached"
+              :loading="isBusy('detach')"
+              @click="detachGlobal"
+            >解除接管</NButton>
+          </NSpace>
+          <div v-if="globalStatus?.proxy?.error" class="hint" style="margin-top: 6px">
+            {{ globalStatus.proxy.error }}
+          </div>
+        </NGi>
+        <NGi>
+          <div class="proto-sec-title">TUN 虚拟网卡</div>
+          <div class="hint" style="margin-top: 6px">
+            创建虚拟网卡需要已签名的 wintun / TAP 驱动与管理员权限。NGG 只上报真实检测结果，
+            不会伪造一个不存在的网卡。
+          </div>
+          <div class="hint" style="margin-top: 8px">
+            平台 {{ globalStatus?.tun?.os || '—' }} ·
+            管理员 {{ globalStatus?.tun?.admin ? '是' : '否' }} ·
+            支持 TUN {{ globalStatus?.tun?.tun_supported ? '是' : '否' }}
+          </div>
+          <div class="hint">wintun.dll：{{ globalStatus?.tun?.wintun_dll || '未找到' }}</div>
+          <div v-if="globalStatus?.tun?.reason" class="hint" style="color: #b32442">
+            {{ globalStatus.tun.reason }}
+          </div>
+          <div v-if="globalStatus?.tun?.virtual_adapters?.length" class="hint">
+            已检测到虚拟网卡：{{ globalStatus.tun.virtual_adapters.join('、') }}
+          </div>
+        </NGi>
+      </NGrid>
+    </NCard>
 
     <NCard size="small" title="运行状态（/network/status）" class="section-gap">
       <template #header-extra>

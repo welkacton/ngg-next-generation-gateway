@@ -13,7 +13,7 @@ import (
 	"github.com/ngg-project/ngg/internal/protocols"
 	"github.com/ngg-project/ngg/internal/rulesets"
 	"github.com/ngg-project/ngg/internal/sdwan"
-	"github.com/ngg-project/ngg/internal/tenants"
+	"github.com/ngg-project/ngg/internal/users"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
 
@@ -72,7 +72,6 @@ func (e *Engine) initStage45() {
 	}
 	e.plugins = plugins.NewManager(filepath.Join(e.cfg.Storage.Dir, "plugins"))
 	e.sdwan = sdwan.NewManager(sdwan.PolicyLowestLatency, 3*time.Second)
-	e.tenants = tenants.NewRegistry()
 	e.ruleSets = rulesets.NewRegistry(filepath.Join(e.cfg.Storage.Dir, "rulesets-config.json"))
 	if err := e.ruleSets.Load(); err != nil {
 		fmt.Printf("NGG: could not load persisted rule sets: %v\n", err)
@@ -88,23 +87,27 @@ func (e *Engine) initStage45() {
 	if err := e.hostReg.Load(); err != nil {
 		fmt.Printf("NGG: could not load persisted remote hosts: %v\n", err)
 	}
+	// 本地用户目录（替代已移除的多租户）：账号、配额、到期与分组。
+	e.userReg = users.NewRegistry(filepath.Join(e.cfg.Storage.Dir, "users-config.json"))
+	if err := e.userReg.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted users: %v\n", err)
+	}
 	if e.network != nil {
 		e.network.SetPluginHook(&pluginHookAdapter{m: e.plugins})
-		e.network.SetTenantResolver(e.tenants)
 		e.network.SetLinkSelector(e.sdwan)
 	}
 	if n, problems := e.plugins.LoadManifestDir(filepath.Join(e.cfg.Cores.DescriptorDir, "..", "plugins.d")); n > 0 || len(problems) > 0 {
 		fmt.Printf("NGG: loaded %d plugin(s), %d problem(s)\n", n, len(problems))
 	}
-	_ = e.store.AddAudit("stage45.init", "", "protocols/plugins/sdwan/tenants initialized")
+	_ = e.store.AddAudit("stage45.init", "", "protocols/plugins/sdwan initialized")
 }
 
 func (e *Engine) Protocols() *protocols.Registry { return e.protocols }
 func (e *Engine) Plugins() *plugins.Manager      { return e.plugins }
 func (e *Engine) SDWAN() *sdwan.Manager          { return e.sdwan }
-func (e *Engine) Tenants() *tenants.Registry     { return e.tenants }
 func (e *Engine) Nodes() *nodes.Registry         { return e.nodeReg }
 func (e *Engine) Hosts() *hosts.Registry         { return e.hostReg }
+func (e *Engine) Users() *users.Registry         { return e.userReg }
 func (e *Engine) RuleSets() *rulesets.Registry   { return e.ruleSets }
 
 // Stages reports the honest implementation status of every stage.
@@ -114,6 +117,6 @@ func (e *Engine) Stages() map[string]any {
 		"stage2": map[string]any{"name": "统一 TUN / 会话 / Packet Processor / Dispatcher / Core Bridge", "status": "implemented", "note": "Linux TUN requires CAP_NET_ADMIN; userspace ingress is fully active on all platforms", "active": e.network != nil && e.network.IsRunning()},
 		"stage3": map[string]any{"name": "统一规则引擎 / DNS / 出入口策略", "status": "implemented", "rules": len(e.network.Rules().List())},
 		"stage4": map[string]any{"name": "VPN 协议中心 / 后量子 / 插件运行时", "status": "implemented", "protocols": len(e.protocols.List("")), "plugins": e.plugins.Count()},
-		"stage5": map[string]any{"name": "SD-WAN / 多租户 / 跨平台骨架", "status": "implemented", "tenants": len(e.tenants.List()), "links": len(e.sdwan.Links())},
+		"stage5": map[string]any{"name": "SD-WAN / 跨平台骨架", "status": "implemented", "links": len(e.sdwan.Links())},
 	}
 }
