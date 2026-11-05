@@ -302,6 +302,175 @@ body {
   line-height: 1.4;
 }
 
+/* ---- Config Engine: remote host console (inbound / outbound) ----------
+ * Node-centric layout: a real stat strip, one card per remote machine and
+ * a dense two-column detail drawer. Everything is light-theme to match the
+ * rest of the Gen 2 console.
+ * ---------------------------------------------------------------------- */
+.host-stat {
+  border-left: 3px solid #d2d2d7;
+}
+.host-stat__label {
+  font-size: 12.5px;
+  color: #6e6e73;
+}
+.host-stat__value {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #1d1d1f;
+  font-variant-numeric: tabular-nums;
+}
+.host-stat__value--green {
+  color: #18a058;
+}
+.host-stat__hint {
+  font-size: 11.5px;
+  color: #8e8e93;
+}
+
+.host-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  font-size: 12.5px;
+  color: #3a3a3c;
+  padding: 2px 2px 0;
+}
+.host-metrics .hint {
+  font-size: 11.5px;
+}
+
+.host-card {
+  border-left: 3px solid #d2d2d7;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.host-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+}
+.host-card--online {
+  border-left-color: #18a058;
+}
+.host-card--offline {
+  border-left-color: #d03050;
+}
+.host-card--unknown {
+  border-left-color: #c7c7cc;
+}
+.host-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.host-card__flag {
+  flex: 0 0 auto;
+  min-width: 30px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(24, 160, 88, 0.12);
+  color: #0e7a42;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+.host-card__name {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host-card__addr {
+  font-size: 12.5px;
+  color: #1d1d1f;
+  word-break: break-all;
+}
+.host-card__meta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 11.5px;
+  color: #8e8e93;
+}
+.host-card__probe {
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #f5f5f7;
+  color: #6e6e73;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host-card__probe.is-online {
+  background: rgba(24, 160, 88, 0.09);
+  color: #0e7a42;
+}
+.host-card__probe.is-offline {
+  background: rgba(208, 48, 80, 0.08);
+  color: #b32442;
+}
+.host-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.host-card__foot {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #f0f0f2;
+}
+
+.host-panel {
+  margin-bottom: 14px;
+}
+.host-panel .n-card__content {
+  min-width: 0;
+}
+.host-status-line {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.host-status-line > span:last-child {
+  max-width: 100%;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.host-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f2f2f4;
+  font-size: 12.5px;
+  color: #6e6e73;
+}
+.host-kv:last-child {
+  border-bottom: 0;
+}
+.host-kv span:last-child {
+  color: #1d1d1f;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
 /* ---- Sidebar / header：极简、细线、无渐变无发光 ---- */
 
 .brand {

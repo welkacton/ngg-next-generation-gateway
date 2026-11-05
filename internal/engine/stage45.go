@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ngg-project/ngg/internal/hosts"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/nodes"
 	"github.com/ngg-project/ngg/internal/plugins"
@@ -80,6 +81,13 @@ func (e *Engine) initStage45() {
 	if err := e.nodeReg.Load(); err != nil {
 		fmt.Printf("NGG: could not load persisted nodes: %v\n", err)
 	}
+	// Remote hosts (VPS / PC / soft router) are a fresh, independent registry:
+	// the inbound/outbound consoles start empty on purpose and never reuse the
+	// legacy protocol-endpoint node library.
+	e.hostReg = hosts.NewRegistry(filepath.Join(e.cfg.Storage.Dir, "hosts-config.json"))
+	if err := e.hostReg.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted remote hosts: %v\n", err)
+	}
 	if e.network != nil {
 		e.network.SetPluginHook(&pluginHookAdapter{m: e.plugins})
 		e.network.SetTenantResolver(e.tenants)
@@ -96,6 +104,7 @@ func (e *Engine) Plugins() *plugins.Manager      { return e.plugins }
 func (e *Engine) SDWAN() *sdwan.Manager          { return e.sdwan }
 func (e *Engine) Tenants() *tenants.Registry     { return e.tenants }
 func (e *Engine) Nodes() *nodes.Registry         { return e.nodeReg }
+func (e *Engine) Hosts() *hosts.Registry         { return e.hostReg }
 func (e *Engine) RuleSets() *rulesets.Registry   { return e.ruleSets }
 
 // Stages reports the honest implementation status of every stage.

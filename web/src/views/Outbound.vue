@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import NodeManager from '../components/NodeManager.vue'
+import HostManager from '../components/HostManager.vue'
 </script>
 
 <template>
-  <NodeManager
-    kind="outbound"
+  <HostManager
+    role="outbound"
     title="出口节点"
-    subtitle="配置引擎 · 加密协议出口节点的新增 / 编辑 / 删除与 JSON 编辑"
+    subtitle="配置引擎 · 任意 VPS / 电脑 / 软路由作为出站，角色可随时切换"
   />
 </template>

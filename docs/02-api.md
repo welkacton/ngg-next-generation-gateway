@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.2.2", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.3.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.2.2），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.3.0），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -458,3 +458,52 @@ wscat -c "ws://127.0.0.1:9090/api/v1/ws?token=$TOKEN"
 - 下载 Fail-Closed：无官方 digest、主机不在白名单、摘要不符、版本不符，一律拒绝安装。
 
 > **Stage 2~5 更新**：以上为 **Phase 1 基线**的安全边界（保留不改）。当前版本已新增 40 个端点（见 §3.1 与 `09-stage2-5-api.md`），`internal/netengine/` 已落地为真实数据平面；统一 TUN 仍**仅 Linux + `CAP_NET_ADMIN`** 可用，Windows/macOS 返回 `ErrTUNUnsupported` 并改用全平台 userspace 入口，TUN 内 TCP 流终止仍为已知缺口。详见 `07-stage2-network-engine.md` / `08-stage3-5-features.md`。
+
+---
+
+## 11. 远程主机节点（v2.3.0，入口节点 / 出口节点）
+
+`internal/hosts` 是独立于旧 `/nodes` 协议端点库的注册表，持久化在 `data/hosts-config.json`（0600）。
+一台主机 = 任意位置的 VPS / 电脑 / 软路由，角色 `role` 可为 `inbound` / `outbound` / `both`，
+随时可切换；`both` 会同时出现在入站和出站视图中。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/hosts?role=inbound\|outbound\|both\|all` | `{hosts,count,stats,path}`，每项含 `probe`（最后一次真实探测） |
+| `POST` | `/api/v1/hosts` | 新增主机，保存后立即执行一次真实 TCP 探测 |
+| `GET` | `/api/v1/hosts/stats` | 注册表计数 + 统一网络引擎的**真实** `bytes_in` / `bytes_out` / `active`（未启动则为缺省） |
+| `POST` | `/api/v1/hosts/probe` | 并发探测所有启用主机，返回 `{checked,online,results}` |
+| `POST` | `/api/v1/hosts/{id}/probe` | 单主机真实 TCP 探测 |
+| `POST` | `/api/v1/hosts/{id}/role` | body `{"role":"outbound"}`，任意切换入站 / 出站 / 双向 |
+| `GET` / `PUT` / `DELETE` | `/api/v1/hosts/{id}` | 读取 / 修改 / 删除 |
+| `GET` | `/api/v1/hosts/export` | 导出全量 JSON |
+| `PUT` | `/api/v1/hosts/import` | 全量替换，任一条校验失败则整个节点库保持不变 |
+
+**Host 字段**：`id` / `name` / `internal` / `country` / `address` / `node_port` / `svc_port` /
+`role` / `enabled` / `protocol` / `core_id` / `profile` / `secret_key` / `proxy_url` / `plugin` /
+`provider` / `ip_addresses` / `tags` / `note` / `track_traffic` / `user_ratio` / `node_ratio` /
+`created_at` / `updated_at`。
+
+**安全与诚实边界**：
+
+- `address` 只接受 IP 或域名（拒绝 `http://` 等 scheme），端口必须 1..65535，倍率 0.1..100；
+  `id` 唯一且限 64 字符，重复或非法记录一律 422。
+- `probe` 来自 `net.Dialer` 对 `address:node_port`（无管理端口时用 `svc_port`）的**真实 TCP 连接**，
+  3 秒超时；探测结果**只在内存中**，进程重启后清空，绝不把历史「在线」当当前状态。
+- 远端 CPU / 内存 / 网卡 / 单节点流量 NGG 未采集，接口不返回这些字段，界面显示「未采集」，
+  **不生成任何模拟速度、在线用户数或流量数字**。统计卡条的下行 / 上行 / 活跃连接来自
+  `GET /network/status` 的 `metrics`，是 NGG 全局真实计数，不是单节点数据。
+
+```bash
+# 登记一台 VPS 当作出站，并立即真实探测
+curl -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"id":"us01","name":"US us01","country":"US","address":"203.0.113.10","node_port":2222,"svc_port":443,"role":"outbound","enabled":true,"protocol":"vless-reality"}' \
+  "$BASE/hosts"
+
+# 把另一台改成入站
+curl -X POST -H "$H" -H 'Content-Type: application/json' \
+  -d '{"role":"inbound"}' "$BASE/hosts/hk01/role"
+
+curl -H "$H" "$BASE/hosts/stats"
+curl -X POST -H "$H" "$BASE/hosts/probe"
+```

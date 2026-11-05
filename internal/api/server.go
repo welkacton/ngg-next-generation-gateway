@@ -183,6 +183,19 @@ func (s *Server) routes() {
 	m.HandleFunc("PUT /api/v1/nodes/{id}", s.handleNodeByID)
 	m.HandleFunc("DELETE /api/v1/nodes/{id}", s.handleNodeByID)
 
+	// 配置引擎：远程主机 / VPS 节点（入口与出口控制台共用同一注册表）
+	m.HandleFunc("GET /api/v1/hosts", s.handleHosts)
+	m.HandleFunc("POST /api/v1/hosts", s.handleHosts)
+	m.HandleFunc("GET /api/v1/hosts/stats", s.handleHostStats)
+	m.HandleFunc("POST /api/v1/hosts/probe", s.handleHostProbeAll)
+	m.HandleFunc("GET /api/v1/hosts/export", s.handleHostExport)
+	m.HandleFunc("PUT /api/v1/hosts/import", s.handleHostImport)
+	m.HandleFunc("POST /api/v1/hosts/{id}/probe", s.handleHostProbe)
+	m.HandleFunc("POST /api/v1/hosts/{id}/role", s.handleHostRole)
+	m.HandleFunc("GET /api/v1/hosts/{id}", s.handleHostByID)
+	m.HandleFunc("PUT /api/v1/hosts/{id}", s.handleHostByID)
+	m.HandleFunc("DELETE /api/v1/hosts/{id}", s.handleHostByID)
+
 	// 协议配置：官网协议目录（只读文字）+ 可编辑配置文件
 	m.HandleFunc("GET /api/v1/protocols/catalog", s.handleProtocolCatalog)
 	m.HandleFunc("POST /api/v1/protocols/catalog/refresh", s.handleProtocolCatalogRefresh)

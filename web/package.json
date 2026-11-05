@@ -1,7 +1,7 @@
 {
   "name": "ngg-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "2.3.0",
   "type": "module",
   "description": "NGG (Next-Generation Gateway) Phase 1 Web 管理界面",
   "scripts": {

@@ -22,6 +22,7 @@ import (
 	"github.com/ngg-project/ngg/internal/adapters/generic"
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/core"
+	"github.com/ngg-project/ngg/internal/hosts"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/nodes"
 	"github.com/ngg-project/ngg/internal/plugins"
@@ -70,6 +71,7 @@ type Engine struct {
 	sdwan      *sdwan.Manager
 	tenants    *tenants.Registry
 	nodeReg    *nodes.Registry
+	hostReg    *hosts.Registry
 	ruleSets   *rulesets.Registry
 	health     *healthMonitor
 	arch       archDetector

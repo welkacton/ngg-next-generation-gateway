@@ -1393,3 +1393,103 @@ export const uploadRuleSet = (file: File, name?: string, description?: string) =
   if (description) form.append('description', description)
   return client.post<RuleSetUploadResult>('/rulesets/upload', form).then((r) => r.data)
 }
+
+/* ------------------------------------------------------------------ *
+ * 配置引擎 · 远程主机节点（入口 / 出口控制台共用）
+ *
+ * 一台主机 = 一台任意位置的 VPS / 电脑 / 软路由，角色可随时改成入站、
+ * 出站或双向。online 只来自后端真实 TCP 探测，前端不生成任何模拟数值。
+ * ------------------------------------------------------------------ */
+
+export type HostRole = 'inbound' | 'outbound' | 'both'
+
+export interface RemoteHost {
+  id: string
+  name: string
+  internal: string
+  country: string
+  address: string
+  node_port: number
+  svc_port: number
+  role: HostRole
+  enabled: boolean
+  protocol: string
+  core_id: string
+  profile: string
+  secret_key: string
+  proxy_url: string
+  plugin: string
+  provider: string
+  ip_addresses: string[]
+  tags: string[]
+  note: string
+  track_traffic: boolean
+  user_ratio: number
+  node_ratio: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface HostProbe {
+  online: boolean
+  latency_ms: number
+  target: string
+  checked_at: string
+  error?: string
+}
+
+export interface HostView extends RemoteHost {
+  probe: HostProbe | null
+}
+
+export interface HostStats {
+  total: number
+  enabled: number
+  inbound: number
+  outbound: number
+  both: number
+  online: number
+  checked: number
+}
+
+export interface HostListResult {
+  hosts: HostView[]
+  count: number
+  stats: HostStats
+  path: string
+}
+
+export interface HostMetricsResult {
+  registry: HostStats
+  network_running?: boolean
+  bytes_in?: number
+  bytes_out?: number
+  active?: number
+  connections?: number
+}
+
+export interface HostProbeAllResult {
+  ok: boolean
+  checked: number
+  online: number
+  results: Record<string, HostProbe>
+}
+
+const host = (id: string) => `/hosts/${encodeURIComponent(id)}`
+
+export const listHosts = (role?: HostRole | 'all') =>
+  get<HostListResult>(role ? `/hosts?role=${role}` : '/hosts')
+export const getHostStats = () => get<HostMetricsResult>('/hosts/stats')
+export const addHost = (h: RemoteHost) => post<GenericResult>('/hosts', h)
+export const updateHost = (id: string, h: RemoteHost) =>
+  put<GenericResult>(host(id), h)
+export const deleteHost = (id: string) => del<GenericResult>(host(id))
+export const probeHost = (id: string) =>
+  post<{ ok: boolean; probe: HostProbe }>(`${host(id)}/probe`)
+export const probeAllHosts = () => post<HostProbeAllResult>('/hosts/probe')
+export const setHostRole = (id: string, role: HostRole) =>
+  post<GenericResult>(`${host(id)}/role`, { role })
+export const exportHosts = () =>
+  get<{ hosts: RemoteHost[]; count: number }>('/hosts/export')
+export const importHosts = (hosts: RemoteHost[]) =>
+  put<GenericResult>('/hosts/import', { hosts })

@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.2.2
+### 🏷️ Generation 2 / 第二代 · Release v2.3.0
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -22,10 +22,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.1.2 | 按内核的官方语法配置 | 三内核协议目录、按三份官方文档建立字段 schema、可视化表单 + 带注释代码编辑 |
 | Gen 2 增补 | v2.2.0 | 协议配置与 GitHub 规则集 | 「协议中心」改名**协议配置**：上半部只读纯文字协议目录（每 6 小时从三内核官方文档自动同步）；下半部改为**配置文件卡片**（6 分区、带中文注释、语法校验、导出）；规则页新增**GitHub 规则集挂载**（一次发现 668+ 分类） |
 | Gen 2 增补 | v2.2.1 | 内核安装修复与交互整理 | 内核安装改为**异步后台任务**（修掉 30 秒超时导致的三个内核装不上）+ GitHub API 配额治理与 PAT 支持；配置引擎二级重排为 协议配置/规则配置/DNS配置/入口节点/出口节点；配置文件分区改为 协议→入站→出站→路由规则→DNS→其他→重建模板、页面留白、卡片支持单条与批量启停；GitHub 规则集可全选全部并自动分批加载；修复侧栏展开后底部文字覆盖 |
-| **Gen 2（当前）** | **v2.2.2** | 完整配置双向编辑 | 「编辑完整配置」从只读预览改为**可编辑窗口**：停止输入约 0.6 秒即调用 `POST /profiles/split` 按内核顶层键自动拆分回 6 个分区（`Render`/`Split` 互逆，三内核往返测试保证语义一致）；语法错误不覆盖分区、状态栏与分区行数实时反馈、可关闭自动同步 / 立即同步 / 保存并关闭；未识别顶层键归入「其他」，`outbounds` 按节点与策略重新分组后合并回同一数组 |
+| Gen 2 增补 | v2.2.2 | 完整配置双向编辑 | 「编辑完整配置」从只读预览改为**可编辑窗口**：停止输入约 0.6 秒即调用 `POST /profiles/split` 按内核顶层键自动拆分回 6 个分区（`Render`/`Split` 互逆，三内核往返测试保证语义一致）；语法错误不覆盖分区、状态栏与分区行数实时反馈、可关闭自动同步 / 立即同步 / 保存并关闭；未识别顶层键归入「其他」，`outbounds` 按节点与策略重新分组后合并回同一数组 |
+| **Gen 2（当前）** | **v2.3.0** | 远程主机节点控制台 + 发布流程 | **入口节点 / 出口节点两页全部清空重建**：以「任意 VPS / 电脑 / 软路由」为主体的节点库，统计卡条 + 节点卡片 + 两栏详情抽屉，节点可随时改判为入站 / 出站 / 双向；在线状态来自后端真实 TCP 探测，未采集的 CPU / 内存 / 单节点流量一律显示「未采集」；新增 `/api/v1/hosts` 系列端点与 `internal/hosts` 注册表；内核管理按钮改为状态驱动（点启动后蓝色熄灭、红色跳到停止）；新增 `scripts/release.mjs` + `scripts/sync-client.ps1`，**每次修改强制同步客户端并递增版本号** |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.2.2`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.3.0`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -34,13 +35,15 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 
 ## 一键部署（VPS / 电脑 / 软路由）
 
-私有仓库（**仅自己可见**）：**https://github.com/welkacton/ngg-next-generation-gateway** · MIT 许可（见 `LICENSE`）。
-仓库当前为 `private`，只有仓库所有者授权账号可以 clone；部署到自己的服务器、电脑、NAS 或软路由时，
-请先用有权限的账号完成克隆或下载 Release 产物。若日后要共享，由所有者手动改为 Public。
+GitHub 仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · MIT 许可（见 `LICENSE`）。
+仓库可见性由所有者在仓库设置中控制（public / private），部署到自己的服务器、电脑、NAS 或软路由时，
+请按当前可见性使用有权限的账号克隆或下载 Release 产物。
 
+> **当前源码版本 v2.3.0；下方下载链接指向最近一次已发布的 Release `v2.2.2`**。
 > **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.2.2>
 > → `NGG-Setup-v2.2.2.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.2.2-windows-amd64.zip`
 > （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
+> v2.3.0 为源码版本，尚未打 Release tag；发布安装包后再更新这些链接。
 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
@@ -122,12 +125,34 @@ make dev                # Vite :5173（后端另开终端 make run）
 ```
 
 服务启动会：恢复上次运行的内核 → 自动拉起统一网络引擎 → 监听 `127.0.0.1:9090`。
-管理界面一级分类「内核引擎」「配置引擎」可点击折叠/展开；规则表支持增删改，入口/出口节点可配置加密协议并支持表单与 JSON 双模式编辑。
+管理界面一级分类「内核引擎」「配置引擎」可点击折叠/展开；规则表支持增删改与自定义规则集；
+**入口节点 / 出口节点已全部重建为「远程主机」控制台**：任意 VPS / 电脑 / 软路由都可登记，
+角色可随时改成入站、出站或双向，在线状态来自后端真实 TCP 探测，支持两栏详情抽屉与全量 JSON 导入导出。
 从界面修改的网络配置持久化到 `data/network-config.json`，不会改写含 Token 与注释的主配置文件。
 以 daemon 运行且 PATH 不含 `go` 时，请在 `configs/ngg.yaml` 设置 `build.go_binary`（或 `NGG_GO_BINARY`），
 否则 `POST /api/v1/platforms/build` 会如实报「找不到工具链」而不是伪装成功。
 在 Web UI「Cores」页安装三个内核后，「Stage 2 网络引擎」页的端到端自检即可验证
 `NGG 入口 → Session → Rule → Dispatcher → Core Bridge → 真实内核 → 目标` 全链路。
+
+### 每次修改后：同步客户端 + 升版本（强制）
+
+版本号唯一来源是 `internal/version/version.go` 的 `Release`。改完代码必须执行：
+
+```bash
+node scripts/release.mjs 2.3.0          # 升版本 + 重建 web/dist + 重建后端 + go vet/test
+node scripts/release.mjs 2.3.0 --sync   # 追加：同步到已安装的 Windows 客户端
+```
+
+脚本会把版本同步到 `web/package.json`、README 与部署文档，并**强制重建 `web/dist`**，
+避免源码已更新而浏览器仍在跑旧界面。同步到 `C:\Program Files\NGG` 需要
+**管理员权限**的 PowerShell（服务 `NGG` 需停止/启动以替换 `nggd.exe`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/sync-client.ps1
+```
+
+脚本会备份旧 `nggd.exe`、复制新客户端与后端、重启服务，并校验页面确实加载新 bundle。
+详见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 与 [`docs/02-api.md`](docs/02-api.md) §11。
 
 ---
 
