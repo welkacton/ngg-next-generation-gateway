@@ -163,6 +163,15 @@ func newEgressManager(cfg EgressConfig) *egressManager {
 	return &egressManager{cfg: cfg, binds: map[contracts.CoreID]Egress{}}
 }
 
+// SetBypassTUN is flipped on while the NGG TUN owns the default route, so the
+// engine's own dials are pinned to the physical interface instead of looping
+// back into the tunnel.
+func (e *egressManager) SetBypassTUN(v bool) {
+	e.mu.Lock()
+	e.cfg.BypassTUN = v
+	e.mu.Unlock()
+}
+
 func (e *egressManager) SetLinkSelector(s LinkSelector) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -236,7 +245,7 @@ func (e *egressManager) Dialer(coreID contracts.CoreID) *net.Dialer {
 	}
 	mark := b.Mark
 	d := &net.Dialer{LocalAddr: laddr, Timeout: 10 * time.Second}
-	if cfg.BypassTUN && mark != 0 {
+	if cfg.BypassTUN {
 		d.Control = func(_, _ string, c syscall.RawConn) error {
 			var ctrlErr error
 			if err := c.Control(func(fd uintptr) { ctrlErr = setSockMark(fd, mark) }); err != nil {

@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.6.0
+### 🏷️ Generation 2 / 第二代 · Release v2.6.1
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -30,7 +30,7 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | **Gen 2（当前）** | **v2.6.0** | 登录门禁 + 链路编排 + 真 TUN | 新增单管理员登录：首次打开必须手动创建账号（Argon2id / HttpOnly 会话 / 失败锁定），之后只有登录窗口，浏览器不再保存任何 API Token；配置引擎新增**链路编排**（协议 → 入口 → 规则 → DNS → 出口 → 用户 六段串联，真实校验、渲染 mihomo 配置、原生校验后热替换、SOCKS5 端到端真连测试），各二级页加入链路导航条；Windows **TUN 虚拟网卡彻底跑通**：自动下载并 SHA-256 + Authenticode 双重校验官方签名 wintun.dll，由 NGG 独占创建网卡并用 gVisor 用户态协议栈把 TCP 流量接入统一调度器，可选接管默认路由 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.6.0`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.6.1`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/tun"
@@ -403,11 +404,19 @@ func (t *TunDevice) SetDefaultRoute(enable bool) error {
 			_, _ = runNetsh("interface", "ipv4", "delete", "route", "0.0.0.0/0", "interface="+name)
 			t.routeAll.Store(false)
 		}
+		setEgressInterface(0)
 		return nil
 	}
 	ip, _, err := parseIPv4CIDR(cfg.IPv4)
 	if err != nil {
 		return err
+	}
+	// Pin NGG's own dials to the physical NIC first, or every proxied
+	// connection would be routed back into this adapter and loop.
+	if idx, err := primaryInterfaceIndex(); err == nil {
+		setEgressInterface(idx)
+	} else {
+		return fmt.Errorf("无法确定物理网卡，已取消接管默认路由以避免环路: %w", err)
 	}
 	if _, err := runNetsh("interface", "ipv4", "add", "route", "0.0.0.0/0", "interface="+name,
 		"nexthop="+ip.String(), "metric=1", "store=active"); err != nil {
@@ -415,6 +424,28 @@ func (t *TunDevice) SetDefaultRoute(enable bool) error {
 	}
 	t.routeAll.Store(true)
 	return nil
+}
+
+var (
+	modIphlpapi          = windows.NewLazySystemDLL("iphlpapi.dll")
+	procGetBestInterface = modIphlpapi.NewProc("GetBestInterface")
+)
+
+// primaryInterfaceIndex asks Windows which interface it would use right now.
+// It must be resolved BEFORE the default route moves onto the TUN, otherwise
+// the answer is the TUN itself.
+func primaryInterfaceIndex() (uint32, error) {
+	ip := net.ParseIP("8.8.8.8").To4()
+	if ip == nil {
+		return 0, fmt.Errorf("no probe address")
+	}
+	dest := *(*uint32)(unsafe.Pointer(&ip[0]))
+	var idx uint32
+	r, _, _ := procGetBestInterface.Call(uintptr(dest), uintptr(unsafe.Pointer(&idx)))
+	if r != 0 {
+		return 0, fmt.Errorf("GetBestInterface 返回 %d", r)
+	}
+	return idx, nil
 }
 
 func parseIPv4CIDR(s string) (net.IP, *net.IPNet, error) {

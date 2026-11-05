@@ -208,8 +208,11 @@ func (e *Engine) AttachTUN(ctx context.Context, routeAll bool) error {
 	if err := e.tun.Open(ctx, e.cfg.TUN); err != nil {
 		return err
 	}
+	// The engine must never dial through its own tunnel.
+	e.egress.SetBypassTUN(true)
 	if routeAll {
 		if err := e.tun.SetDefaultRoute(true); err != nil {
+			e.egress.SetBypassTUN(false)
 			_ = e.tun.Close(ctx)
 			return fmt.Errorf("接管默认路由失败，已回滚网卡: %w", err)
 		}
@@ -230,6 +233,7 @@ func (e *Engine) DetachTUN(ctx context.Context) error {
 	if err := e.tun.Close(ctx); err != nil {
 		return err
 	}
+	e.egress.SetBypassTUN(false)
 	e.mu.Lock()
 	e.tunStarted = false
 	e.mu.Unlock()
