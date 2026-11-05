@@ -157,15 +157,19 @@ func (e *Engine) TunCapabilities() map[string]any {
 	admin := windows.GetCurrentProcessToken().IsElevated()
 	dll := wintunDLLPath()
 	adapters := virtualAdapters()
+	signed := false
+	if dll != "" {
+		signed = verifyAuthenticode(dll) == nil
+	}
 	supported := admin && dll != ""
 	reason := ""
 	switch {
-	case !admin && dll == "":
-		reason = "Windows 创建虚拟网卡需要管理员权限，且未找到 wintun.dll；当前 NGG 以标准用户运行"
-	case !admin:
-		reason = "已找到 wintun.dll，但当前进程不是管理员；创建虚拟网卡需要管理员权限"
+	case dll == "" && !admin:
+		reason = "缺少 wintun.dll，且当前进程不是管理员；点「下载并安装驱动」后由服务（LocalSystem）自动创建网卡"
 	case dll == "":
-		reason = "未找到 wintun.dll；请把 WinTun 驱动放到 nggd.exe 同目录或 C:\\Windows\\System32"
+		reason = "缺少 wintun.dll；点「下载并安装驱动」自动下载官方签名版本"
+	case !admin:
+		reason = "已找到 wintun.dll，但当前进程不是管理员；NGG 服务以 LocalSystem 运行即可创建网卡"
 	}
 	return map[string]any{
 		"os":               runtime.GOOS,
@@ -174,7 +178,16 @@ func (e *Engine) TunCapabilities() map[string]any {
 		"wintun_dll":       dll,
 		"reason":           reason,
 		"virtual_adapters": adapters,
-		"note":             "系统代理接管在用户态立即生效；TUN 虚拟网卡需要 wintun 驱动 + 管理员权限。NGG 不会伪造一个不存在的网卡。",
+		"adapter":          e.tun.Status(),
+		"driver": map[string]any{
+			"present": dll != "",
+			"path":    dll,
+			"signed":  signed,
+			"version": wintunVersionLabel(),
+			"url":     wintunURL,
+			"sha256":  wintunZipSHA256,
+		},
+		"note": "系统代理接管在用户态立即生效；TUN 虚拟网卡由 NGG 独占地创建并驱动，kernels 不会自行建卡。",
 	}
 }
 

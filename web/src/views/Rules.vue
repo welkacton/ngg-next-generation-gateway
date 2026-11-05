@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChainStrip from '../components/ChainStrip.vue'
 import { computed, h, onMounted, ref } from 'vue'
 import {
   NAlert,
@@ -797,6 +798,7 @@ onMounted(() => {
 
 <template>
   <div class="page">
+    <ChainStrip current="rules" />
     <div class="page-head">
       <div>
         <h2 class="page-title">规则配置</h2>

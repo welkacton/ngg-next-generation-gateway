@@ -148,6 +148,39 @@ func (t *TunDevice) Stats() TunStats {
 	return t.stats
 }
 
+func (t *TunDevice) AttachEngine(_ *Engine) {}
+
+func (t *TunDevice) Status() map[string]any {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return map[string]any{
+		"open": t.file != nil, "adapter": t.name, "mtu": t.cfg.MTU, "ipv4": t.cfg.IPv4,
+		"os": "linux", "stack": "kernel TUN", "stats": t.stats,
+	}
+}
+
+// SetDefaultRoute moves the global default into the NGG routing table. Linux
+// uses a dedicated table + fwmark so kernels can never compete for it.
+func (t *TunDevice) SetDefaultRoute(enable bool) error {
+	t.mu.Lock()
+	name := t.name
+	t.mu.Unlock()
+	if name == "" {
+		return fmt.Errorf("TUN not open")
+	}
+	if enable {
+		if err := runIP("route", "replace", "default", "dev", name, "table", "17890"); err != nil {
+			return err
+		}
+		return runIP("rule", "add", "fwmark", "0x4E47", "lookup", "17890")
+	}
+	_ = runIP("rule", "del", "fwmark", "0x4E47", "lookup", "17890")
+	// Flushing an already empty table exits non-zero on some distros; the
+	// route is gone either way, so this is deliberately best-effort.
+	_ = exec.Command("ip", "route", "flush", "table", "17890").Run()
+	return nil
+}
+
 func (t *TunDevice) Name() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()

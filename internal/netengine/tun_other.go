@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package netengine
 
@@ -32,6 +32,12 @@ func (t *TunDevice) Read(_ context.Context, _ []byte) (int, error) {
 func (t *TunDevice) Write(_ context.Context, _ []byte) (int, error) {
 	return 0, ErrTUNUnsupported
 }
+func (t *TunDevice) AttachEngine(_ *Engine) {}
+func (t *TunDevice) Status() map[string]any {
+	return map[string]any{"open": false, "os": runtimeGOOS(), "reason": "该平台没有 TUN 实现，请使用用户态 ingress"}
+}
+func (t *TunDevice) SetDefaultRoute(_ bool) error { return ErrTUNUnsupported }
+
 func (t *TunDevice) Stats() TunStats {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChainStrip from '../components/ChainStrip.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   NAlert,
@@ -499,6 +500,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="pc-page">
+    <ChainStrip current="protocols" />
     <!-- ① 内核支持协议：只读纯文字 -->
     <section class="pc-section">
       <div class="major-head">

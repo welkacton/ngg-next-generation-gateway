@@ -492,6 +492,38 @@ export interface GlobalProxyStatus {
   error?: string
 }
 
+export interface TunDriverInfo {
+  present: boolean
+  path: string
+  signed: boolean
+  version: string
+  url: string
+  sha256: string
+}
+
+export interface TunStats {
+  bytes_in: number
+  bytes_out: number
+  packets_in: number
+  packets_out: number
+  sessions: number
+  since: string
+}
+
+export interface TunAdapterStatus {
+  open: boolean
+  adapter: string
+  mtu: number
+  ipv4: string
+  route_all: boolean
+  elevated: boolean
+  wintun_dll: string
+  os: string
+  stack: string
+  since?: string
+  stats: TunStats
+}
+
 export interface TunCapabilities {
   os: string
   tun_supported: boolean
@@ -500,6 +532,8 @@ export interface TunCapabilities {
   reason: string
   virtual_adapters: string[]
   note: string
+  driver?: TunDriverInfo
+  adapter?: TunAdapterStatus
 }
 
 export interface GlobalTakeoverResult {
@@ -507,11 +541,28 @@ export interface GlobalTakeoverResult {
   tun: TunCapabilities
 }
 
+export interface TunStatusResult {
+  adapter: TunAdapterStatus
+  capabilities: TunCapabilities
+  running: boolean
+}
+
 export const getGlobalStatus = () => get<GlobalTakeoverResult>('/network/global/status')
 export const attachGlobalProxy = () =>
   post<{ ok: boolean; proxy: GlobalProxyStatus }>('/network/global/attach')
 export const detachGlobalProxy = () =>
   post<{ ok: boolean; proxy: GlobalProxyStatus }>('/network/global/detach')
+
+export const installTunDriver = () =>
+  post<{ ok: boolean; driver: { path: string; version: string; downloaded: boolean; signature: string; message: string } }>(
+    '/network/tun/driver/install',
+  )
+export const getTunStatus = () => get<TunStatusResult>('/network/tun/status')
+export const attachTun = (routeAll: boolean) =>
+  post<{ ok: boolean; adapter: TunAdapterStatus; route_all: boolean; message: string }>('/network/tun/attach', {
+    route_all: routeAll,
+  })
+export const detachTun = () => post<{ ok: boolean; adapter: TunAdapterStatus }>('/network/tun/detach', {})
 
 export const getNetworkConfig = () => get<NetworkConfig>('/network/config')
 export const saveNetworkConfig = (config: NetworkConfig) =>
@@ -1595,3 +1646,134 @@ export const updateUser = (id: string, u: PortalUser) =>
 export const deleteUser = (id: string) => del<GenericResult>(portalUser(id))
 export const resetUserUsage = (id: string) =>
   post<GenericResult>(`${portalUser(id)}/reset-usage`)
+
+/* ------------------------------------------------------------------ *
+ * 认证 /auth —— 首次创建管理员，之后只有登录
+ * ------------------------------------------------------------------ */
+
+export interface AuthPolicy {
+  min_password: number
+  session_hours: number
+  remember_hours: number
+  max_failures: number
+  lockout_seconds: number
+}
+
+export interface AuthState {
+  setup_required: boolean
+  authenticated: boolean
+  username: string
+  api_token_login: boolean
+  policy: AuthPolicy
+  host: string
+}
+
+export interface AuthResult {
+  ok: boolean
+  username: string
+  expires_at: string
+}
+
+export const getAuthState = () => get<AuthState>('/auth/state')
+
+export const authSetup = (username: string, password: string) =>
+  post<AuthResult>('/auth/setup', { username, password })
+
+export const authLogin = (username: string, password: string, remember: boolean) =>
+  post<AuthResult>('/auth/login', { username, password, remember })
+
+export const authLogout = () => post<{ ok: boolean }>('/auth/logout', {})
+
+export const changePassword = (oldPassword: string, newPassword: string) =>
+  post<{ ok: boolean; message: string }>('/auth/password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  })
+
+/* ------------------------------------------------------------------ *
+ * 链路编排 /pipeline —— 把配置引擎六个二级页面串成一条可执行链路
+ * ------------------------------------------------------------------ */
+
+export type PipelineStepStatus = 'ok' | 'warn' | 'fail' | 'skip'
+
+export interface PipelineStep {
+  key: string
+  title: string
+  order: number
+  status: PipelineStepStatus
+  value: string
+  detail: string
+  page: string
+  fix_hint: string
+}
+
+export interface PipelineInbound {
+  host_id: string
+  listen: string
+  port: number
+  allow_lan: boolean
+}
+
+export interface PipelineOutbound {
+  host_ids: string[]
+  mode: 'select' | 'url-test' | 'fallback'
+  direct_fallback: boolean
+}
+
+export interface PipelineConfig {
+  id: string
+  name: string
+  kernel: string
+  protocol: string
+  inbound: PipelineInbound
+  outbound: PipelineOutbound
+  rule_set_ids: string[]
+  dns_enabled: boolean
+  user_ids: string[]
+  enabled: boolean
+  test_target: string
+  updated_at: string
+}
+
+export interface PipelineView {
+  config: PipelineConfig
+  steps: PipelineStep[]
+  blocked: boolean
+  warning_count: number
+  store_path: string
+}
+
+export interface PipelineValidateResult {
+  steps: PipelineStep[]
+  blocked: boolean
+  blocking_step: PipelineStep | null
+}
+
+export interface PipelineApplyResult {
+  ok: boolean
+  kernel?: string
+  restarted?: boolean
+  steps?: PipelineStep[]
+  warnings?: string[]
+  listen?: string
+  error?: string
+}
+
+export interface PipelineTestResult {
+  ok: boolean
+  listen: string
+  target: string
+  latency_ms?: number
+  message: string
+  error?: string
+}
+
+export const getPipeline = () => get<PipelineView>('/pipeline')
+export const savePipeline = (cfg: PipelineConfig) =>
+  put<{ ok: boolean; config: PipelineConfig; view: PipelineView }>('/pipeline', cfg)
+export const validatePipeline = () => post<PipelineValidateResult>('/pipeline/validate', {})
+export const renderPipeline = () =>
+  post<{ ok: boolean; content: string; warnings: string[]; lines: number }>('/pipeline/render', {})
+export const applyPipeline = () => post<PipelineApplyResult>('/pipeline/apply', {})
+export const testPipeline = (target?: string) =>
+  post<PipelineTestResult>('/pipeline/test', target ? { target } : {})

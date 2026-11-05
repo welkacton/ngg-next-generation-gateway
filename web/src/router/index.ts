@@ -81,6 +81,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '用户管理' },
   },
   {
+    path: '/pipeline',
+    name: 'pipeline',
+    component: () => import('../views/Pipeline.vue'),
+    meta: { title: '链路编排' },
+  },
+  {
     path: '/protocols',
     name: 'protocols',
     component: () => import('../views/Protocols.vue'),

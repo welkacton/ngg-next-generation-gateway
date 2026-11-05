@@ -16,8 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ngg-project/ngg/internal/auth"
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
+	"github.com/ngg-project/ngg/internal/pipeline"
 	"github.com/ngg-project/ngg/internal/profiles"
 	"github.com/ngg-project/ngg/internal/protocols"
 	"github.com/ngg-project/ngg/internal/rulesets"
@@ -37,6 +39,8 @@ type Server struct {
 	githubIndex  *rulesets.GitHubIndex
 	installs     *installManager
 	sampler      *metricsSampler
+	auth         *auth.Store
+	pipeline     *pipeline.Store
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -63,6 +67,20 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 		githubIndex: rulesets.NewGitHubIndex(dataDir, gitToken),
 		installs:    newInstallManager(),
 	}
+	// 单管理员登录：首次打开需要手动创建账号，之后只有登录窗口。
+	authStore := auth.NewStore(dataDir)
+	if err := authStore.Load(); err != nil {
+		log.Printf("auth store unavailable: %v", err)
+		authStore = nil
+	}
+	s.auth = authStore
+	// 链路编排：协议/入口/规则/DNS/出口/用户 六段串成一条可执行链路。
+	pipeStore := pipeline.NewStore(dataDir)
+	if err := pipeStore.Load(); err != nil {
+		log.Printf("pipeline store unavailable: %v", err)
+		pipeStore = nil
+	}
+	s.pipeline = pipeStore
 	s.hub = newWSHub(eng)
 	// Real traffic history for the Network Overview console. Started only once
 	// per daemon and stopped together with the HTTP server.
@@ -98,6 +116,21 @@ func (s *Server) Shutdown() error {
 
 func (s *Server) routes() {
 	m := s.mux
+	// 认证：state/setup/login 必须免鉴权，其余走会话 Cookie。
+	m.HandleFunc("GET /api/v1/auth/state", s.handleAuthState)
+	m.HandleFunc("POST /api/v1/auth/setup", s.handleAuthSetup)
+	m.HandleFunc("POST /api/v1/auth/login", s.handleAuthLogin)
+	m.HandleFunc("POST /api/v1/auth/logout", s.handleAuthLogout)
+	m.HandleFunc("POST /api/v1/auth/password", s.handleAuthPassword)
+
+	// 配置引擎 · 链路编排（把所有二级配置串成一条可执行代理链路）
+	m.HandleFunc("GET /api/v1/pipeline", s.handlePipelineGet)
+	m.HandleFunc("PUT /api/v1/pipeline", s.handlePipelinePut)
+	m.HandleFunc("POST /api/v1/pipeline/validate", s.handlePipelineValidate)
+	m.HandleFunc("POST /api/v1/pipeline/render", s.handlePipelineRender)
+	m.HandleFunc("POST /api/v1/pipeline/apply", s.handlePipelineApply)
+	m.HandleFunc("POST /api/v1/pipeline/test", s.handlePipelineTest)
+
 	m.HandleFunc("GET /api/v1/system", s.handleSystem)
 	m.HandleFunc("GET /api/v1/health", s.handleHealth)
 
@@ -148,6 +181,12 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/network/global/status", s.handleGlobalStatus)
 	m.HandleFunc("POST /api/v1/network/global/attach", s.handleGlobalAttach)
 	m.HandleFunc("POST /api/v1/network/global/detach", s.handleGlobalDetach)
+
+	// TUN 虚拟网卡：下载/校验签名驱动、创建与销毁网卡
+	m.HandleFunc("POST /api/v1/network/tun/driver/install", s.handleTunDriverInstall)
+	m.HandleFunc("GET /api/v1/network/tun/status", s.handleTunStatus)
+	m.HandleFunc("POST /api/v1/network/tun/attach", s.handleTunAttach)
+	m.HandleFunc("POST /api/v1/network/tun/detach", s.handleTunDetach)
 	m.HandleFunc("POST /api/v1/network/start", s.handleNetworkStart)
 	m.HandleFunc("POST /api/v1/network/stop", s.handleNetworkStop)
 	m.HandleFunc("GET /api/v1/network/config", s.handleNetworkConfig)
@@ -298,10 +337,11 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 				writeErr(w, http.StatusForbidden, "NGG control API is local-only")
 				return
 			}
-			token := bearerToken(r)
-			if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Server.Token)) != 1 {
-				writeErr(w, http.StatusUnauthorized, "missing or invalid API token")
-				return
+			if !isAuthPath(r.URL.Path) {
+				if _, ok := s.authenticated(r); !ok {
+					writeErr(w, http.StatusUnauthorized, "未登录或会话已过期")
+					return
+				}
 			}
 		}
 		next.ServeHTTP(w, r)
@@ -318,6 +358,14 @@ func bearerToken(r *http.Request) string {
 		return r.URL.Query().Get("token")
 	}
 	return ""
+}
+
+// subtleEqual compares two secrets without leaking their length distribution.
+func subtleEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func isLoopback(host string) bool {

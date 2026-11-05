@@ -31,6 +31,10 @@ const { isBusy, run } = useApiAction()
 
 const status = ref<NetworkStatus | null>(null)
 const globalStatus = ref<api.GlobalTakeoverResult | null>(null)
+const tunStatus = ref<api.TunStatusResult | null>(null)
+const tunRouteAll = ref(false)
+const driverMsg = ref('')
+const driverError = ref('')
 const sessions = ref<NetworkSession[]>([])
 const endpoints = ref<NetworkEndpoint[]>([])
 const selftestResult = ref<unknown>(null)
@@ -84,6 +88,58 @@ async function loadGlobal() {
   const d = await run('global', () => api.getGlobalStatus())
   if (d) globalStatus.value = d
 }
+async function refreshTun() {
+  try {
+    tunStatus.value = await api.getTunStatus()
+  } catch {
+    // 网络引擎未初始化时保持上一次已知状态，不伪造
+  }
+}
+
+async function installDriver() {
+  driverMsg.value = ''
+  driverError.value = ''
+  const r = await run('tun-driver', () => api.installTunDriver())
+  if (r) {
+    driverMsg.value = r.driver?.message || '驱动已就绪'
+    await refreshTun()
+    await loadGlobal()
+  }
+}
+
+async function attachTunAction() {
+  driverError.value = ''
+  const r = await run(
+    'tun-attach',
+    () => api.attachTun(tunRouteAll.value),
+    tunRouteAll.value ? 'TUN 网卡已创建并接管默认路由' : 'TUN 网卡已创建（未改动默认路由）',
+  )
+  if (r) {
+    await refreshTun()
+    await loadGlobal()
+  }
+}
+
+async function detachTunAction() {
+  const r = await run('tun-detach', () => api.detachTun(), '已销毁 TUN 网卡并恢复路由')
+  if (r) {
+    await refreshTun()
+    await loadGlobal()
+  }
+}
+
+function tunBytes(v?: number): string {
+  if (v === undefined || v === null) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let n = Number(v)
+  let i = 0
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024
+    i += 1
+  }
+  return `${i === 0 ? Math.round(n) : n.toFixed(2)} ${units[i]}`
+}
+
 async function attachGlobal() {
   const r = await run('attach', () => api.attachGlobalProxy(), '系统代理已接管，本机流量将走 NGG 入口')
   if (r) await loadGlobal()
@@ -95,6 +151,7 @@ async function detachGlobal() {
 
 function refreshAll() {
   loadGlobal()
+  refreshTun()
   refreshStatus()
   refreshSessions()
   refreshEndpoints()
@@ -216,22 +273,122 @@ onUnmounted(() => {
           </div>
         </NGi>
         <NGi>
-          <div class="proto-sec-title">TUN 虚拟网卡</div>
+          <div class="proto-sec-title">TUN 虚拟网卡（NGG 独占）</div>
           <div class="hint" style="margin-top: 6px">
-            创建虚拟网卡需要已签名的 wintun / TAP 驱动与管理员权限。NGG 只上报真实检测结果，
-            不会伪造一个不存在的网卡。
+            由 NGG 自己创建并驱动 wintun 网卡，TCP 流量经用户态协议栈进入统一调度器，
+            与 SOCKS5 入口共用同一套规则与出口选择。
           </div>
-          <div class="hint" style="margin-top: 8px">
-            平台 {{ globalStatus?.tun?.os || '—' }} ·
-            管理员 {{ globalStatus?.tun?.admin ? '是' : '否' }} ·
-            支持 TUN {{ globalStatus?.tun?.tun_supported ? '是' : '否' }}
+
+          <div class="tun-grid">
+            <div class="tun-cell">
+              <span class="tun-label">平台 / 管理员</span>
+              <span class="tun-value">
+                {{ tunStatus?.capabilities?.os || globalStatus?.tun?.os || '—' }} ·
+                {{ (tunStatus?.capabilities?.admin ?? globalStatus?.tun?.admin) ? '已提权' : '标准用户' }}
+              </span>
+            </div>
+            <div class="tun-cell">
+              <span class="tun-label">wintun 驱动</span>
+              <span class="tun-value">
+                <NTag
+                  size="tiny"
+                  :bordered="false"
+                  :type="(tunStatus?.capabilities?.driver?.present ?? !!globalStatus?.tun?.wintun_dll) ? 'success' : 'warning'"
+                >
+                  {{ (tunStatus?.capabilities?.driver?.present ?? !!globalStatus?.tun?.wintun_dll) ? '已就位' : '未安装' }}
+                </NTag>
+                <span class="mono" style="margin-left: 6px">
+                  {{ tunStatus?.capabilities?.driver?.version ? 'v' + tunStatus.capabilities.driver.version : '' }}
+                </span>
+                <NTag
+                  v-if="tunStatus?.capabilities?.driver?.present"
+                  size="tiny"
+                  :bordered="false"
+                  :type="tunStatus.capabilities.driver.signed ? 'success' : 'error'"
+                  style="margin-left: 6px"
+                >
+                  {{ tunStatus.capabilities.driver.signed ? '签名有效' : '签名无效' }}
+                </NTag>
+              </span>
+            </div>
+            <div class="tun-cell">
+              <span class="tun-label">网卡状态</span>
+              <span class="tun-value">
+                <NTag
+                  size="tiny"
+                  :bordered="false"
+                  :type="(tunStatus?.adapter?.open ?? globalStatus?.tun?.adapter?.open) ? 'success' : 'default'"
+                >
+                  {{ (tunStatus?.adapter?.open ?? globalStatus?.tun?.adapter?.open) ? '已创建' : '未创建' }}
+                </NTag>
+                <span v-if="tunStatus?.adapter?.open" class="mono" style="margin-left: 6px">
+                  {{ tunStatus.adapter.adapter }} · {{ tunStatus.adapter.ipv4 }}
+                </span>
+              </span>
+            </div>
+            <div class="tun-cell">
+              <span class="tun-label">默认路由</span>
+              <span class="tun-value">
+                {{ (tunStatus?.adapter?.route_all ?? globalStatus?.tun?.adapter?.route_all) ? '已接管 0.0.0.0/0' : '未接管（仅网卡内路由）' }}
+              </span>
+            </div>
           </div>
-          <div class="hint">wintun.dll：{{ globalStatus?.tun?.wintun_dll || '未找到' }}</div>
-          <div v-if="globalStatus?.tun?.reason" class="hint" style="color: #b32442">
-            {{ globalStatus.tun.reason }}
+
+          <NSpace align="center" :size="8" :wrap="true" style="margin-top: 10px">
+            <NButton
+              size="small"
+              :type="tunStatus?.capabilities?.driver?.present ? 'default' : 'primary'"
+              :loading="isBusy('tun-driver')"
+              :disabled="isBusy('tun-attach')"
+              @click="installDriver"
+            >
+              {{ tunStatus?.capabilities?.driver?.present ? '重新校验驱动' : '下载并安装驱动' }}
+            </NButton>
+            <NButton
+              size="small"
+              type="primary"
+              :loading="isBusy('tun-attach')"
+              :disabled="isBusy('tun-driver')"
+              @click="attachTunAction"
+            >
+              创建网卡
+            </NButton>
+            <NButton
+              size="small"
+              :loading="isBusy('tun-detach')"
+              :disabled="!(tunStatus?.adapter?.open ?? globalStatus?.tun?.adapter?.open)"
+              @click="detachTunAction"
+            >
+              销毁网卡
+            </NButton>
+            <span class="tun-switch">
+              <NSwitch v-model:value="tunRouteAll" size="small" />
+              <span>同时接管默认路由</span>
+            </span>
+          </NSpace>
+
+          <div v-if="driverMsg" class="hint" style="margin-top: 8px; color: #1f7a3a">{{ driverMsg }}</div>
+          <div v-if="driverError" class="hint" style="margin-top: 8px; color: #b32442">{{ driverError }}</div>
+          <div
+            v-if="tunStatus?.capabilities?.reason || globalStatus?.tun?.reason"
+            class="hint"
+            style="margin-top: 8px; color: #b26a00"
+          >
+            {{ tunStatus?.capabilities?.reason || globalStatus?.tun?.reason }}
           </div>
-          <div v-if="globalStatus?.tun?.virtual_adapters?.length" class="hint">
-            已检测到虚拟网卡：{{ globalStatus.tun.virtual_adapters.join('、') }}
+
+          <div v-if="tunStatus?.adapter?.open" class="tun-stats">
+            <div><span>协议栈</span><strong>{{ tunStatus.adapter.stack }}</strong></div>
+            <div><span>MTU</span><strong>{{ tunStatus.adapter.mtu }}</strong></div>
+            <div><span>活动会话</span><strong>{{ tunStatus.adapter.stats?.sessions ?? 0 }}</strong></div>
+            <div><span>下行 / 上行</span><strong>{{ tunBytes(tunStatus.adapter.stats?.bytes_in) }} / {{ tunBytes(tunStatus.adapter.stats?.bytes_out) }}</strong></div>
+            <div><span>收 / 发 包</span><strong>{{ tunStatus.adapter.stats?.packets_in ?? 0 }} / {{ tunStatus.adapter.stats?.packets_out ?? 0 }}</strong></div>
+            <div><span>创建时间</span><strong>{{ tunStatus.adapter.since ? new Date(tunStatus.adapter.since).toLocaleString('zh-CN') : '—' }}</strong></div>
+          </div>
+
+          <div v-if="tunStatus?.capabilities?.virtual_adapters?.length || globalStatus?.tun?.virtual_adapters?.length" class="hint" style="margin-top: 8px">
+            本机其它虚拟网卡（仅供参考，不会被 NGG 接管）：
+            {{ (tunStatus?.capabilities?.virtual_adapters || globalStatus?.tun?.virtual_adapters || []).join('、') }}
           </div>
         </NGi>
       </NGrid>

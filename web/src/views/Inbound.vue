@@ -1,8 +1,12 @@
 <script setup lang="ts">
+import ChainStrip from '../components/ChainStrip.vue'
 import HostManager from '../components/HostManager.vue'
 </script>
 
 <template>
+  <div style="padding: 16px 24px 0">
+    <ChainStrip current="inbound" />
+  </div>
   <HostManager
     role="inbound"
     title="入口节点"

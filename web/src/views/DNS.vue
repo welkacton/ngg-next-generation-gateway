@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChainStrip from '../components/ChainStrip.vue'
 import { computed, onMounted, ref } from 'vue'
 import {
   NAlert,
@@ -140,6 +141,7 @@ onMounted(refreshAll)
 
 <template>
   <div class="page">
+    <ChainStrip current="dns" />
     <div class="page-head">
       <div>
         <h2 class="page-title">DNS配置</h2>

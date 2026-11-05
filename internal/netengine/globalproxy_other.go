@@ -58,3 +58,8 @@ func (e *Engine) TunCapabilities() map[string]any {
 		"note":             "Linux TUN 需要 /dev/net/tun 与 CAP_NET_ADMIN；其余平台使用用户态 ingress。",
 	}
 }
+
+// InstallWintun is Windows-only: other platforms use the kernel TUN.
+func InstallWintun(_ context.Context) (map[string]any, error) {
+	return nil, fmt.Errorf("%w: 当前平台不需要 wintun 驱动", ErrTUNUnsupported)
+}

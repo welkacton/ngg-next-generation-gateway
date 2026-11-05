@@ -1,11 +1,11 @@
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onUnmounted, ref } from 'vue'
 import { buildWsUrl } from '../api/client'
 import type { GatewayEvent } from '../api/ngg'
 
 /**
  * 订阅 /api/v1/ws 事件流。
  * - 断线后按指数退避（1s → 2s → 4s … 上限 30s）自动重连
- * - token 变更（ngg-token-change 事件）时立即用新 token 重连
+ * - 登录成功后由 App 调用 start()，退出登录时调用 stop()
  * - 组件卸载时关闭连接，避免重复连接
  */
 export function useWebSocket(onEvent: (event: GatewayEvent) => void) {
@@ -90,6 +90,15 @@ export function useWebSocket(onEvent: (event: GatewayEvent) => void) {
     connect()
   }
 
+  /** start 由登录成功后的管理台调用：未登录时不应建立连接。 */
+  function start(): void {
+    if (socket) return
+    disposed = false
+    clearTimer()
+    retryCount = 0
+    connect()
+  }
+
   function stop(): void {
     disposed = true
     clearTimer()
@@ -97,16 +106,9 @@ export function useWebSocket(onEvent: (event: GatewayEvent) => void) {
     connected.value = false
   }
 
-  onMounted(() => {
-    disposed = false
-    connect()
-    window.addEventListener('ngg-token-change', reconnect)
-  })
-
   onUnmounted(() => {
     stop()
-    window.removeEventListener('ngg-token-change', reconnect)
   })
 
-  return { connected, lastError, reconnect }
+  return { connected, lastError, reconnect, start, stop }
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChainStrip from '../components/ChainStrip.vue'
 /**
  * 配置引擎 · 用户管理
  *
@@ -333,6 +334,7 @@ onMounted(refresh)
 
 <template>
   <div class="page">
+    <ChainStrip current="users" />
     <div class="page-head">
       <div>
         <h2 class="page-title">用户管理</h2>

@@ -464,3 +464,74 @@ func (s *Server) handleGlobalDetach(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy": ne.GlobalProxyStatus()})
 }
+
+// ------------------------------------------------------------ TUN 虚拟网卡 ---
+
+// POST /network/tun/driver/install — downloads + verifies the official signed
+// wintun build and places wintun.dll next to nggd.exe.
+func (s *Server) handleTunDriverInstall(w http.ResponseWriter, r *http.Request) {
+	res, err := netengine.InstallWintun(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	out := map[string]any{"ok": true, "driver": res}
+	if ne := s.engine.Network(); ne != nil {
+		out["capabilities"] = ne.TunCapabilities()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GET /network/tun/status
+func (s *Server) handleTunStatus(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"adapter":      ne.TUNStatus(),
+		"capabilities": ne.TunCapabilities(),
+		"running":      ne.IsRunning(),
+	})
+}
+
+// POST /network/tun/attach {"route_all":bool}
+func (s *Server) handleTunAttach(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	var body struct {
+		RouteAll bool `json:"route_all"`
+	}
+	if r.ContentLength > 0 {
+		if err := decodeJSON(r, &body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	if err := ne.AttachTUN(r.Context(), body.RouteAll); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "adapter": ne.TUNStatus(), "route_all": body.RouteAll,
+		"message": "TUN 虚拟网卡已由 NGG 创建，TCP 流量进入统一调度器",
+	})
+}
+
+// POST /network/tun/detach
+func (s *Server) handleTunDetach(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	if err := ne.DetachTUN(r.Context()); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "adapter": ne.TUNStatus()})
+}

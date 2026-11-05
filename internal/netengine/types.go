@@ -18,7 +18,7 @@ var (
 	ErrFailClosed      = errors.New("fail-closed: no valid execution path, connection dropped")
 	ErrLoopDetected    = errors.New("traffic loop detected: destination is an NGG/kernel listener")
 	ErrKernelDown      = errors.New("selected kernel has no healthy local endpoint")
-	ErrTUNUnsupported  = errors.New("unified TUN requires Linux with /dev/net/tun and CAP_NET_ADMIN")
+	ErrTUNUnsupported  = errors.New("当前环境无法创建统一 TUN")
 	ErrIngressInsecure = errors.New("non-loopback ingress requires authentication")
 )
 

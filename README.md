@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.5.0
+### 🏷️ Generation 2 / 第二代 · Release v2.6.0
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -26,10 +26,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.3.0 | 远程主机节点控制台 + 发布流程 | **入口节点 / 出口节点两页全部清空重建**：以「任意 VPS / 电脑 / 软路由」为主体的节点库，统计卡条 + 节点卡片 + 两栏详情抽屉，节点可随时改判为入站 / 出站 / 双向；在线状态来自后端真实 TCP 探测，未采集的 CPU / 内存 / 单节点流量一律显示「未采集」；新增 `/api/v1/hosts` 系列端点与 `internal/hosts` 注册表；内核管理按钮改为状态驱动（点启动后蓝色熄灭、红色跳到停止）；新增 `scripts/release.mjs` + `scripts/sync-client.ps1`，**每次修改强制同步客户端并递增版本号** |
 
 | Gen 2 增补 | v2.4.0 | 网络概览 + GitHub Release 上架 | 「概览」改名**系统概览**，新增 **网络概览**（Apple HIG 风格）：实时速率 Hero、下载/上传 KPI、纯 SVG 双系列流量面积图（速率 / 累计 / 连接三种视图、5/15/30 分钟窗口）、连接与策略、统一网络引擎状态；后端新增 `/network/metrics/history` 真实 2 秒采样（速率 = 真实计数差 ÷ 真实时间差，未运行不伪造曲线），并修复 `relay()` 把双向字节都记到 `BytesOut` 导致下载流量恒为 0 的缺陷；版本由 `scripts/release.mjs` 同步到仓库并打包上架 GitHub Release |
-| **Gen 2（当前）** | **v2.5.0** | 接管全局 + 用户管理 | 系统更新去掉 GitHub Token，公开仓库自动检查/下载/应用；「网络引擎」改名**接管全局**并移入配置引擎（DNS 配置下方），新增 Windows 系统代理一键接管与解除（真实写 HKCU/Internet Settings 并广播，解除恢复原代理）、TUN 真实能力检测（管理员 / wintun.dll / 已装虚拟网卡，无能力时如实说明不伪造网卡）；**删除多租户**，在出口节点下新增**用户管理**（统计条 + 用户表 + 详情抽屉，Active/Expired/Limited/Disabled 由 enabled/到期/配额实时推导，用量只由数据面累加）；修复规则集与版本列表的长文本覆盖「操作」列，并加全局单元格裁切防御 |
+| Gen 2 增补 | v2.5.0 | 接管全局 + 用户管理 | 系统更新去掉 GitHub Token，公开仓库自动检查/下载/应用；「网络引擎」改名**接管全局**并移入配置引擎（DNS 配置下方），新增 Windows 系统代理一键接管与解除（真实写 HKCU/Internet Settings 并广播，解除恢复原代理）、TUN 真实能力检测（管理员 / wintun.dll / 已装虚拟网卡，无能力时如实说明不伪造网卡）；**删除多租户**，在出口节点下新增**用户管理**（统计条 + 用户表 + 详情抽屉，Active/Expired/Limited/Disabled 由 enabled/到期/配额实时推导，用量只由数据面累加）；修复规则集与版本列表的长文本覆盖「操作」列，并加全局单元格裁切防御 |
+| **Gen 2（当前）** | **v2.6.0** | 登录门禁 + 链路编排 + 真 TUN | 新增单管理员登录：首次打开必须手动创建账号（Argon2id / HttpOnly 会话 / 失败锁定），之后只有登录窗口，浏览器不再保存任何 API Token；配置引擎新增**链路编排**（协议 → 入口 → 规则 → DNS → 出口 → 用户 六段串联，真实校验、渲染 mihomo 配置、原生校验后热替换、SOCKS5 端到端真连测试），各二级页加入链路导航条；Windows **TUN 虚拟网卡彻底跑通**：自动下载并 SHA-256 + Authenticode 双重校验官方签名 wintun.dll，由 NGG 独占创建网卡并用 gVisor 用户态协议栈把 TCP 流量接入统一调度器，可选接管默认路由 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.5.0`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.6.0`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -119,8 +120,8 @@ VPS 专属手册见 **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)**，Windows 专
 make backend            # 生成 bin/nggd
 ./bin/nggd -config configs/ngg.yaml
 
-# 首次启动会打印自动生成的 API Token 并写回 configs/ngg.yaml
-# 用 http://127.0.0.1:9090/?token=<TOKEN> 打开管理界面完成一次性绑定
+# 打开 http://127.0.0.1:9090/ —— 首次会要求手动创建管理员账号（Argon2id），
+# 之后每次打开只是登录窗口。脚本仍可用 configs/ngg.yaml 里的静态 Token 调 API。
 
 # 前端
 make frontend           # npm install && npm run build → web/dist

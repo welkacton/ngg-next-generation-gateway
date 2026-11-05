@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.5.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.6.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.5.0），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.6.0），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -539,3 +539,82 @@ curl -H "$H" "$BASE/network/metrics/history?minutes=5"
 #  "samples":[{"ts":...,"bytes_in":39849802,"bytes_out":1653,
 #              "rate_in":8388608,"rate_out":350,...}],"note":""}
 ```
+
+## 13. 认证 `/api/v1/auth`（v2.6.0，登录门禁）
+
+控制台不再使用浏览器端 API Token：首次打开必须手动创建管理员，之后只有登录窗口。
+凭据以 Argon2id（m=64 MiB, t=3, p=2，随机盐）存于 `<data>/auth.json`（0600），
+会话令牌为 32 字节随机串，磁盘上只保存其 SHA-256。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/auth/state` | 免鉴权。返回 `setup_required / authenticated / username / policy` |
+| POST | `/auth/setup` | 免鉴权，**只能成功一次**：`{username,password}`，成功后直接下发会话 Cookie（201） |
+| POST | `/auth/login` | `{username,password,remember}`，5 次失败锁定 60 秒（429） |
+| POST | `/auth/logout` | 吊销当前会话并清 Cookie |
+| POST | `/auth/password` | `{old_password,new_password}`；改密会吊销全部会话 |
+
+```bash
+# 首次创建管理员（只需一次）
+curl -c jar.txt -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"your-strong-password"}' \
+  http://127.0.0.1:9090/api/v1/auth/setup
+
+# 之后所有请求带上会话 Cookie
+curl -b jar.txt http://127.0.0.1:9090/api/v1/system
+```
+
+除 `/auth/*` 外的所有 `/api/*` 都要求「会话 Cookie 或 `Authorization: Bearer <ngg.yaml 的 token>`」，
+且仍然只接受回环地址。静态前端资源不需要认证，否则登录页无法加载。
+
+## 14. 链路编排 `/api/v1/pipeline`（v2.6.0）
+
+把配置引擎六个二级页面串成一条可执行代理链路，顺序固定：
+
+```
+协议配置 → 入口节点 → 规则配置 → DNS配置 → 出口节点 → 用户管理
+```
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/pipeline` | 当前链路 + 六段校验结果（`steps[]`，含 `status/value/detail/fix_hint/page`） |
+| PUT | `/pipeline` | 保存链路参数（端口/策略/引用 id 会做真实校验，非法返回 422） |
+| POST | `/pipeline/validate` | 重新校验（可传 `{config}` 做 dry-run） |
+| POST | `/pipeline/render` | 返回生成的 mihomo YAML 与告警，不落盘 |
+| POST | `/pipeline/apply` | 校验 → 渲染 → `mihomo -t` 原生校验 → 备份替换 → 重启内核 |
+| POST | `/pipeline/test` | 真实 SOCKS5 CONNECT（默认目标 `www.gstatic.com:80`，可传 `{target}`） |
+
+链路顺序与语义：
+
+1. 客户端 → 入口 `listen:port`（mixed = SOCKS5 + HTTP）
+2. 若选了入口节点：`dialer-proxy` 先连入口 VPS
+3. 出口节点：`select / url-test / fallback` 策略组
+4. 规则命中 `DIRECT / REJECT` 时提前分流，未命中走 `MATCH` 到出口组
+5. 出口为空时链路直连（会在校验里给出 warn）
+
+`direct_fallback` 只在 `select` 模式下生效——自动测速模式下把 `DIRECT` 放进组里会被延迟胜出，
+等于绕过 VPS，所以代码层面禁止。
+
+## 15. TUN 虚拟网卡 `/api/v1/network/tun`（v2.6.0）
+
+Windows 上由 NGG 独占创建 wintun 网卡，并用 gVisor 用户态协议栈把 TCP 流量接入统一调度器；
+Linux 使用内核 TUN + 独立路由表。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/network/tun/status` | 网卡真实状态、驱动签名信息、计数（收发包 / 字节 / 会话） |
+| POST | `/network/tun/driver/install` | 下载官方 wintun 包 → 校验 SHA-256 → 解压 → Authenticode 校验 → 放到 `nggd.exe` 同目录 |
+| POST | `/network/tun/attach` | `{route_all:false}` 创建网卡；`true` 时额外接管 `0.0.0.0/0` |
+| POST | `/network/tun/detach` | 移除路由、销毁网卡 |
+
+驱动来源固定为 `https://www.wintun.net/builds/wintun-0.14.1.zip`，
+SHA-256 `07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51`，
+解压后还会用 `WinVerifyTrust` 校验 Authenticode（WireGuard LLC）。NGG 不随包分发该 DLL（GPL-2.0）。
+
+前置条件（后端会如实上报，不满足时拒绝创建而不是伪造网卡）：
+
+- 进程具备提升令牌（Windows 服务以 LocalSystem 运行即满足）
+- `wintun.dll` 与 `nggd.exe` 同目录（点一次「下载并安装驱动」即可）
+
+UDP 处理策略：`53/tcp` 之外的 UDP 默认丢弃（TCP-only 调度器无法代理，直发又会绕过隧道），
+DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可用。

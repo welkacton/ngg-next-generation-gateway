@@ -30,6 +30,12 @@ type TunManager interface {
 	Read(ctx context.Context, buf []byte) (int, error)
 	Write(ctx context.Context, p []byte) (int, error)
 	Stats() TunStats
+	// AttachEngine hands the packet path to the connection dispatcher.
+	AttachEngine(e *Engine)
+	// Status reports real adapter state for the console.
+	Status() map[string]any
+	// SetDefaultRoute flips 0.0.0.0/0 onto the adapter (or restores it).
+	SetDefaultRoute(enable bool) error
 }
 
 type TunConfig struct {

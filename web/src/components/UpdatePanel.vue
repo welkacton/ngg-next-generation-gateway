@@ -15,7 +15,6 @@ import type {
   UpdateApplyResult,
   UpdateStatus,
 } from '../api/ngg'
-import { getToken } from '../api/client'
 import { useApiAction } from '../composables/useApi'
 
 const props = defineProps<{
@@ -141,7 +140,7 @@ async function waitForRestart(targetTag: string): Promise<boolean> {
     await sleep(2000)
     try {
       const res = await fetch('/api/v1/system', {
-        headers: { Authorization: `Bearer ${getToken()}` },
+        credentials: 'same-origin',
         cache: 'no-store',
       })
       if (!res.ok) continue

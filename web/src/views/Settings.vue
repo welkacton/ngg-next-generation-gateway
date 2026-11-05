@@ -7,32 +7,22 @@ import {
   NDataTable,
   NDescriptions,
   NDescriptionsItem,
-  NInput,
   NSpace,
   NTag,
 } from 'naive-ui'
 import { useCoresStore } from '../stores/cores'
-import { API_BASE, getToken, setToken } from '../api/client'
-import type { CoreDescriptor, PortAllocation } from '../api/ngg'
+import { API_BASE } from '../api/client'
+import type { AuthState, CoreDescriptor, PortAllocation } from '../api/ngg'
+import * as api from '../api/ngg'
 
 const store = useCoresStore()
-const tokenInput = ref(getToken())
-const tokenSet = ref(!!getToken())
 const backendTarget = 'http://127.0.0.1:9090'
 const origin = window.location.origin
+const authState = ref<AuthState | null>(null)
 
-function saveToken(): void {
-  setToken(tokenInput.value.trim())
-  tokenSet.value = !!getToken()
-  window.$message?.success('API Token 已保存，WebSocket 将使用新 Token 重连')
-}
-
-function clearToken(): void {
-  setToken('')
-  tokenInput.value = ''
-  tokenSet.value = false
-  window.$message?.warning('API Token 已清除，后续请求将不带认证头')
-}
+onMounted(() => {
+  api.getAuthState().then((s) => { authState.value = s }).catch(() => {})
+})
 
 function portRowKey(row: any): string {
   return String(row.core_id)
@@ -91,8 +81,7 @@ const registryColumns: any[] = [
     width: 120,
     render: (row: CoreDescriptor) =>
       h(
-        NTag,
-        { size: 'small', bordered: false, type: row.builtin ? 'info' : 'default' },
+              { size: 'small', bordered: false, type: row.builtin ? 'info' : 'default' },
         { default: () => (row.builtin ? '内置' : '描述文件') },
       ),
   },
@@ -124,28 +113,30 @@ onMounted(() => {
       </div>
     </div>
 
-    <NCard size="small" title="API Token" class="section-gap">
+    <NCard size="small" title="账号与认证" class="section-gap">
       <NSpace vertical :size="10" style="width: 100%">
         <div class="hint">
-          所有 REST 请求自动携带
-          <span class="mono">Authorization: Bearer &lt;token&gt;</span>，WebSocket 连接同样附带
-          <span class="mono">?token=</span>。首次使用请在下方填入后端配置的默认 Token，
-          Token 保存在浏览器 <span class="mono">localStorage.ngg_token</span>。
+          管理台使用 <strong>HttpOnly 会话 Cookie</strong> 认证：首次打开需要手动创建管理员账号，
+          之后每次打开都是登录窗口。浏览器不再保存任何 API Token。
         </div>
-        <NSpace align="center" :wrap="true" :size="10">
-          <NInput
-            v-model:value="tokenInput"
-            type="password"
-            show-password-on="click"
-            style="max-width: 460px"
-            placeholder="请输入后端配置的 API Token"
-          />
-          <NButton type="primary" size="small" @click="saveToken">保存</NButton>
-          <NButton size="small" @click="clearToken">清除</NButton>
-          <NTag :bordered="false" size="small" :type="tokenSet ? 'success' : 'warning'">
-            {{ tokenSet ? '已设置' : '未设置' }}
-          </NTag>
-        </NSpace>
+        <NDescriptions bordered :column="2" size="small" label-placement="left">
+          <NDescriptionsItem label="登录账号">
+            <span class="mono">{{ authState?.username || '—' }}</span>
+          </NDescriptionsItem>
+          <NDescriptionsItem label="首个管理员">
+            {{ authState?.setup_required ? '尚未创建' : '已创建' }}
+          </NDescriptionsItem>
+          <NDescriptionsItem label="会话有效期">
+            {{ authState ? `${Math.round(authState.policy.session_hours / 24)} 天 / 记住我 ${Math.round(authState.policy.remember_hours / 24)} 天` : '—' }}
+          </NDescriptionsItem>
+          <NDescriptionsItem label="口令存储">
+            Argon2id（64 MiB / 3 轮 / 2 线程，随机盐）
+          </NDescriptionsItem>
+        </NDescriptions>
+        <div class="hint">
+          修改密码与退出登录在右上角<strong>账号菜单</strong>中操作；改密会让所有已登录会话立即失效。
+          自动化脚本仍可使用 <span class="mono">ngg.yaml</span> 中的静态 Token 调用 REST API。
+        </div>
       </NSpace>
     </NCard>
 
@@ -219,7 +210,7 @@ onMounted(() => {
           <li><strong>Worker Mode</strong>：内核以独立 Worker 进程运行，由网关统一管理启停与生命周期。</li>
           <li><strong>资源隔离</strong>：每个内核拥有独立的二进制、配置、端口分配与资源统计。</li>
           <li><strong>仅本机访问</strong>：管理接口仅监听本机地址，不对外暴露。</li>
-          <li><strong>认证</strong>：所有接口使用 Bearer Token 认证，WebSocket 连接附带 token 查询参数。</li>
+          <li><strong>认证</strong>：控制台使用 HttpOnly 会话 Cookie（首次创建管理员，之后登录）；脚本可使用静态 API Token。</li>
           <li><strong>配置事务</strong>：备份 → 原生校验 → 原子替换，任一步失败自动保留原配置。</li>
           <li><strong>Phase 1 边界</strong>：统一 TUN / 规则引擎 / DNS 引擎属 Stage 2/3 预留。</li>
         </ul>

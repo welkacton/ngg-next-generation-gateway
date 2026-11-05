@@ -100,6 +100,8 @@ func NewEngine(cfg *Config, reg *core.Registry, ports core.PortAllocator, bus co
 		tun: NewTunDevice(), metrics: m,
 	}
 	e.ingress = newIngressServer(cfg.Ingress, e)
+	// The packet path must reach the same dispatcher as the SOCKS ingress.
+	e.tun.AttachEngine(e)
 	return e
 }
 
@@ -193,6 +195,50 @@ func (e *Engine) Start(ctx context.Context) error {
 	})
 	return nil
 }
+
+// AttachTUN creates the virtual adapter on demand (Windows) or on Linux, and
+// optionally moves the default route onto it.
+//
+// routeAll is deliberately a separate switch: flipping 0.0.0.0/0 onto a TUN
+// whose proxy chain is broken would cut the machine off the network.
+func (e *Engine) AttachTUN(ctx context.Context, routeAll bool) error {
+	if !e.IsRunning() {
+		return ErrNotRunning
+	}
+	if err := e.tun.Open(ctx, e.cfg.TUN); err != nil {
+		return err
+	}
+	if routeAll {
+		if err := e.tun.SetDefaultRoute(true); err != nil {
+			_ = e.tun.Close(ctx)
+			return fmt.Errorf("接管默认路由失败，已回滚网卡: %w", err)
+		}
+	}
+	e.mu.Lock()
+	e.tunStarted = true
+	e.mu.Unlock()
+	e.emit("tun.attached", e.tun.Status())
+	return nil
+}
+
+// DetachTUN restores the original routing and destroys the adapter.
+func (e *Engine) DetachTUN(ctx context.Context) error {
+	if err := e.tun.SetDefaultRoute(false); err != nil {
+		// Keep going: the route may not have been installed at all.
+		_ = err
+	}
+	if err := e.tun.Close(ctx); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.tunStarted = false
+	e.mu.Unlock()
+	e.emit("tun.detached", e.tun.Status())
+	return nil
+}
+
+// TUNStatus exposes the real adapter state (never a fabricated one).
+func (e *Engine) TUNStatus() map[string]any { return e.tun.Status() }
 
 func (e *Engine) rollback() {
 	_ = e.resources.Release("tun", e.cfg.TUN.Name)
