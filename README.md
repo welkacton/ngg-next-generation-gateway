@@ -4,9 +4,9 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.1.2
+### 🏷️ Generation 2 / 第二代 · Release v2.2.0
 
-**第二代 · 本地部署与统一控制台** — VPS / Windows 安装包、极简控制台、规则与规则集批量启停、仓库内更新栏
+**第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
 </div>
 
@@ -19,10 +19,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 首发 | v2.0.0 | 本地部署与统一控制台 | 多发行版 VPS 一键部署、公网/域名/SSL、Windows 原生服务安装包、极简 UI、规则与规则集批量启停、界面内仓库更新栏 |
 | Gen 2 增补 | v2.1.0 | 协议中心重构与全站字体 | 三大类全内核协议目录、配置生成可自定义编辑、自定义协议 JSON 编辑、协议批量启停、全站 SF Mono Nerd Font |
 | Gen 2 增补 | v2.1.1 | Web 端一键更新与交互优化 | 界面内填 GitHub Token（私有仓库）→「立即更新」一键完成检查/校验下载/重启/自动刷新；协议目录五类视图；精简表格列；点配置自动定位；取消冗余 params 与单条详情卡片 |
-| **Gen 2（当前）** | **v2.1.2** | 按内核的官方语法配置 | 目录只留 Mihomo / sing-box / Xray-core 三内核支持的加密协议（明文与普通代理移出目录）；按三份官方配置文档建立字段 schema，同一组可视化字段生成三种不同语法；两个编辑卡片合并为「可视化表单 + 带逐字段中文注释的代码编辑」 |
+| Gen 2 增补 | v2.1.2 | 按内核的官方语法配置 | 三内核协议目录、按三份官方文档建立字段 schema、可视化表单 + 带注释代码编辑 |
+| **Gen 2（当前）** | **v2.2.0** | 协议配置与 GitHub 规则集 | 「协议中心」改名**协议配置**：上半部只读纯文字协议目录（每 6 小时从三内核官方文档自动同步、可手动刷新）；下半部改为**配置文件卡片**（Default-Profile 等，点开按 6 个分区编辑协议内容/出站/入站/路由规则/DNS，带中文注释、语法校验、导出）；删除全部可视化表单与协议 JSON 编辑器；规则页新增**GitHub 规则集挂载**（一次发现 668+ 分类，批量侧挂载或自动导入全部分流规则） |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.1.2`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.2.0`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -35,19 +36,19 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 仓库当前为 `private`，只有仓库所有者授权账号可以 clone；部署到自己的服务器、电脑、NAS 或软路由时，
 请先用有权限的账号完成克隆或下载 Release 产物。若日后要共享，由所有者手动改为 Public。
 
-> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.1.2>
-> → `NGG-Setup-v2.1.2.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.1.2-windows-amd64.zip`
+> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.2.0>
+> → `NGG-Setup-v2.2.0.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.2.0-windows-amd64.zip`
 > （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
-| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.1.2 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.0 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
 | VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
 | VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
-| **Windows 安装程序** | 双击 `NGG-Setup-v2.1.2.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
+| **Windows 安装程序** | 双击 `NGG-Setup-v2.2.0.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
-| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.1.2` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
+| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.2.0` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
 `scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →
@@ -154,7 +155,7 @@ internal/core/             Core Adapter 接口、Core Registry、模块端口
 internal/adapters/         mihomo / xray / singbox / generic / builtin
 internal/engine/           Core Manager + 10 个模块 + Stage 4/5 编排
 internal/netengine/        Stage 2/3 统一网络引擎（TUN/入口/会话/规则/DNS/调度/桥接/出口）
-internal/protocols/        Stage 4 VPN / 加密代理协议中心
+internal/protocols/        三内核官方协议目录同步 + 按内核的配置语法生成
 internal/pq/               Stage 4 ML-KEM-768 混合后量子控制信道
 internal/plugins/          Stage 4 JS(goja) + WASM(wazero) 运行时
 internal/sdwan/            Stage 5 链路探测与选路
@@ -169,6 +170,9 @@ docs/                      架构 / API / 开发 / 安装 / 排障 / 路线图 /
 scripts/                   构建、开发、VPS 一键部署、端到端验收、平台内更新脚本
 internal/version/          代际与 Release 的单一事实来源
 internal/update/           GitHub Release 检查、SHA256 校验下载、更新交接
+internal/protocols/        官网协议目录同步器 + 三内核官方字段 schema
+internal/profiles/         可编辑配置文件（6 分区、按内核语法校验与合并）
+internal/rulesets/         规则集注册表 + GitHub 规则集目录发现与批量挂载
 deploy/                    systemd unit 与 Nginx 反向代理模板（手工部署参考）
 installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、构建脚本
 ```
@@ -192,7 +196,8 @@ installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、�
 | `docs/TUN-GLOBAL-TAKEOVER.md` | **TUN 一键全局接管**：代码级现状、为何现在做不到、P0~P4 实施计划与真实验收标准 |
 | `docs/GENERATIONS.md` | **版本代际**：Gen 1 / Gen 2 沿革、判定标准、代际在 GitHub 与界面上的显示位置 |
 | `docs/10-updates.md` | **系统更新栏**：`/update/*` 端点、自动/手动更新、SHA256 校验、平台更新脚本 |
-| `docs/11-protocol-center.md` | **协议中心**：三大类全内核协议目录、配置生成与自定义编辑、自定义协议 JSON、批量启停、全站字体说明 |
+| `docs/11-protocol-center.md` | **协议配置**：只读官网协议目录（定时同步）+ 可编辑配置文件卡片（6 分区、按内核官方语法、带注释与校验） |
+| `docs/12-github-rulesets.md` | **GitHub 规则集挂载**：一次发现 668+ 分流规则分类，批量侧挂载或自动导入实时规则表 |
 | `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
 | `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 

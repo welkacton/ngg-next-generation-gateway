@@ -72,7 +72,7 @@ const routes: RouteRecordRaw[] = [
     path: '/protocols',
     name: 'protocols',
     component: () => import('../views/Protocols.vue'),
-    meta: { title: '协议中心' },
+    meta: { title: '协议配置' },
   },
   {
     path: '/pq',

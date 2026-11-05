@@ -195,6 +195,18 @@
 | 53 | POST | `/protocols/{id}/enable` | 启用 / 禁用单条协议 | Stage 4 |
 | 54 | POST | `/protocols/{id}/config` | 生成并校验内核原生配置片段；`regenerate` 强制回内置模板 | Stage 4 |
 | 54a | PUT | `/protocols/{id}/config` | 保存编辑后的配置为该协议的覆盖模板 | Stage 4 |
+| 55 | GET | `/protocols/catalog` | **只读**协议名称目录（三内核官网定时同步）+ 同步状态；详见 `docs/11-protocol-center.md` | v2.2.0 |
+| 55a | POST | `/protocols/catalog/refresh` | 立即从三个内核官方文档同步最新协议清单 | v2.2.0 |
+| 56 | GET | `/profiles/options` | 配置文件：内核选项、六个分区定义、官方文档链接 | v2.2.0 |
+| 56a | GET / POST | `/profiles` | 配置文件卡片列表 / 新建 | v2.2.0 |
+| 56b | POST | `/profiles/template` | 取某内核带中文注释的起始模板（不落盘） | v2.2.0 |
+| 56c | POST | `/profiles/validate` | 逐段 + 合并后真实语法校验，返回完整配置文本 | v2.2.0 |
+| 56d | GET / PUT / DELETE | `/profiles/{id}` | 读取 / 更新 / 删除配置文件 | v2.2.0 |
+| 56e | POST | `/profiles/{id}/render` `…/duplicate` `…/activate` | 生成完整配置 / 复制 / 设为默认 | v2.2.0 |
+| 57 | GET | `/rulesets/github/presets` | 内置 GitHub 规则集预设仓库 | v2.2.0 |
+| 57a | GET | `/rulesets/github/catalog` | 已缓存的 GitHub 分流规则分类目录 | v2.2.0 |
+| 57b | POST | `/rulesets/github/catalog/refresh` | 真实抓取 git-trees 并重建分类目录 | v2.2.0 |
+| 57c | POST | `/rulesets/github/mount` | 批量 `mount` / `import` / `both`，逐分类返回真实识别条数与错误；详见 `docs/12-github-rulesets.md` | v2.2.0 |
 | 54b | DELETE | `/protocols/{id}/config` | 清除覆盖模板，恢复内置生成 | Stage 4 |
 | 55 | GET | `/pq/status` | 后量子套件信息与用途边界 | Stage 4 |
 | 56 | POST | `/pq/selftest` | 真实混合握手 + AEAD 往返自检 | Stage 4 |
@@ -221,12 +233,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.1.2", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.2.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.1.2），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.2.0），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`

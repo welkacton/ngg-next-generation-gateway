@@ -12,26 +12,54 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
+	"github.com/ngg-project/ngg/internal/profiles"
+	"github.com/ngg-project/ngg/internal/protocols"
+	"github.com/ngg-project/ngg/internal/rulesets"
 	"github.com/ngg-project/ngg/internal/update"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
 
 type Server struct {
-	cfg     *config.Config
-	engine  *engine.Engine
-	mux     *http.ServeMux
-	hub     *wsHub
-	http    *http.Server
-	updater *update.Checker
+	cfg          *config.Config
+	engine       *engine.Engine
+	mux          *http.ServeMux
+	hub          *wsHub
+	http         *http.Server
+	updater      *update.Checker
+	catalog      *protocols.CatalogSyncer
+	profileStore *profiles.Store
+	githubIndex  *rulesets.GitHubIndex
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
-	s := &Server{cfg: cfg, engine: eng, mux: http.NewServeMux(), updater: update.New(cfg.Storage.Dir)}
+	dataDir := cfg.Storage.Dir
+	gitToken := func() string {
+		for _, k := range []string{"NGG_GITHUB_TOKEN", "GITHUB_TOKEN"} {
+			if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	catalog := protocols.NewCatalogSyncer(dataDir, 6*time.Hour, gitToken)
+	store, err := profiles.NewStore(dataDir)
+	if err != nil {
+		// A read-only data dir must not take down the whole control plane;
+		// profile endpoints report a clear error instead of pretending to work.
+		log.Printf("profiles store unavailable: %v", err)
+		store = nil
+	}
+	s := &Server{
+		cfg: cfg, engine: eng, mux: http.NewServeMux(),
+		updater: update.New(dataDir), catalog: catalog, profileStore: store,
+		githubIndex: rulesets.NewGitHubIndex(dataDir, gitToken),
+	}
 	s.hub = newWSHub(eng)
 	s.routes()
 	s.http = &http.Server{
@@ -114,6 +142,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/rulesets", s.handleRuleSets)
 	m.HandleFunc("GET /api/v1/rulesets/formats", s.handleRuleSetFormats)
 	m.HandleFunc("POST /api/v1/rulesets/toggle", s.handleRuleSetsToggle)
+	m.HandleFunc("GET /api/v1/rulesets/github/presets", s.handleGitHubPresets)
+	m.HandleFunc("GET /api/v1/rulesets/github/catalog", s.handleGitHubCatalog)
+	m.HandleFunc("POST /api/v1/rulesets/github/catalog/refresh", s.handleGitHubCatalog)
+	m.HandleFunc("POST /api/v1/rulesets/github/mount", s.handleGitHubMount)
 	m.HandleFunc("POST /api/v1/rulesets/upload", s.handleRuleSetUpload)
 	m.HandleFunc("POST /api/v1/rulesets/{id}/fetch", s.handleRuleSetFetch)
 	m.HandleFunc("POST /api/v1/rulesets/{id}/apply", s.handleRuleSetApply)
@@ -147,6 +179,21 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/nodes/{id}", s.handleNodeByID)
 	m.HandleFunc("PUT /api/v1/nodes/{id}", s.handleNodeByID)
 	m.HandleFunc("DELETE /api/v1/nodes/{id}", s.handleNodeByID)
+
+	// 协议配置：官网协议目录（只读文字）+ 可编辑配置文件
+	m.HandleFunc("GET /api/v1/protocols/catalog", s.handleProtocolCatalog)
+	m.HandleFunc("POST /api/v1/protocols/catalog/refresh", s.handleProtocolCatalogRefresh)
+	m.HandleFunc("GET /api/v1/profiles/options", s.handleProfileOptions)
+	m.HandleFunc("POST /api/v1/profiles/validate", s.handleProfileValidate)
+	m.HandleFunc("POST /api/v1/profiles/template", s.handleProfileTemplate)
+	m.HandleFunc("GET /api/v1/profiles", s.handleProfiles)
+	m.HandleFunc("POST /api/v1/profiles", s.handleProfiles)
+	m.HandleFunc("GET /api/v1/profiles/{id}", s.handleProfileByID)
+	m.HandleFunc("PUT /api/v1/profiles/{id}", s.handleProfileByID)
+	m.HandleFunc("DELETE /api/v1/profiles/{id}", s.handleProfileByID)
+	m.HandleFunc("POST /api/v1/profiles/{id}/render", s.handleProfileByID)
+	m.HandleFunc("POST /api/v1/profiles/{id}/duplicate", s.handleProfileByID)
+	m.HandleFunc("POST /api/v1/profiles/{id}/activate", s.handleProfileByID)
 
 	// Stage 4: VPN protocol center / post-quantum / plugin runtime
 	m.HandleFunc("GET /api/v1/stages", s.handleStages)

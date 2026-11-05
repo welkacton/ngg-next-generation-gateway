@@ -730,6 +730,124 @@ export const generateProtocolConfig = (
   })
 
 /* ------------------------------------------------------------------ *
+ * 协议配置：官网协议目录（只读）+ 可编辑配置文件
+ * ------------------------------------------------------------------ */
+
+export interface CatalogProtocol {
+  slug: string
+  name: string
+  doc_url: string
+}
+
+export interface CatalogKernel {
+  kernel: string
+  label: string
+  site_url: string
+  source_url: string
+  protocols: CatalogProtocol[]
+  count: number
+  synced_at: string
+  from_cache: boolean
+  error?: string
+}
+
+export interface ProtocolCatalog {
+  kernels: CatalogKernel[]
+  synced_at: string
+  next_sync_at: string
+  interval_minutes: number
+  source: 'official-docs' | 'cache' | 'builtin'
+  stale: boolean
+  message: string
+}
+
+export interface ProfileSection {
+  key: string
+  label: string
+  hint: string
+  doc_url: string
+  content: string
+}
+
+export interface Profile {
+  id: string
+  name: string
+  kernel: string
+  format: string
+  description: string
+  enabled: boolean
+  default: boolean
+  sections: ProfileSection[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ProfileListResult {
+  profiles: Profile[]
+  active: string
+  total: number
+}
+
+export interface ProfileKernelOption {
+  kernel: string
+  label: string
+  format: string
+  doc_url: string
+}
+
+export interface ProfileOptions {
+  kernels: ProfileKernelOption[]
+  section_keys: string[]
+  section_defs: ProfileSection[]
+  doc_urls: Record<string, string>
+}
+
+export interface ProfileValidateResult {
+  ok: boolean
+  validated: boolean
+  content: string
+  format: string
+  message: string
+}
+
+export interface ProfileRenderResult {
+  ok: boolean
+  content: string
+  format: string
+  name: string
+  kernel: string
+}
+
+export interface ProfileMutationResult {
+  ok: boolean
+  profile: Profile
+}
+
+export const getProtocolCatalog = () => get<ProtocolCatalog>('/protocols/catalog')
+export const refreshProtocolCatalog = () =>
+  post<ProtocolCatalog>('/protocols/catalog/refresh', {})
+export const getProfileOptions = () => get<ProfileOptions>('/profiles/options')
+export const listProfiles = () => get<ProfileListResult>('/profiles')
+export const getProfile = (id: string) =>
+  get<Profile>(`/profiles/${encodeURIComponent(id)}`)
+export const createProfile = (p: Partial<Profile>) =>
+  post<ProfileMutationResult>('/profiles', p)
+export const updateProfile = (id: string, p: Partial<Profile>) =>
+  put<ProfileMutationResult>(`/profiles/${encodeURIComponent(id)}`, p)
+export const deleteProfile = (id: string) =>
+  del<GenericResult>(`/profiles/${encodeURIComponent(id)}`)
+export const getProfileTemplate = (kernel: string, name: string) =>
+  post<Profile>('/profiles/template', { kernel, name })
+export const validateProfile = (p: Partial<Profile>) =>
+  post<ProfileValidateResult>('/profiles/validate', p)
+export const duplicateProfile = (id: string, name: string) =>
+  post<ProfileMutationResult>(`/profiles/${encodeURIComponent(id)}/duplicate`, { name })
+export const activateProfile = (id: string) =>
+  post<GenericResult>(`/profiles/${encodeURIComponent(id)}/activate`, {})
+export const renderProfile = (id: string) =>
+  post<ProfileRenderResult>(`/profiles/${encodeURIComponent(id)}/render`, {})
+
+/* ------------------------------------------------------------------ *
  * 后量子 /pq
  * ------------------------------------------------------------------ */
 
@@ -1129,6 +1247,81 @@ export const updateRuleSet = (id: string, set: Partial<RuleSetDef>) =>
   put<GenericResult>(`/rulesets/${encodeURIComponent(id)}`, set)
 export const deleteRuleSet = (id: string) =>
   del<GenericResult>(`/rulesets/${encodeURIComponent(id)}`)
+
+/* ------------------------------------------------------------------ *
+ * GitHub 规则集：目录发现 + 批量挂载 / 导入
+ * ------------------------------------------------------------------ */
+
+export interface GitHubPreset {
+  repo: string
+  label: string
+  branch: string
+  formats: string[]
+  homepage: string
+  note: string
+}
+
+export interface GitHubCategory {
+  name: string
+  path: string
+  file: string
+  url: string
+  format: string
+  ext: string
+}
+
+export interface GitHubCatalog {
+  repo: string
+  branch: string
+  format: string
+  categories: GitHubCategory[]
+  total: number
+  synced_at: string
+  source: 'github-api' | 'cache'
+  message: string
+  truncated: boolean
+}
+
+export interface GitHubMountItem {
+  category: string
+  url: string
+  recognised: number
+  rules_added: number
+  mounted: boolean
+  ruleset_id?: string
+  error?: string
+}
+
+export interface GitHubMountResult {
+  ok: boolean
+  mode: string
+  results: GitHubMountItem[]
+  categories: number
+  recognised: number
+  rules_added: number
+  mounted: number
+  failed: number
+  message: string
+}
+
+export const getGitHubPresets = () =>
+  get<{ presets: GitHubPreset[] }>('/rulesets/github/presets')
+export const getGitHubCatalog = (repo: string, branch = '', format = '', refresh = false) =>
+  get<GitHubCatalog>('/rulesets/github/catalog', {
+    params: { repo, branch, format, refresh: refresh ? 'true' : '' },
+  })
+export const refreshGitHubCatalog = (repo: string, branch = '', format = '') =>
+  post<GitHubCatalog>('/rulesets/github/catalog/refresh', { repo, branch, format })
+export const mountGitHubRuleSets = (payload: {
+  repo: string
+  branch?: string
+  format?: string
+  categories: string[]
+  mode: 'mount' | 'import' | 'both'
+  action?: string
+  core_id?: string
+  enabled?: boolean
+}) => post<GitHubMountResult>('/rulesets/github/mount', payload)
 export const fetchRuleSet = (id: string) =>
   post<GenericResult>(`/rulesets/${encodeURIComponent(id)}/fetch`)
 export const applyRuleSet = (id: string, coreId?: string) =>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import {
   NAlert,
   NButton,
@@ -15,9 +15,17 @@ import {
   NTag,
 } from 'naive-ui'
 import * as api from '../api/ngg'
-import type { Rule, RuleSetDef, RuleSetParsePreview, RuleSetSource } from '../api/ngg'
+import type {
+  GitHubCatalog,
+  GitHubMountResult,
+  GitHubPreset,
+  Rule,
+  RuleSetDef,
+  RuleSetParsePreview,
+  RuleSetSource,
+} from '../api/ngg'
 import { useApiAction } from '../composables/useApi'
-import { prettyJson, toArray } from '../utils/format'
+import { formatTime, prettyJson, toArray } from '../utils/format'
 
 const { isBusy, run } = useApiAction()
 
@@ -616,10 +624,121 @@ const setColumns: any[] = [
   },
 ]
 
+/* ------------------------------------------------------------------ *
+ * GitHub 规则集：自动识别仓库里所有分流规则分类，批量挂载 / 导入
+ * ------------------------------------------------------------------ */
+const ghPresets = ref<GitHubPreset[]>([])
+const ghRepo = ref('blackmatrix7/ios_rule_script')
+const ghBranch = ref('master')
+const ghFormat = ref('Clash')
+const ghCatalog = ref<GitHubCatalog | null>(null)
+const ghSearch = ref('')
+const ghSelected = ref<string[]>([])
+const ghMode = ref<'mount' | 'import' | 'both'>('mount')
+const ghAction = ref('DIRECT')
+const ghCore = ref('mihomo')
+const ghResult = ref<GitHubMountResult | null>(null)
+const ghError = ref('')
+
+const ghFormatOptions = computed(() =>
+  (ghPresets.value.find((p) => p.repo === ghRepo.value)?.formats ?? ['Clash']).map((f) => ({
+    label: f,
+    value: f,
+  })),
+)
+const ghPresetOptions = computed(() =>
+  ghPresets.value.map((p) => ({ label: p.label, value: p.repo })),
+)
+const ghModeOptions = [
+  { label: '侧挂载为规则集（可随时重新拉取）', value: 'mount' },
+  { label: '直接导入规则表（自动添加全部分流规则）', value: 'import' },
+  { label: '两者都做', value: 'both' },
+]
+const ghActionOptions = ['PROXY', 'DIRECT', 'REJECT'].map((v) => ({ label: v, value: v }))
+
+const ghVisible = computed(() => {
+  const q = ghSearch.value.trim().toLowerCase()
+  const all = ghCatalog.value?.categories ?? []
+  if (!q) return all
+  return all.filter((c) => c.name.toLowerCase().includes(q))
+})
+const ghShown = computed(() => ghVisible.value.slice(0, 150))
+
+function toggleGhCategory(name: string) {
+  const i = ghSelected.value.indexOf(name)
+  if (i >= 0) ghSelected.value.splice(i, 1)
+  else if (ghSelected.value.length < 50) ghSelected.value.push(name)
+  else window.$message?.warning('单次最多选择 50 个分类，请分批挂载')
+}
+function selectAllGhVisible() {
+  for (const c of ghVisible.value.slice(0, 50)) {
+    if (!ghSelected.value.includes(c.name)) ghSelected.value.push(c.name)
+  }
+  if (ghSelected.value.length >= 50) window.$message?.info('已达到单次上限 50 个分类')
+}
+function clearGhSelection() {
+  ghSelected.value = []
+}
+
+async function loadGhPresets() {
+  const data = await run('gh-presets', () => api.getGitHubPresets())
+  if (data) ghPresets.value = data.presets ?? []
+}
+
+async function loadGhCatalog(force = false) {
+  ghError.value = ''
+  const data = force
+    ? await run('gh-catalog', () => api.refreshGitHubCatalog(ghRepo.value, ghBranch.value, ghFormat.value), '已从 GitHub 刷新规则分类')
+    : await run('gh-catalog', () => api.getGitHubCatalog(ghRepo.value, ghBranch.value, ghFormat.value))
+  if (data) {
+    ghCatalog.value = data
+    ghSelected.value = ghSelected.value.filter((n) => data.categories.some((c) => c.name === n))
+  } else if (!force) {
+    ghError.value = '未能读取规则分类目录；请点「从 GitHub 刷新」重试。'
+  }
+}
+
+function choosePreset(repo: string) {
+  const p = ghPresets.value.find((x) => x.repo === repo)
+  if (p) {
+    ghBranch.value = p.branch
+    if (!p.formats.includes(ghFormat.value)) ghFormat.value = p.formats[0] ?? 'Clash'
+  }
+  ghCatalog.value = null
+  ghSelected.value = []
+  ghResult.value = null
+  loadGhCatalog(false)
+}
+
+async function mountGh() {
+  if (!ghSelected.value.length) {
+    window.$message?.warning('请先勾选要挂载的分流规则分类')
+    return
+  }
+  ghResult.value = null
+  const data = await run('gh-mount', () =>
+    api.mountGitHubRuleSets({
+      repo: ghRepo.value,
+      branch: ghBranch.value,
+      format: ghFormat.value,
+      categories: ghSelected.value,
+      mode: ghMode.value,
+      action: ghAction.value,
+      core_id: ghCore.value,
+      enabled: true,
+    }),
+  )
+  if (!data) return
+  ghResult.value = data
+  window.$message?.info(data.message)
+  await Promise.all([refreshRules(), refreshRuleSets()])
+}
+
 onMounted(() => {
   refreshRules()
   refreshRuleSets()
   refreshFormats()
+  loadGhPresets().then(() => loadGhCatalog(false))
 })
 </script>
 
@@ -643,6 +762,90 @@ onMounted(() => {
       「全量替换」会把当前表格中的全部规则连同默认动作、默认内核一次性提交。
       规则集支持内联、URL 订阅与上传附件；上传后由后端自动识别格式、解析规则并直接附加到规则集栏。
     </NAlert>
+
+    <NCard size="small" class="section-gap">
+      <template #header>
+        <div class="major-head">
+          <span class="major-title">GitHub 规则集</span>
+          <span class="major-sub">自动识别仓库内所有分流规则 · 批量挂载或导入</span>
+        </div>
+      </template>
+
+      <div class="gh-bar">
+        <NSelect
+          :value="ghRepo"
+          :options="ghPresetOptions"
+          size="small"
+          style="width: 250px"
+          @update:value="choosePreset"
+        />
+        <NInput v-model:value="ghRepo" size="small" placeholder="owner/name" style="width: 220px" />
+        <NInput v-model:value="ghBranch" size="small" placeholder="分支" style="width: 100px" />
+        <NSelect v-model:value="ghFormat" :options="ghFormatOptions" size="small" style="width: 120px" />
+        <NButton size="small" :loading="isBusy('gh-catalog')" @click="loadGhCatalog(true)">
+          从 GitHub 刷新
+        </NButton>
+        <div class="pc-toolbar-spacer" />
+        <span class="hint">
+          {{ ghCatalog ? `${ghCatalog.total} 个分类 · ${ghCatalog.source === 'cache' ? '本地缓存' : 'GitHub 已同步'} · ${formatTime(ghCatalog.synced_at)}` : '尚未加载' }}
+        </span>
+      </div>
+
+      <NAlert v-if="ghError" type="warning" :bordered="false" style="margin-bottom: 10px">
+        {{ ghError }}
+      </NAlert>
+      <div class="hint" style="margin-bottom: 10px">
+        {{ ghCatalog?.message || '选择仓库后点「从 GitHub 刷新」，会自动读取 rule/&lt;格式&gt;/ 下全部分流规则分类。' }}
+        分类名来自仓库目录，可直接搜索；勾选后选择挂载方式即可一次性把成百上千条规则加入 NGG。
+      </div>
+
+      <div class="gh-bar">
+        <NInput v-model:value="ghSearch" size="small" placeholder="搜索分类（Google / OpenAI / YouTube …）" clearable style="width: 260px" />
+        <NButton size="small" quaternary @click="selectAllGhVisible">选择前 50 个</NButton>
+        <NButton size="small" quaternary @click="clearGhSelection">清空</NButton>
+        <span class="gh-count">已选 <strong>{{ ghSelected.length }}</strong> / 50</span>
+      </div>
+
+      <div class="gh-cats">
+        <button
+          v-for="c in ghShown"
+          :key="c.name"
+          type="button"
+          class="gh-chip"
+          :class="{ on: ghSelected.includes(c.name) }"
+          @click="toggleGhCategory(c.name)"
+        >
+          {{ c.name }}
+        </button>
+        <div v-if="!ghShown.length" class="hint">没有匹配的分类，或目录尚未加载。</div>
+      </div>
+      <div v-if="ghVisible.length > ghShown.length" class="hint" style="margin-top: 8px">
+        仅显示前 {{ ghShown.length }} 个（共 {{ ghVisible.length }} 个），用搜索框缩小范围。
+      </div>
+
+      <div class="gh-bar gh-mount">
+        <span class="kv-label">挂载方式</span>
+        <NSelect v-model:value="ghMode" :options="ghModeOptions" size="small" style="width: 300px" />
+        <span class="kv-label">动作</span>
+        <NSelect v-model:value="ghAction" :options="ghActionOptions" size="small" style="width: 110px" />
+        <span class="kv-label">执行内核</span>
+        <NInput v-model:value="ghCore" size="small" placeholder="mihomo" style="width: 120px" />
+        <NButton size="small" type="primary" :loading="isBusy('gh-mount')" :disabled="!ghSelected.length" @click="mountGh">
+          挂载所选（{{ ghSelected.length }}）
+        </NButton>
+      </div>
+
+      <div v-if="ghResult" class="gh-result">
+        <div class="gh-result-sum">{{ ghResult.message }}</div>
+        <div class="gh-result-grid">
+          <div v-for="r in ghResult.results" :key="r.category" class="gh-result-item" :class="{ bad: !!r.error }">
+            <strong>{{ r.category }}</strong>
+            <span v-if="r.error">{{ r.error }}</span>
+            <span v-else>识别 {{ r.recognised }} 条<span v-if="r.rules_added"> · 导入 {{ r.rules_added }} 条</span><span v-if="r.mounted"> · 已挂载</span></span>
+          </div>
+        </div>
+      </div>
+    </NCard>
 
     <NCard size="small" title="规则表（/network/rules）" class="section-gap">
       <template #header-extra>

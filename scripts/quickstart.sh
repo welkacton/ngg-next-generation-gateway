@@ -7,7 +7,7 @@ RELEASE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --release) RELEASE="${2:-}"; shift 2 ;;
-    *) echo "usage: $0 [--release v2.1.2]"; exit 2 ;;
+    *) echo "usage: $0 [--release v2.2.0]"; exit 2 ;;
   esac
 done
 mkdir -p bin runtime/configs runtime/data

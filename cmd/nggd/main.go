@@ -60,6 +60,13 @@ func run(configPath string, noRestore bool, stop <-chan struct{}) error {
 	}
 	srv := api.New(cfg, eng)
 
+	// Periodically refresh the text-only protocol directory from the three
+	// kernels' official documentation. Failures keep the cached snapshot and
+	// are surfaced as "stale" in the API/UI; they never affect the daemon.
+	syncCtx, stopSync := context.WithCancel(context.Background())
+	defer stopSync()
+	srv.StartCatalogSync(syncCtx)
+
 	if !noRestore {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		results := eng.Restore(ctx)

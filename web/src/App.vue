@@ -86,7 +86,7 @@ const menuOptions: MenuOption[] = [
     children: [
       { label: '规则', key: 'rules', icon: menuIcon },
       { label: 'DNS', key: 'dns', icon: menuIcon },
-      { label: '协议中心', key: 'protocols', icon: menuIcon },
+      { label: '协议配置', key: 'protocols', icon: menuIcon },
       { label: '入口节点', key: 'inbound', icon: menuIcon },
       { label: '出口节点', key: 'outbound', icon: menuIcon },
     ],

@@ -728,3 +728,88 @@ body {
 
 .proto-doc-table tr:last-child td { border-bottom: 0; }
 .proto-doc-table td.mono { color: #0066cc; }
+
+/* ---- GitHub rule-set picker (Rules.vue) ---- */
+
+.gh-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.gh-bar .kv-label { white-space: nowrap; }
+
+.gh-count {
+  font-size: 12px;
+  color: #6e6e73;
+  white-space: nowrap;
+}
+.gh-count strong { color: #0066cc; font-variant-numeric: tabular-nums; }
+
+.gh-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 168px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  background: #fafafb;
+}
+
+.gh-chip {
+  appearance: none;
+  border: 1px solid #e6e6eb;
+  background: #fff;
+  color: #3a3a3c;
+  font: inherit;
+  font-size: 11.5px;
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace;
+  font-feature-settings: 'calt' 0, 'liga' 0;
+  padding: 5px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.gh-chip:hover { border-color: #c7c7cc; }
+.gh-chip.on {
+  border-color: rgba(0, 102, 204, 0.55);
+  background: rgba(0, 102, 204, 0.07);
+  color: #0066cc;
+  font-weight: 600;
+}
+
+.gh-mount {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #efeff2;
+}
+
+.gh-result {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  background: #fafafb;
+}
+.gh-result-sum { font-size: 12.5px; color: #1d1d1f; font-weight: 600; margin-bottom: 9px; }
+.gh-result-grid { display: flex; flex-wrap: wrap; gap: 7px; max-height: 190px; overflow: auto; }
+.gh-result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 175px;
+  padding: 7px 10px;
+  border: 1px solid #e6e6eb;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 11px;
+  color: #6e6e73;
+}
+.gh-result-item strong { font-size: 12px; color: #1d1d1f; }
+.gh-result-item.bad { border-color: rgba(199, 135, 26, 0.4); background: rgba(199, 135, 26, 0.05); }
+.gh-result-item.bad span { color: #a06a10; }

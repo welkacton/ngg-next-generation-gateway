@@ -13,7 +13,7 @@
 | Generation | **2** |
 | Label | **Gen 2** |
 | 名称 | **第二代 · 本地部署与统一控制台** |
-| Release | **v2.1.2** |
+| Release | **v2.2.0** |
 | 仓库 | `welkacton/ngg-next-generation-gateway` |
 
 ---
@@ -26,7 +26,8 @@
 | Gen 2 首发 | v2.0.0 | 本地部署与统一控制台 | `scripts/deploy-vps.sh`（多发行版 apt/dnf/yum/zypper/pacman、Docker、公网 IP+端口+16 位随机后缀、域名 + Let's Encrypt SSL、备份/回滚/体检）；`installer/windows/`（Inno Setup GUI 安装包、便携 ZIP、一键 bat、真实 Windows 服务）；苹果/UniFi 风极简控制台；规则表与规则集栏的单条/多选/全部启停；界面内仓库更新栏（检查 / 下载并校验 / 应用） |
 | Gen 2 增补 | v2.1.0 | 协议中心重构与全站字体 | 三大类全内核协议目录（加密 / 未加密 / 普通代理，30+ 条且逐条生成可解析配置）；生成结果可自定义编辑、校验并保存为覆盖模板；自定义协议原始 JSON 编辑与增删改；协议单条 / 多选 / 全部启停（停用后真实拒绝生成）；全站西文字体统一为 SF Mono Nerd Font Ligaturized |
 | Gen 2 增补 | v2.1.1 | Web 端一键更新与交互优化 | 私有仓库 PAT 可在更新面板直接填写（请求级 context，不落盘不写日志）+「立即更新」一键全链路 + 新版本自动刷新；协议目录五类视图；精简表格列修复文字叠加；点「配置」自动滚动定位；移除冗余 params 输入框与单条详情卡片；大栏目标题加粗放大 |
-| **Gen 2（当前）** | **v2.1.2** | 按内核官方语法配置 | 协议目录只保留 Mihomo / sing-box / Xray-core 三内核支持的加密协议，普通未加密与普通代理协议移出目录（API 用 `include_all=true` 兼容）；新增 `internal/protocols/schema.go` 三套字段定义与官方文档链接，`outboundConfig()` 把同一组可视化字段映射为三种真实语法；两卡片合并为「配置与协议编辑」：上半可视化点选表单（字段带中文释义），下半带逐字段注释的 JSON/YAML/CONF 代码编辑 + 字段释义表；新增 `/protocols/schema`、`/protocols/preview`、`/protocols/annotate` 端点，注释在校验与保存时自动剥离 |
+| Gen 2 增补 | v2.1.2 | 按内核官方语法配置 | 三内核协议目录；`internal/protocols/schema.go` 三套字段定义与官方文档链接；两卡片合并为「可视化表单 + 带注释代码编辑」 |
+| **Gen 2（当前）** | **v2.2.0** | 协议配置与 GitHub 规则集 | 「协议中心」改名**协议配置**，页面重做为两段：上半「内核支持协议」是**只读纯文字**目录，由 `internal/protocols/catalog.go` 每 6 小时从三内核官方文档仓库真实同步（缓存 + stale 标注 + 手动刷新）；下半「配置文件」是 Profile 卡片列表，`internal/profiles` 提供 6 分区（协议内容/出站/入站/路由规则/DNS/其他）按内核官方语法的可编辑模板、真实语法校验与完整配置导出；旧的可视化表单、协议 JSON 编辑器、params、单条详情、启停开关全部从页面移除。规则页新增 `internal/rulesets/github.go`：一次 git-trees 调用发现 668+ 分流规则分类，批量 `mount` 侧挂载或 `import` 自动导入实时规则表（幂等、逐分类如实反馈）|
 
 ### 代际判定标准
 
@@ -42,12 +43,12 @@
 
 | 位置 | 显示内容 |
 | --- | --- |
-| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.1.2` 徽章 + 代际表 |
-| GitHub Releases | tag `v2.1.2`，Release 名称含代际 |
-| Web UI 顶栏 | `Gen 2 · v2.1.2` 徽章 + 代际名称 |
+| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.2.0` 徽章 + 代际表 |
+| GitHub Releases | tag `v2.2.0`，Release 名称含代际 |
+| Web UI 顶栏 | `Gen 2 · v2.2.0` 徽章 + 代际名称 |
 | `GET /api/v1/update/status` | `generation` / `generation_label` / `generation_name` / `release` |
-| `nggd -version` | `NGG 2.1.2`（来自 `internal/engine.NGGVersion = version.Release`） |
-| `GET /api/v1/system` | `ngg_version: "2.1.2"` |
+| `nggd -version` | `NGG 2.2.0`（来自 `internal/engine.NGGVersion = version.Release`） |
+| `GET /api/v1/system` | `ngg_version: "2.2.0"` |
 
 ---
 
