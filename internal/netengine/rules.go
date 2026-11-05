@@ -161,6 +161,30 @@ func (s *RuleSet) Update(id string, r Rule) error {
 	return fmt.Errorf("rule %q not found", id)
 }
 
+// SetEnabled flips the Enabled flag on selected rules in place. It returns the
+// number of rules actually changed. A full Replace() is deliberately avoided:
+// toggling a rule must never re-validate the whole table (one legacy PROXY
+// rule without core_id would otherwise Fail-Closed the entire operation).
+func (s *RuleSet) SetEnabled(ids []string, all bool, enabled bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	changed := 0
+	for i := range s.rules {
+		if !all && !selected[s.rules[i].ID] {
+			continue
+		}
+		if s.rules[i].Enabled != enabled {
+			s.rules[i].Enabled = enabled
+			changed++
+		}
+	}
+	return changed
+}
+
 func (s *RuleSet) Remove(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

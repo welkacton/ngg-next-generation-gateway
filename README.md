@@ -2,8 +2,24 @@
 
 > **Single Unified TUN + Unified Network Engine + Multi-Core Protocol Runtime**
 
+<div align="center">
+
+### 🏷️ Generation 2 / 第二代 · Release v2.0.0
+
+**第二代 · 本地部署与统一控制台** — VPS / Windows 安装包、极简控制台、规则与规则集批量启停、仓库内更新栏
+
+</div>
+
 NGG 是**唯一的系统网络入口、统一流量控制中心、统一出口调度中心**。
 Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协议执行引擎**，不是流量接管者。
+
+| 代际 | 版本 | 主题 | 标志性能力 |
+| --- | --- | --- | --- |
+| **Gen 1** | v1.0.0 及以前 | 服务端平台 | Stage 1~5：统一管理中心、网络引擎、规则/DNS、协议中心、后量子、插件、SD-WAN、多租户 |
+| **Gen 2（当前）** | **v2.0.0** | 本地部署与统一控制台 | 多发行版 VPS 一键部署、公网/域名/SSL、Windows 原生服务安装包、极简 UI、规则与规则集批量启停、界面内仓库更新栏 |
+
+代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.0.0`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -145,9 +161,11 @@ internal/store/            SQLite 状态持久化（纯 Go 免 CGO）
 internal/api/              REST + WebSocket（本机限制 + Bearer 认证）
 configs/                   主配置、能力描述目录、规则/DNS/SD-WAN/插件示例数据
 platforms/                 跨平台构建脚本与 Android/iOS/HarmonyOS/TV/OpenWrt 骨架
-web/                       Vue 3 + TS + Naive UI（18 个页面；一级分类「内核引擎 / 配置引擎」）
-docs/                      架构 / API / 开发 / 安装 / 排障 / 路线图 / Stage 2~5 专题 / VPS 与 Windows 部署
-scripts/                   构建、开发、systemd 安装、VPS 一键部署、端到端验收脚本
+web/                       Vue 3 + TS + Naive UI（极简控制台；一级分类「内核引擎 / 配置引擎 / 后端管理」）
+docs/                      架构 / API / 开发 / 安装 / 排障 / 路线图 / Stage 2~5 / 部署 / 代际 / 更新
+scripts/                   构建、开发、VPS 一键部署、端到端验收、平台内更新脚本
+internal/version/          代际与 Release 的单一事实来源
+internal/update/           GitHub Release 检查、SHA256 校验下载、更新交接
 deploy/                    systemd unit 与 Nginx 反向代理模板（手工部署参考）
 installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、构建脚本
 ```
@@ -169,6 +187,8 @@ installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、�
 | `docs/DEPLOY-VPS.md` | **VPS 完整手册**：系统准备、Release 一键安装、systemd、SSH 隧道 / Nginx HTTPS、防火墙、备份回滚、排障清单 |
 | `docs/INSTALL-WINDOWS.md` | **Windows 完整手册**：GUI 安装包、便携 ZIP、Windows 服务、Token/日志、系统代理、升级卸载、排障清单 |
 | `docs/TUN-GLOBAL-TAKEOVER.md` | **TUN 一键全局接管**：代码级现状、为何现在做不到、P0~P4 实施计划与真实验收标准 |
+| `docs/GENERATIONS.md` | **版本代际**：Gen 1 / Gen 2 沿革、判定标准、代际在 GitHub 与界面上的显示位置 |
+| `docs/10-updates.md` | **系统更新栏**：`/update/*` 端点、自动/手动更新、SHA256 校验、平台更新脚本 |
 | `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
 | `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 

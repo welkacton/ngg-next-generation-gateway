@@ -44,6 +44,41 @@ func (s *Server) handleRuleSets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rulesets": list, "count": len(list)})
 }
 
+// handleRuleSetsToggle enables/disables one rule set, a selected batch, or
+// all rule sets. It only flips Enabled and persists; no URL fetch / re-parse.
+func (s *Server) handleRuleSetsToggle(w http.ResponseWriter, r *http.Request) {
+	reg := s.engine.RuleSets()
+	if reg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "rule set registry not initialized")
+		return
+	}
+	var body struct {
+		IDs     []string `json:"ids"`
+		All     bool     `json:"all"`
+		Enabled bool     `json:"enabled"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if !body.All && len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids or all is required")
+		return
+	}
+	scope := "selected"
+	if body.All {
+		scope = "all"
+	}
+	changed, err := reg.SetEnabled(body.IDs, body.All, body.Enabled)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "changed": changed, "enabled": body.Enabled, "scope": scope,
+	})
+}
+
 func (s *Server) handleRuleSetFormats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rulesets.Formats())
 }

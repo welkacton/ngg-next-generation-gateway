@@ -432,6 +432,45 @@ func (r *Registry) Update(ctx context.Context, id string, s RuleSet) (RuleSet, e
 	return s, nil
 }
 
+// SetEnabled flips the Enabled flag on selected rule sets and persists once.
+// It intentionally does NOT re-materialize (no URL fetch / re-parse), so an
+// on/off switch never depends on network availability. On a persistence
+// failure every touched set is rolled back to its previous value.
+func (r *Registry) SetEnabled(ids []string, all bool, enabled bool) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	snapshot := make(map[string]RuleSet)
+	changed := 0
+	now := time.Now().UTC()
+	for id, s := range r.sets {
+		if !all && !selected[id] {
+			continue
+		}
+		if s.Enabled == enabled {
+			continue
+		}
+		snapshot[id] = s
+		s.Enabled = enabled
+		s.UpdatedAt = now
+		r.sets[id] = s
+		changed++
+	}
+	if changed == 0 {
+		return 0, nil
+	}
+	if err := r.persistLocked(); err != nil {
+		for id, s := range snapshot {
+			r.sets[id] = s
+		}
+		return 0, fmt.Errorf("持久化失败: %w", err)
+	}
+	return changed, nil
+}
+
 func (r *Registry) Remove(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

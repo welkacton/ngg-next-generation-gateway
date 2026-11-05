@@ -239,6 +239,38 @@ func (s *Server) handleNetworkRules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleNetworkRulesToggle enables/disables one rule, a selected batch, or
+// the whole rule table. It only flips the Enabled flag; it never replaces or
+// re-validates the rest of the table.
+func (s *Server) handleNetworkRulesToggle(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	var body struct {
+		IDs     []string `json:"ids"`
+		All     bool     `json:"all"`
+		Enabled bool     `json:"enabled"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if !body.All && len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids or all is required")
+		return
+	}
+	scope := "selected"
+	if body.All {
+		scope = "all"
+	}
+	changed := ne.Rules().SetEnabled(body.IDs, body.All, body.Enabled)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "changed": changed, "enabled": body.Enabled, "scope": scope,
+	})
+}
+
 func coreIDOf(v string) contracts.CoreID { return contracts.CoreID(v) }
 
 func (s *Server) handleNetworkRuleByID(w http.ResponseWriter, r *http.Request) {

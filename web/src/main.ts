@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import { createDiscreteApi, darkTheme, zhCN, dateZhCN } from 'naive-ui'
+import { createDiscreteApi, zhCN, dateZhCN } from 'naive-ui'
 import { setToken, TOKEN_KEY } from './api/client'
 import App from './App.vue'
 import router from './router'
@@ -25,12 +25,11 @@ if (bootstrapToken) {
 }
 
 // Naive UI 的离散 API：让 axios 拦截器、非组件上下文也能弹出全局提示。
-// 离散组件挂载在 body 上，不在 n-config-provider 内，因此需显式传入暗色主题。
+// 离散组件挂载在 body 上，不在 n-config-provider 内，因此需显式复用主题覆盖。
 const { message, dialog, notification } = createDiscreteApi(
   ['message', 'dialog', 'notification'],
   {
     configProviderProps: {
-      theme: darkTheme,
       themeOverrides,
       locale: zhCN,
       dateLocale: dateZhCN,

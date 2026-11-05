@@ -30,10 +30,13 @@ import (
 	"github.com/ngg-project/ngg/internal/sdwan"
 	"github.com/ngg-project/ngg/internal/store"
 	"github.com/ngg-project/ngg/internal/tenants"
+	"github.com/ngg-project/ngg/internal/version"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
 
-const NGGVersion = "1.0.0-phase1"
+// NGGVersion is the shipped product release; generation lives in
+// internal/version and is exposed through /api/v1/update/status.
+const NGGVersion = version.Release
 
 type OpResult struct {
 	ID      contracts.CoreID `json:"id"`

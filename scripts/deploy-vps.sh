@@ -369,7 +369,14 @@ copy_payload() {
   if [ -d "$PKG/configs/cores.d" ]; then
     cp -r "$PKG/configs/cores.d/." "$CONF/cores.d/"
   fi
-  if [ -f "$PKG/scripts/deploy-vps.sh" ]; then
+  if [ -d "$PKG/scripts" ]; then
+    # Keep the full scripts/ tree so /api/v1/update/apply can find
+    # <prefix>/scripts/ngg-update.sh for the in-app updater.
+    mkdir -p "$PREFIX/scripts"
+    cp -r "$PKG/scripts/." "$PREFIX/scripts/"
+    if [ -f "$PREFIX/scripts/deploy-vps.sh" ]; then chmod 0755 "$PREFIX/scripts/deploy-vps.sh"; fi
+    if [ -f "$PREFIX/scripts/ngg-update.sh" ]; then chmod 0755 "$PREFIX/scripts/ngg-update.sh"; fi
+  elif [ -f "$PKG/scripts/deploy-vps.sh" ]; then
     install -m 0755 "$PKG/scripts/deploy-vps.sh" "$PREFIX/deploy-vps.sh"
   fi
   chown -R "$SERVICE_USER":"$SERVICE_USER" "$CONF" "$PREFIX/web"

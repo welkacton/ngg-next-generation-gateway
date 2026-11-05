@@ -9,7 +9,6 @@ import {
   NGrid,
   NInput,
   NInputNumber,
-  NRadio,
   NSelect,
   NSpace,
   NSwitch,
@@ -46,7 +45,11 @@ const defaultCore = ref('')
 const rulesResult = ref<unknown>(null)
 const loadPath = ref('')
 const editingId = ref<string | null>(null)
-const selectedRuleId = ref('')
+// 多选：规则表 / 规则集栏都支持「单选、多选、全部」的启停操作。
+const checkedRuleIds = ref<string[]>([])
+const checkedSetIds = ref<string[]>([])
+const ruleRowKey = (r: Rule) => r.id
+const setRowKey = (s: RuleSetDef) => s.id
 
 const ruleForm = ref({
   id: '',
@@ -84,6 +87,10 @@ async function refreshRules() {
     rules.value = toArray<Rule>(data.rules ?? data)
     defaultAction.value = String(data.default_action ?? '')
     defaultCore.value = String(data.default_core ?? '')
+    // 刷新后丢弃已不存在的选中项，避免把不存在的 ID 发给后端。
+    checkedRuleIds.value = checkedRuleIds.value.filter((id) =>
+      rules.value.some((r) => r.id === id),
+    )
   }
 }
 
@@ -98,7 +105,7 @@ function scrollToRuleForm() {
 
 function startEdit(r: Rule) {
   editingId.value = r.id
-  selectedRuleId.value = r.id
+  if (!checkedRuleIds.value.includes(r.id)) checkedRuleIds.value = [...checkedRuleIds.value, r.id]
   ruleForm.value = {
     id: r.id,
     type: r.type,
@@ -130,9 +137,9 @@ function addNewRule() {
 }
 
 function editSelectedRule() {
-  const r = rules.value.find((x) => x.id === selectedRuleId.value)
+  const r = rules.value.find((x) => x.id === checkedRuleIds.value[0])
   if (!r) {
-    window.$message?.warning('请先在规则表第一列选中一条规则，或直接点击行内「编辑」')
+    window.$message?.warning('请先在规则表第一列勾选一条规则，或直接点击行内「编辑」')
     return
   }
   startEdit(r)
@@ -180,7 +187,7 @@ function confirmDelete(id: string) {
       const r = await run('del:' + id, () => api.deleteRule(id), '规则已删除')
       if (r) {
         rulesResult.value = r
-        if (selectedRuleId.value === id) selectedRuleId.value = ''
+        checkedRuleIds.value = checkedRuleIds.value.filter((x) => x !== id)
         if (editingId.value === id) cancelEdit()
       }
       await refreshRules()
@@ -189,11 +196,62 @@ function confirmDelete(id: string) {
 }
 
 function deleteSelectedRule() {
-  if (!selectedRuleId.value) {
-    window.$message?.warning('请先在规则表第一列选中一条规则，或直接点击行内「删除」')
+  const id = checkedRuleIds.value[0]
+  if (!id) {
+    window.$message?.warning('请先在规则表第一列勾选一条规则，或直接点击行内「删除」')
     return
   }
-  confirmDelete(selectedRuleId.value)
+  confirmDelete(id)
+}
+
+/* ---- 启用 / 停用：单条、多选、全部 ---------------------------------- */
+
+async function applyRuleToggle(ids: string[], all: boolean, enabled: boolean) {
+  if (!all && ids.length === 0) {
+    window.$message?.warning('请先勾选至少一条规则，或使用「全部启用 / 全部停用」')
+    return
+  }
+  const key = `toggle-rules:${all ? 'all' : 'selected'}:${enabled ? 'on' : 'off'}`
+  const r = await run(key, () =>
+    api.toggleRules(all ? { all: true, enabled } : { ids, enabled }),
+  )
+  if (r) {
+    rulesResult.value = r
+    window.$message?.success(`已${enabled ? '启用' : '停用'} ${r.changed} 条规则`)
+  }
+  await refreshRules()
+}
+
+async function toggleSingleRule(id: string, enabled: boolean) {
+  const r = await run('toggle-rule:' + id, () =>
+    api.toggleRules({ ids: [id], enabled }),
+  )
+  if (r) rulesResult.value = r
+  await refreshRules()
+}
+
+async function applySetToggle(ids: string[], all: boolean, enabled: boolean) {
+  if (!all && ids.length === 0) {
+    window.$message?.warning('请先勾选至少一条规则集，或使用「全部启用 / 全部停用」')
+    return
+  }
+  const key = `toggle-sets:${all ? 'all' : 'selected'}:${enabled ? 'on' : 'off'}`
+  const r = await run(key, () =>
+    api.toggleRuleSets(all ? { all: true, enabled } : { ids, enabled }),
+  )
+  if (r) {
+    setResult.value = r
+    window.$message?.success(`已${enabled ? '启用' : '停用'} ${r.changed} 个规则集`)
+  }
+  await refreshRuleSets()
+}
+
+async function toggleSingleSet(id: string, enabled: boolean) {
+  const r = await run('toggle-set:' + id, () =>
+    api.toggleRuleSets({ ids: [id], enabled }),
+  )
+  if (r) setResult.value = r
+  await refreshRuleSets()
 }
 
 async function loadFromFile() {
@@ -226,19 +284,7 @@ function actionTagType(action: string): 'success' | 'error' | 'warning' | 'info'
 }
 
 const ruleColumns: any[] = [
-  {
-    title: '选择',
-    key: 'pick',
-    width: 60,
-    fixed: 'left',
-    render: (r: Rule) =>
-      h(NRadio, {
-        checked: selectedRuleId.value === r.id,
-        'onUpdate:checked': (v: boolean) => {
-          if (v) selectedRuleId.value = r.id
-        },
-      }),
-  },
+  { type: 'selection', fixed: 'left', width: 48 },
   {
     title: 'ID',
     key: 'id',
@@ -271,13 +317,14 @@ const ruleColumns: any[] = [
   {
     title: '启用',
     key: 'enabled',
-    width: 80,
+    width: 88,
     render: (r: Rule) =>
-      h(
-        NTag,
-        { size: 'small', bordered: false, type: r.enabled ? 'success' : 'default' },
-        { default: () => (r.enabled ? '是' : '否') },
-      ),
+      h(NSwitch, {
+        value: !!r.enabled,
+        size: 'small',
+        loading: isBusy('toggle-rule:' + r.id),
+        'onUpdate:value': (v: boolean) => toggleSingleRule(r.id, v),
+      }),
   },
   { title: '备注', key: 'comment', minWidth: 150, render: (r: Rule) => r.comment ?? '—' },
   {
@@ -340,7 +387,12 @@ const formatOptions = () => [
 
 async function refreshRuleSets() {
   const data = await run('rulesets', () => api.listRuleSets())
-  if (data) ruleSets.value = toArray<RuleSetDef>(data.rulesets ?? data)
+  if (data) {
+    ruleSets.value = toArray<RuleSetDef>(data.rulesets ?? data)
+    checkedSetIds.value = checkedSetIds.value.filter((id) =>
+      ruleSets.value.some((s) => s.id === id),
+    )
+  }
 }
 
 async function refreshFormats() {
@@ -421,6 +473,7 @@ function confirmDeleteSet(s: RuleSetDef) {
       const r = await run('del-ruleset:' + s.id, () => api.deleteRuleSet(s.id), '规则集已删除')
       if (r) {
         setResult.value = r
+        checkedSetIds.value = checkedSetIds.value.filter((x) => x !== s.id)
         if (setEditingId.value === s.id) resetSetForm()
       }
       await refreshRuleSets()
@@ -500,6 +553,7 @@ function shortTime(v?: string): string {
 }
 
 const setColumns: any[] = [
+  { type: 'selection', fixed: 'left', width: 48 },
   { title: 'ID', key: 'id', minWidth: 170, render: (s: RuleSetDef) => h('span', { class: 'mono' }, s.id) },
   { title: '名称', key: 'name', minWidth: 150 },
   {
@@ -523,13 +577,14 @@ const setColumns: any[] = [
   {
     title: '启用',
     key: 'enabled',
-    width: 80,
+    width: 88,
     render: (s: RuleSetDef) =>
-      h(
-        NTag,
-        { size: 'small', bordered: false, type: s.enabled ? 'success' : 'default' },
-        { default: () => (s.enabled ? '是' : '否') },
-      ),
+      h(NSwitch, {
+        value: !!s.enabled,
+        size: 'small',
+        loading: isBusy('toggle-set:' + s.id),
+        'onUpdate:value': (v: boolean) => toggleSingleSet(s.id, v),
+      }),
   },
   { title: '更新时间', key: 'updated_at', minWidth: 160, render: (s: RuleSetDef) => shortTime(s.updated_at) },
   {
@@ -605,15 +660,25 @@ onMounted(() => {
         </NSpace>
       </template>
       <div class="hint" style="margin-bottom: 8px">
-        顶部「修改 / 删除」针对第一列选中的规则；也可直接使用每行右侧的行内按钮。
+        第一列支持单选 / 多选；「启用」列可单独开关一条规则，下方工具条支持批量与全部操作。
+        顶部「修改 / 删除」针对当前选中的第一条规则，也可直接使用行内按钮。
+      </div>
+      <div class="bulk-bar">
+        <span class="bulk-count">已选 {{ checkedRuleIds.length }} / {{ rules.length }}</span>
+        <NButton size="small" :disabled="!checkedRuleIds.length" :loading="isBusy('toggle-rules:selected:on')" @click="applyRuleToggle(checkedRuleIds, false, true)">启用选中</NButton>
+        <NButton size="small" :disabled="!checkedRuleIds.length" :loading="isBusy('toggle-rules:selected:off')" @click="applyRuleToggle(checkedRuleIds, false, false)">停用选中</NButton>
+        <NButton size="small" :loading="isBusy('toggle-rules:all:on')" @click="applyRuleToggle([], true, true)">全部启用</NButton>
+        <NButton size="small" :loading="isBusy('toggle-rules:all:off')" @click="applyRuleToggle([], true, false)">全部停用</NButton>
       </div>
       <NDataTable
+        v-model:checked-row-keys="checkedRuleIds"
+        :row-key="ruleRowKey"
         :columns="ruleColumns"
         :data="rules"
         :bordered="false"
         size="small"
         :pagination="false"
-        :scroll-x="1620"
+        :scroll-x="1660"
       />
     </NCard>
 
@@ -760,13 +825,22 @@ onMounted(() => {
         }}</pre>
       </NAlert>
 
+      <div class="bulk-bar">
+        <span class="bulk-count">已选 {{ checkedSetIds.length }} / {{ ruleSets.length }}</span>
+        <NButton size="small" :disabled="!checkedSetIds.length" :loading="isBusy('toggle-sets:selected:on')" @click="applySetToggle(checkedSetIds, false, true)">启用选中</NButton>
+        <NButton size="small" :disabled="!checkedSetIds.length" :loading="isBusy('toggle-sets:selected:off')" @click="applySetToggle(checkedSetIds, false, false)">停用选中</NButton>
+        <NButton size="small" :loading="isBusy('toggle-sets:all:on')" @click="applySetToggle([], true, true)">全部启用</NButton>
+        <NButton size="small" :loading="isBusy('toggle-sets:all:off')" @click="applySetToggle([], true, false)">全部停用</NButton>
+      </div>
       <NDataTable
+        v-model:checked-row-keys="checkedSetIds"
+        :row-key="setRowKey"
         :columns="setColumns"
         :data="ruleSets"
         :bordered="false"
         size="small"
         :pagination="false"
-        :scroll-x="1250"
+        :scroll-x="1300"
       />
       <div v-if="!ruleSets.length" class="hint" style="margin-top: 10px">
         暂无规则集。可以上传文档、填写订阅链接，或在下方新增内联规则集。

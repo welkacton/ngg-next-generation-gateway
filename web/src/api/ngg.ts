@@ -462,7 +462,23 @@ export interface DnsHostsPayload {
   block: string[]
 }
 
+/** 批量启停：ids 为空时必须传 all=true；后端只翻转 enabled，不会全量替换规则表。 */
+export interface TogglePayload {
+  ids?: string[]
+  all?: boolean
+  enabled: boolean
+}
+export interface ToggleResult {
+  ok: boolean
+  changed: number
+  enabled: boolean
+  scope: 'selected' | 'all'
+  [key: string]: unknown
+}
+
 export const getRules = () => get<RulesConfig>('/network/rules')
+export const toggleRules = (payload: TogglePayload) =>
+  post<ToggleResult>('/network/rules/toggle', payload)
 export const addRule = (rule: Rule) => post<GenericResult>('/network/rules', rule)
 export const replaceRules = (payload: {
   rules: Rule[]
@@ -478,6 +494,91 @@ export const resolveDns = (name: string, type: string) =>
   post<DnsResolveResult>('/network/dns/resolve', { name, type })
 export const setDnsHosts = (payload: DnsHostsPayload) =>
   post<GenericResult>('/network/dns/hosts', payload)
+
+/* ------------------------------------------------------------------ *
+ * 产品代际与仓库更新 /update/*
+ * ------------------------------------------------------------------ */
+
+export interface UpdateStatus {
+  generation: number
+  generation_label: string
+  generation_name: string
+  release: string
+  repo: string
+  os: string
+  arch: string
+  platform: string
+  install_dir: string
+  update_dir: string
+  script_path: string
+  script_ready: boolean
+  [key: string]: unknown
+}
+
+export interface UpdateAsset {
+  name: string
+  size: number
+  browser_download_url: string
+  url: string
+  [key: string]: unknown
+}
+
+export interface UpdateRelease {
+  tag_name: string
+  name: string
+  published_at: string
+  body: string
+  html_url: string
+  prerelease: boolean
+  draft: boolean
+  assets: UpdateAsset[]
+  [key: string]: unknown
+}
+
+export interface UpdateCheckResult {
+  status: UpdateStatus
+  current: string
+  latest: string
+  update_available: boolean
+  release: UpdateRelease | null
+  asset: UpdateAsset | null
+  checked_at: string
+  source: string
+  note?: string
+  [key: string]: unknown
+}
+
+export interface UpdateDownloadResult {
+  tag: string
+  asset: string
+  path: string
+  sha256: string
+  verified: boolean
+  size: number
+  [key: string]: unknown
+}
+
+export interface UpdateApplyResult {
+  started: boolean
+  tag: string
+  script_path: string
+  log_path: string
+  manual_command?: string
+  note?: string
+  [key: string]: unknown
+}
+
+export interface UpdateTarget {
+  tag?: string
+  asset?: string
+}
+
+export const getUpdateStatus = () => get<UpdateStatus>('/update/status')
+export const checkUpdate = () => post<UpdateCheckResult>('/update/check', {})
+export const downloadUpdate = (payload: UpdateTarget = {}) =>
+  post<UpdateDownloadResult>('/update/download', payload)
+export const applyUpdate = (payload: UpdateTarget = {}) =>
+  post<UpdateApplyResult>('/update/apply', payload)
 
 /* ------------------------------------------------------------------ *
  * Stage 4 · 协议中心 /protocols
@@ -910,6 +1011,8 @@ export interface RuleSetUploadResult {
 }
 
 export const listRuleSets = () => get<RuleSetListResult>('/rulesets')
+export const toggleRuleSets = (payload: TogglePayload) =>
+  post<ToggleResult>('/rulesets/toggle', payload)
 export const addRuleSet = (set: Partial<RuleSetDef>) =>
   post<GenericResult>('/rulesets', set)
 export const updateRuleSet = (id: string, set: Partial<RuleSetDef>) =>

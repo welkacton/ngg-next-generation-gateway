@@ -17,19 +17,21 @@ import (
 
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
+	"github.com/ngg-project/ngg/internal/update"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
 
 type Server struct {
-	cfg    *config.Config
-	engine *engine.Engine
-	mux    *http.ServeMux
-	hub    *wsHub
-	http   *http.Server
+	cfg     *config.Config
+	engine  *engine.Engine
+	mux     *http.ServeMux
+	hub     *wsHub
+	http    *http.Server
+	updater *update.Checker
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
-	s := &Server{cfg: cfg, engine: eng, mux: http.NewServeMux()}
+	s := &Server{cfg: cfg, engine: eng, mux: http.NewServeMux(), updater: update.New(cfg.Storage.Dir)}
 	s.hub = newWSHub(eng)
 	s.routes()
 	s.http = &http.Server{
@@ -93,6 +95,12 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	m.HandleFunc("GET /api/v1/ws", s.hub.ServeHTTP)
 
+	// Product generation / in-app repository updates
+	m.HandleFunc("GET /api/v1/update/status", s.handleUpdateStatus)
+	m.HandleFunc("POST /api/v1/update/check", s.handleUpdateCheck)
+	m.HandleFunc("POST /api/v1/update/download", s.handleUpdateDownload)
+	m.HandleFunc("POST /api/v1/update/apply", s.handleUpdateApply)
+
 	// Stage 2-3: Unified Network Engine
 	m.HandleFunc("GET /api/v1/network/status", s.handleNetworkStatus)
 	m.HandleFunc("POST /api/v1/network/start", s.handleNetworkStart)
@@ -105,12 +113,14 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/rulesets", s.handleRuleSets)
 	m.HandleFunc("POST /api/v1/rulesets", s.handleRuleSets)
 	m.HandleFunc("GET /api/v1/rulesets/formats", s.handleRuleSetFormats)
+	m.HandleFunc("POST /api/v1/rulesets/toggle", s.handleRuleSetsToggle)
 	m.HandleFunc("POST /api/v1/rulesets/upload", s.handleRuleSetUpload)
 	m.HandleFunc("POST /api/v1/rulesets/{id}/fetch", s.handleRuleSetFetch)
 	m.HandleFunc("POST /api/v1/rulesets/{id}/apply", s.handleRuleSetApply)
 	m.HandleFunc("GET /api/v1/rulesets/{id}", s.handleRuleSetByID)
 	m.HandleFunc("PUT /api/v1/rulesets/{id}", s.handleRuleSetByID)
 	m.HandleFunc("DELETE /api/v1/rulesets/{id}", s.handleRuleSetByID)
+	m.HandleFunc("POST /api/v1/network/rules/toggle", s.handleNetworkRulesToggle)
 	m.HandleFunc("POST /api/v1/network/rules", s.handleNetworkRules)
 	m.HandleFunc("PUT /api/v1/network/rules", s.handleNetworkRules)
 	m.HandleFunc("DELETE /api/v1/network/rules/{id}", s.handleNetworkRuleByID)

@@ -2,7 +2,6 @@
 import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  darkTheme,
   zhCN,
   dateZhCN,
   NConfigProvider,
@@ -13,8 +12,6 @@ import {
   NLayoutContent,
   NMenu,
   NButton,
-  NSpace,
-  NTag,
   NAlert,
   type MenuOption,
 } from 'naive-ui'
@@ -22,6 +19,13 @@ import { themeOverrides } from './styles/theme'
 import { useCoresStore } from './stores/cores'
 import { useWebSocket } from './composables/useWebSocket'
 import { getToken } from './api/client'
+import * as api from './api/ngg'
+import type {
+  UpdateCheckResult,
+  UpdateStatus,
+  UpdateApplyResult,
+} from './api/ngg'
+import UpdatePanel from './components/UpdatePanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,8 +35,9 @@ function menuIcon() {
   return h('span', { class: 'menu-dot' })
 }
 
-// 一级大分类是可折叠子菜单：点击大分类即可收起 / 展开其二级页面。
+// 一级大分类是可折叠子菜单；「后端管理」默认收缩（不放入默认展开列表）。
 const MENU_EXPANDED_KEY = 'ngg_menu_expanded'
+const AUTO_CHECK_KEY = 'ngg_auto_update_check'
 const defaultExpanded = ['group-core-engine', 'group-config-engine']
 
 function loadExpandedKeys(): string[] {
@@ -86,14 +91,21 @@ const menuOptions: MenuOption[] = [
       { label: '出口节点', key: 'outbound', icon: menuIcon },
     ],
   },
-  { type: 'divider', key: 'divider-extra' },
-  { label: '网络引擎', key: 'network', icon: menuIcon },
-  { label: '后量子', key: 'pq', icon: menuIcon },
-  { label: '插件运行时', key: 'plugins', icon: menuIcon },
-  { label: 'SD-WAN', key: 'sdwan', icon: menuIcon },
-  { label: '多租户', key: 'tenants', icon: menuIcon },
-  { label: '跨平台构建', key: 'platforms', icon: menuIcon },
-  { label: '阶段总览', key: 'stages', icon: menuIcon },
+  { type: 'divider', key: 'divider-backend' },
+  {
+    label: '后端管理',
+    key: 'group-backend-management',
+    icon: menuIcon,
+    children: [
+      { label: '网络引擎', key: 'network', icon: menuIcon },
+      { label: '后量子', key: 'pq', icon: menuIcon },
+      { label: '插件运行时', key: 'plugins', icon: menuIcon },
+      { label: 'SD-WAN', key: 'sdwan', icon: menuIcon },
+      { label: '多租户', key: 'tenants', icon: menuIcon },
+      { label: '跨平台构建', key: 'platforms', icon: menuIcon },
+      { label: '阶段总览', key: 'stages', icon: menuIcon },
+    ],
+  },
 ]
 
 const activeKey = computed(() => String(route.name || 'dashboard'))
@@ -120,19 +132,128 @@ function syncToken(): void {
   hasToken.value = !!getToken()
 }
 
+/* ---- 版本代际与仓库更新栏 ---- */
+
+const AUTO_APPLY_KEY = 'ngg_auto_update_apply'
+const updateStatus = ref<UpdateStatus | null>(null)
+const checkResult = ref<UpdateCheckResult | null>(null)
+const showUpdatePanel = ref(false)
+const autoCheck = ref(true)
+const autoApply = ref(false)
+const autoApplyResult = ref<UpdateApplyResult | null>(null)
+let autoCheckTimer: number | undefined
+let autoApplyInFlight = false
+
+function loadAutoCheckPref(): boolean {
+  try {
+    return localStorage.getItem(AUTO_CHECK_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+function loadAutoApplyPref(): boolean {
+  try {
+    return localStorage.getItem(AUTO_APPLY_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function persist(key: string, v: boolean) {
+  try {
+    localStorage.setItem(key, v ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+function setAutoCheck(v: boolean) {
+  autoCheck.value = v
+  persist(AUTO_CHECK_KEY, v)
+}
+
+function setAutoApply(v: boolean) {
+  if (v) {
+    window.$dialog?.warning({
+      title: '开启自动应用更新',
+      content: '开启后，界面检查到新版本会自动下载、校验并替换程序文件、重启服务（失败自动回滚）。期间管理界面会短暂中断。建议仅在测试环境开启。',
+      positiveText: '我已了解，开启',
+      negativeText: '取消',
+      onPositiveClick: () => {
+        autoApply.value = true
+        persist(AUTO_APPLY_KEY, true)
+      },
+    })
+    return
+  }
+  autoApply.value = false
+  persist(AUTO_APPLY_KEY, false)
+}
+
+// 自动应用：真实走 download（含 SHA256 校验）→ apply，失败不伪装成功。
+async function maybeAutoApply() {
+  const r = checkResult.value
+  if (!autoApply.value || autoApplyInFlight || !r?.update_available || !r.release || !r.asset) return
+  autoApplyInFlight = true
+  const target = { tag: r.release.tag_name, asset: r.asset.name }
+  try {
+    await api.downloadUpdate(target)
+    const applied = await api.applyUpdate(target)
+    autoApplyResult.value = applied
+    if (applied.started) window.$message?.info('已自动开始应用更新，约 30 秒后刷新页面')
+    else window.$message?.warning('自动应用在当前平台需执行终端命令，详见更新面板')
+  } catch {
+    autoApplyResult.value = null
+    window.$message?.warning('自动更新失败（下载校验或应用脚本未就绪），可在更新面板手动重试')
+  } finally {
+    autoApplyInFlight = false
+  }
+}
+
+async function silentCheck() {
+  try {
+    checkResult.value = await api.checkUpdate()
+    if (checkResult.value?.status) updateStatus.value = checkResult.value.status
+    await maybeAutoApply()
+  } catch {
+    // 检查失败不弹提示，也不伪造「已是最新」状态
+  }
+}
+
+const pillLabel = computed(() => {
+  const s = updateStatus.value
+  if (!s) return '版本'
+  return `${s.generation_label} · v${s.release}`
+})
+const hasUpdate = computed(() => !!checkResult.value?.update_available)
+
+function onChecked(v: UpdateCheckResult | null) {
+  checkResult.value = v
+  if (v?.status) updateStatus.value = v.status
+  void maybeAutoApply()
+}
+
 onMounted(() => {
   store.ensureBase()
   window.addEventListener('ngg-token-change', syncToken)
+  autoCheck.value = loadAutoCheckPref()
+  autoApply.value = loadAutoApplyPref()
+  api.getUpdateStatus().then((s) => { updateStatus.value = s }).catch(() => {})
+  if (autoCheck.value && hasToken.value) silentCheck()
+  autoCheckTimer = window.setInterval(() => {
+    if (autoCheck.value && hasToken.value) silentCheck()
+  }, 6 * 60 * 60 * 1000)
 })
 
 onUnmounted(() => {
   window.removeEventListener('ngg-token-change', syncToken)
+  if (autoCheckTimer) window.clearInterval(autoCheckTimer)
 })
 </script>
 
 <template>
   <NConfigProvider
-    :theme="darkTheme"
     :theme-overrides="themeOverrides"
     :locale="zhCN"
     :date-locale="dateZhCN"
@@ -141,7 +262,7 @@ onUnmounted(() => {
     <NLayout has-sider style="height: 100vh">
       <NLayoutSider
         bordered
-        :width="232"
+        :width="236"
         :native-scrollbar="false"
         content-style="position: relative; min-height: 100%;"
       >
@@ -170,23 +291,34 @@ onUnmounted(() => {
       <NLayout>
         <NLayoutHeader class="app-header" bordered>
           <div class="app-header-title">{{ pageTitle }}</div>
-          <NSpace align="center" :size="12">
-            <NTag :bordered="false" size="small" :type="connected ? 'success' : 'error'">
-              <template #icon>
-                <span :class="['ws-dot', connected ? 'ws-on' : 'ws-off']" />
-              </template>
-              {{ connected ? 'WebSocket 已连接' : 'WebSocket 未连接' }}
-            </NTag>
-            <NTag :bordered="false" size="small" type="info">
+          <div class="header-actions">
+            <span class="gen-badge">
+              <strong>{{ pillLabel }}</strong>
+              <span>{{ updateStatus?.generation_name || '第二代' }}</span>
+            </span>
+            <button
+              class="update-pill"
+              :class="{ 'has-update': hasUpdate }"
+              type="button"
+              @click="showUpdatePanel = true"
+            >
+              <span v-if="hasUpdate" class="update-dot" />
+              {{ hasUpdate ? '有新版本' : '系统更新' }}
+            </button>
+            <span class="header-status" :title="connected ? 'WebSocket 已连接' : 'WebSocket 未连接'">
+              <span :class="['ws-dot', connected ? 'ws-on' : 'ws-off']" />
+              {{ connected ? '已连接' : '未连接' }}
+            </span>
+            <span class="header-status">
               运行中 {{ store.runningCount }} / {{ store.cores.length }}
-            </NTag>
+            </span>
             <NButton size="small" tertiary :loading="store.baseLoading" @click="refreshAll">
-              刷新数据
+              刷新
             </NButton>
-          </NSpace>
+          </div>
         </NLayoutHeader>
 
-        <NLayoutContent :native-scrollbar="false" content-style="min-height: calc(100vh - 56px);">
+        <NLayoutContent :native-scrollbar="false" content-style="min-height: calc(100vh - 60px);">
           <NAlert
             v-if="!hasToken"
             type="warning"
@@ -201,6 +333,17 @@ onUnmounted(() => {
         </NLayoutContent>
       </NLayout>
     </NLayout>
+
+    <UpdatePanel
+      v-model:show="showUpdatePanel"
+      :auto-check="autoCheck"
+      :auto-apply="autoApply"
+      :auto-apply-result="autoApplyResult"
+      :initial-result="checkResult"
+      @auto-check-change="setAutoCheck"
+      @auto-apply-change="setAutoApply"
+      @checked="onChecked"
+    />
   </NConfigProvider>
 </template>
 
@@ -208,11 +351,25 @@ onUnmounted(() => {
 .menu-dot :deep(),
 :deep(.menu-dot) {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: #36adcb;
-  opacity: 0.7;
+  background: #c7c7cc;
   margin-right: 4px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: #8e8e93;
+  white-space: nowrap;
 }
 </style>
