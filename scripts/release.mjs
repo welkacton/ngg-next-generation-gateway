@@ -2,9 +2,12 @@
 /**
  * NGG release helper — the mandatory "modify -> sync client -> bump version" step.
  *
- *   node scripts/release.mjs 2.3.0            # bump + rebuild client + backend + tests
- *   node scripts/release.mjs 2.3.0 --sync     # also deploy to the installed Windows client
- *   node scripts/release.mjs 2.3.0 --no-build # only rewrite version strings (CI / dry run)
+ *   node scripts/release.mjs 2.3.0                       # bump + rebuild client + backend + tests
+ *   node scripts/release.mjs 2.3.0 --sync                # also deploy to the installed Windows client
+ *   node scripts/release.mjs 2.3.0 --no-build            # only rewrite version strings
+ *   node scripts/release.mjs 2.3.0 --publish-links --no-build
+ *       # AFTER the GitHub Release is actually published: update download /
+ *       # deploy examples to the new tag without touching historical tables.
  *
  * Version has ONE source of truth: internal/version/version.go (Release).
  * This script propagates it to the web client package and every doc that
@@ -20,6 +23,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const next = process.argv[2]
 const NO_BUILD = process.argv.includes('--no-build')
 const SYNC = process.argv.includes('--sync')
+const PUBLISH_LINKS = process.argv.includes('--publish-links')
 
 if (!/^\d+\.\d+\.\d+$/.test(next || '')) {
   console.error('usage: node scripts/release.mjs <x.y.z> [--sync] [--no-build]')
@@ -86,6 +90,57 @@ for (const rel of VERSION_FILES) {
 if (changed === 0 && current !== next) {
   console.error(`no file contained the current version ${current}`)
   process.exit(1)
+}
+
+// Deployment/download examples must only move to a tag that REALLY exists.
+// Run this after the Release workflow has published its assets. The patterns
+// are prefix-anchored so historical notes such as "v2.1.1 及以上" survive.
+const PUBLISH_LINK_FILES = [
+  'README.md',
+  'docs/DEPLOY.md',
+  'docs/DEPLOY-VPS.md',
+  'docs/INSTALL-WINDOWS.md',
+  'docs/10-updates.md',
+]
+// [pattern, replacement] pairs: match the WHOLE version-bearing token, so no
+// capture-group callback is needed (and offsets can never leak into text).
+const LINK_PATTERNS = [
+  [/--version v\d+\.\d+\.\d+/g, `--version v${next}`],
+  [/--release v\d+\.\d+\.\d+/g, `--release v${next}`],
+  [/releases\/tag\/v\d+\.\d+\.\d+/g, `releases/tag/v${next}`],
+  [/releases\/download\/v\d+\.\d+\.\d+/g, `releases/download/v${next}`],
+  [/NGG-Setup-v\d+\.\d+\.\d+/g, `NGG-Setup-v${next}`],
+  [/NGG-v\d+\.\d+\.\d+-windows-amd64/g, `NGG-v${next}-windows-amd64`],
+  [/ngg-v\d+\.\d+\.\d+-(linux|darwin|windows|freebsd)/g, `ngg-v${next}-$1`],
+  [/VERSION=v\d+\.\d+\.\d+/g, `VERSION=v${next}`],
+  [/-Version v\d+\.\d+\.\d+/g, `-Version v${next}`],
+  [/"tag":"v\d+\.\d+\.\d+"/g, `"tag":"v${next}"`],
+  [/"tag_name": "v\d+\.\d+\.\d+"/g, `"tag_name": "v${next}"`],
+  [/"latest": "v\d+\.\d+\.\d+"/g, `"latest": "v${next}"`],
+  [/升到 v\d+\.\d+\.\d+/g, `升到 v${next}`],
+]
+function rewritePublishLinks(rel, text) {
+  const transform = (line) =>
+    LINK_PATTERNS.reduce((acc, [re, replacement]) => acc.replace(re, replacement), line)
+  if (rel === 'README.md') {
+    return text
+      .split('\n')
+      .map((line) => (/^\|\s*(Gen 2|Gen 1|\*\*Gen 1\*\*)/.test(line) ? line : transform(line)))
+      .join('\n')
+  }
+  return transform(text)
+}
+if (PUBLISH_LINKS) {
+  for (const rel of PUBLISH_LINK_FILES) {
+    const file = path.join(ROOT, rel)
+    if (!fs.existsSync(file)) continue
+    const text = fs.readFileSync(file, 'utf8')
+    const out = rewritePublishLinks(rel, text)
+    if (out !== text) {
+      fs.writeFileSync(file, out, 'utf8')
+      console.log(`  published links -> v${next} in ${rel}`)
+    }
+  }
 }
 
 if (NO_BUILD) {

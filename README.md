@@ -41,22 +41,23 @@ GitHub 仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · 
 仓库可见性由所有者在仓库设置中控制（public / private），部署到自己的服务器、电脑、NAS 或软路由时，
 请按当前可见性使用有权限的账号克隆或下载 Release 产物。
 
-> **以下链接指向 GitHub Releases 中已发布的稳定包**（当前源码版本见页首徽章）。
-> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.2.2>
-> → `NGG-Setup-v2.2.2.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.2.2-windows-amd64.zip`
+> **当前 Release `v2.4.0` 已上架**：由 `git tag v2.4.0 && git push origin v2.4.0`
+> 触发 Release 工作流，自动交叉编译 8 个平台、打包 Windows 安装包与 `SHA256SUMS` 并发布。
+> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.4.0>
+> → `NGG-Setup-v2.4.0.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.4.0-windows-amd64.zip`
 > （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
-> 新版本由 `git tag vX.Y.Z && git push origin vX.Y.Z` 触发 Release 工作流自动打包 8 个平台、
-> Windows 安装包与 `SHA256SUMS` 并上架；发布完成后这里会更新到最新 tag。
+> 本次资产：8 个 `ngg-v2.4.0-<os>-<arch>.tar.gz`、`NGG-v2.4.0-windows-amd64.zip`、
+> `NGG-Setup-v2.4.0.exe` 及各自的 `.sha256` 与汇总 `SHA256SUMS`；运行前请校验摘要。
 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
-| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.2.2 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.4.0 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
 | VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
 | VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
-| **Windows 安装程序** | 双击 `NGG-Setup-v2.2.2.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
+| **Windows 安装程序** | 双击 `NGG-Setup-v2.4.0.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
-| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.2.2` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
+| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.4.0` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
 `scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →
