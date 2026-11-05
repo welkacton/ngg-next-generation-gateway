@@ -2,7 +2,7 @@
 
 > 官方文档：`internal/version/version.go` 是代际与 Release 的单一事实来源；
 > `internal/update` 负责真实的 GitHub Release 检查、校验下载与更新交接。
-> 界面顶栏的「Gen 2 · v2.1.0」徽章与「系统更新」按钮读取的都是这两个模块的真实数据。
+> 界面顶栏的「Gen 2 · v2.1.1」徽章与「系统更新」按钮读取的都是这两个模块的真实数据。
 
 ---
 
@@ -12,20 +12,35 @@
 
 | 元素 | 行为 |
 | --- | --- |
-| `Gen 2 · v2.1.0` 徽章 | 来自 `GET /api/v1/update/status`，显示代际、版本号与代际名称 |
-| 「系统更新」胶囊按钮 | 打开更新面板；发现新版本时显示蓝点与「有新版本」 |
-| 更新面板 | 当前版本 / 仓库 / 平台、手动「检查更新」、自动检查开关、「下载更新」「应用更新」、Release 说明、校验结果、应用日志路径 |
+| `Gen 2 · v2.1.1` 徽章 | 来自 `GET /api/v1/update/status`，显示代际、版本号与代际名称 |
+| 「系统更新」胶囊按钮 | 打开更新面板；发现新版本时显示蓝点与「有新版本」；私有仓库缺 Token 时显示「需要 GitHub Token」 |
+| 更新面板 | 当前版本 / 仓库 / 平台、**GitHub Token 输入**、**「立即更新（一键完成）」**、分步进度、单步排查按钮、自动检查/自动应用开关、Release 说明、校验结果、日志路径 |
 
-**自动检查**：「自动检查」开关默认开启，界面打开时与每 6 小时各静默调用一次
+**一键更新（推荐）**：点「立即更新」→ 二次确认 → 自动依次执行
+`检查 Release → 下载并强制 SHA256 校验 → 备份/替换/重启服务 → 轮询 /system 直到版本号变化 → 自动刷新页面`。
+每一步都在面板里显示状态（等待 / 进行中 / 完成 / 失败）；失败会停在对应步骤并给出可操作原因，
+不会跳步、不会伪造「已是最新」。
+
+**手动 / 排查**：下面仍保留「检查更新」「下载更新」「应用更新」三个单步按钮，用于定位问题。
+「应用更新」成功后同样会等待新版本并自动刷新。
+
+**自动检查**：开关默认开启，界面打开时与每 6 小时各静默调用一次
 `POST /api/v1/update/check`。开关保存在 `localStorage` 的 `ngg_auto_update_check`。
+检查失败（例如私有仓库缺 Token）不弹骚扰提示，只在顶栏胶囊上给出「需要 GitHub Token」引导。
 
-**自动应用更新**：「自动应用更新」开关**默认关闭**，开启时会弹出风险确认。开启后，一旦自动检查发现
-新版本，界面会真实执行 `download`（含 SHA256 校验）→ `apply`，并把结果、日志路径显示在面板里；
+**自动应用更新**：开关**默认关闭**，开启时会弹出风险确认。开启后，一旦自动检查发现新版本，
+界面会真实执行 `download`（含 SHA256 校验）→ `apply`，结果和日志路径显示在面板里；
 下载校验或脚本未就绪时明确提示失败，不伪装成功。状态保存在 `ngg_auto_update_apply`。
 
-**手动更新**：`检查更新 → 下载更新（强制 SHA256 校验）→ 应用更新（二次确认）`。
+> 「立即更新」仍需一次二次确认（会短暂中断服务）；自动应用默认关闭，生产环境建议手动确认。
 
-> 默认「只检查不安装」是刻意的安全默认值：自动替换会短暂中断服务，生产环境建议手动确认。
+> **首次升级引导（重要）**：v2.1.0 及更早的二进制里，更新模块只认服务端环境变量，
+> **没有**「界面填 Token」和「立即更新」按钮。因此已装 v2.1.0 的机器无法靠界面把自己升到 v2.1.1。
+> 请任选其一完成这一次引导升级：
+> 1. 直接双击 `NGG-Setup-v2.1.1.exe` 覆盖安装（推荐，配置、API Token、数据都会保留；安装程序会先停服务再替换 `nggd.exe`）；
+> 2. 或临时给 NGG 服务配置 `NGG_GITHUB_TOKEN` 环境变量并重启服务，让旧版能检查到 v2.1.1，再用旧版的三步按钮完成一次更新。
+>
+> 之后的所有版本（v2.1.2 起）都可以在 v2.1.1 的 Web 界面里点「立即更新」直接完成。
 
 ---
 
@@ -35,9 +50,9 @@
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /api/v1/update/status` | 代际、Release、仓库、OS/Arch、安装目录、更新暂存目录、更新脚本是否就绪 |
+| `GET /api/v1/update/status` | 代际、Release、仓库、OS/Arch、安装目录、更新暂存目录、更新脚本是否就绪、`token_configured`（服务端是否已配 PAT，**不返回 Token 值**） |
 | `POST /api/v1/update/check` | 真实请求 GitHub Releases API（`/releases/latest`，无 latest 时回退列表取最新非 draft），返回 tag、发布时间、说明、资产列表、是否有新版本、当前平台匹配的资产 |
-| `POST /api/v1/update/download` | body `{"tag":"v2.0.1","asset":"NGG-Setup-v2.0.1.exe"}`（省略则使用最近一次检查结果）；下载资产与 `SHA256SUMS`，**校验通过才落盘**到 `<data>/updates/<tag>/` |
+| `POST /api/v1/update/download` | body `{"tag":"v2.1.1","asset":"NGG-Setup-v2.1.1.exe"}`（省略则使用最近一次检查结果）；下载资产与 `SHA256SUMS`，**校验通过才落盘**到 `<data>/updates/<tag>/` |
 | `POST /api/v1/update/apply` | 校验暂存文件与 `SHA256SUMS` 存在后，启动平台更新脚本；无脚本 / 未下载 / 摘要缺失都会明确报错，不会伪装成功 |
 
 `check` 返回示例（真实字段，非模拟）：
@@ -45,19 +60,29 @@
 ```json
 {
   "current": "2.1.0",
-  "latest": "v2.0.1",
+  "latest": "v2.1.1",
   "update_available": true,
   "source": "github-api",
   "checked_at": "2026-11-05T03:00:00Z",
-  "release": { "tag_name": "v2.0.1", "published_at": "...", "body": "...", "assets": [] },
-  "asset": { "name": "NGG-Setup-v2.0.1.exe", "size": 9866685, "url": "..." },
+  "release": { "tag_name": "v2.1.1", "published_at": "...", "body": "...", "assets": [] },
+  "asset": { "name": "NGG-Setup-v2.1.1.exe", "size": 15176447, "url": "..." },
   "status": { "generation": 2, "generation_label": "Gen 2", "release": "2.1.0",
-              "platform": "windows/amd64", "script_ready": true }
+              "platform": "windows/amd64", "script_ready": true, "token_configured": false }
 }
 ```
 
-**私有仓库**：在服务端设置环境变量 `NGG_GITHUB_TOKEN` 或 `GITHUB_TOKEN`（PAT 需 `repo` / `Contents: Read`）。
-不要把 PAT 写进浏览器请求；面板会提示在服务端配置。检查失败时面板显示明确错误，不显示「已是最新」。
+**私有仓库（重要）**：GitHub 对私有仓库的匿名请求返回 404。PAT 有两种提供方式：
+
+1. **界面内填写（推荐给 Windows / 本机 Web 控制台）**：在更新面板输入有 `repo` / `Contents: Read` 权限的
+   PAT，保存在**本机浏览器** `localStorage` 的 `ngg_github_token`；前端只把它作为
+   `X-GitHub-Token` 请求头附加到 `/update/*` 请求。后端用 `update.WithToken` 把 Token 放进**单次请求的
+   context**，用完即弃：**不写磁盘、不写日志、不写进响应**，也不会出现在 `/update/status` 里。
+2. **服务端环境变量**：`NGG_GITHUB_TOKEN` / `GITHUB_TOKEN`，适合无人值守的 VPS。界面会显示「服务端已配置」。
+
+请求级 Token 优先于环境变量；并发请求之间互不串扰。检查失败时面板显示明确错误，不显示「已是最新」。
+通过域名 HTTPS 远程管理 VPS 时 PAT 会经过网络，请使用最小权限、可随时吊销的 Token。
+
+**状态码与文案**：401/403 提示 Token 无效或权限不足；404 提示这是私有库、请在面板填 Token。
 
 **版本比较**：`CompareVersions` 解析 `vX.Y.Z` 逐级比较；解析失败才回退字典序，不伪造布尔值。
 当前平台匹配资产的优先级：Windows → `NGG-Setup-<tag>.exe` > 便携 ZIP > tarball；

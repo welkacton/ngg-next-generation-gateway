@@ -74,3 +74,18 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile
 [UninstallRun]
 ; KeepData: runtime-generated config/data/logs are user data and stay on disk.
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\uninstall.ps1"" -InstallDir ""{app}"" -Silent -KeepData"; Flags: runhidden; RunOnceId: "StopNGGService"
+
+[Code]
+{ On an UPGRADE the service is still running and holds nggd.exe open. Stop it
+  before [Files] copies anything, otherwise Windows refuses to replace the
+  binary. install.ps1 re-registers and starts the service in the [Run] step.
+  The config file (and therefore the API token) is never overwritten: only
+  configs/cores.d and the example templates ship in the installer. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  Exec(ExpandConstant('{sys}\sc.exe'), 'stop NGG', '', SW_HIDE,
+       ewWaitUntilTerminated, ResultCode);
+end;

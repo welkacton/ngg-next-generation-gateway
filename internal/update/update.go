@@ -39,6 +39,9 @@ type Status struct {
 	UpdateDir       string `json:"update_dir"`
 	ScriptPath      string `json:"script_path"`
 	ScriptReady     bool   `json:"script_ready"`
+	// TokenConfigured tells the Web UI whether a PAT is already available on
+	// the server. It never exposes the token value itself.
+	TokenConfigured bool `json:"token_configured"`
 }
 
 type Asset struct {
@@ -133,16 +136,51 @@ func (c *Checker) Status() Status {
 		UpdateDir:       updateDir,
 		ScriptPath:      script,
 		ScriptReady:     statErr == nil,
+		TokenConfigured: c.serverToken() != "",
 	}
 }
 
-func (c *Checker) token() string {
+// tokenKey carries a PAT supplied by the Web UI for ONE request only. It lives
+// in the request context, is never written to disk and never logged. Keeping it
+// per-request (instead of a Checker field) also makes concurrent requests safe.
+type tokenKey struct{}
+
+// WithToken attaches a caller-supplied GitHub token to a request context.
+// An empty token is a no-op so the server-side environment variable still wins.
+func WithToken(ctx context.Context, token string) context.Context {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, tokenKey{}, token)
+}
+
+func tokenFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(tokenKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func (c *Checker) serverToken() string {
 	for _, k := range []string{"NGG_GITHUB_TOKEN", "GITHUB_TOKEN"} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 			return v
 		}
 	}
 	return ""
+}
+
+// token prefers the per-request token from the Web UI; otherwise it falls back
+// to the server-side environment variable used by headless deployments.
+func (c *Checker) token(ctx context.Context) string {
+	if t := tokenFrom(ctx); t != "" {
+		return t
+	}
+	return c.serverToken()
 }
 
 func (c *Checker) do(ctx context.Context, url string) (*http.Response, error) {
@@ -152,7 +190,7 @@ func (c *Checker) do(ctx context.Context, url string) (*http.Response, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "NGG-Update-Checker/"+version.Release)
-	if t := c.token(); t != "" {
+	if t := c.token(ctx); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
 	return c.Client.Do(req)
@@ -184,7 +222,14 @@ func (c *Checker) fetchRelease(ctx context.Context) (*ReleaseInfo, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned HTTP %d (private repo needs NGG_GITHUB_TOKEN)", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return nil, fmt.Errorf("GitHub API returned HTTP %d; the GitHub Token is invalid, expired or lacks repo scope — update it in the update panel", resp.StatusCode)
+		case http.StatusNotFound:
+			return nil, fmt.Errorf("GitHub API returned HTTP 404; this repository is private — enter a GitHub Token in the update panel (or set NGG_GITHUB_TOKEN on the server)")
+		default:
+			return nil, fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
+		}
 	}
 	var list []ReleaseInfo
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&list); err != nil {
@@ -332,7 +377,7 @@ func (c *Checker) downloadAsset(ctx context.Context, asset Asset, dest string) (
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", "NGG-Update-Checker/"+version.Release)
-	if t := c.token(); t != "" {
+	if t := c.token(ctx); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
 	client := &http.Client{Timeout: 5 * time.Minute}

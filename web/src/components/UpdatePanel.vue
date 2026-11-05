@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
+  NInput,
   NModal,
   NSpace,
   NSwitch,
@@ -15,6 +16,7 @@ import type {
   UpdateApplyResult,
   UpdateStatus,
 } from '../api/ngg'
+import { getGithubToken, getToken, setGithubToken } from '../api/client'
 import { useApiAction } from '../composables/useApi'
 
 const props = defineProps<{
@@ -38,10 +40,25 @@ const downloaded = ref<UpdateDownloadResult | null>(null)
 const applied = ref<UpdateApplyResult | null>(null)
 const errorText = ref('')
 
+/* Private-repo PAT: kept in this browser only, sent ONLY to /update/*.
+   The server never persists or logs it. */
+const tokenDraft = ref('')
+const tokenSaved = ref(false)
+
+type StepState = 'pending' | 'running' | 'done' | 'fail'
+interface Step { label: string; state: StepState; detail?: string }
+const steps = ref<Step[]>([])
+const quickRunning = ref(false)
+const restartNote = ref('')
+
 const visible = computed({
   get: () => props.show,
   set: (v: boolean) => emit('update:show', v),
 })
+
+const needToken = computed(() =>
+  !status.value?.token_configured && !tokenSaved.value,
+)
 
 watch(
   () => props.initialResult,
@@ -52,9 +69,45 @@ function shortDate(v?: string) {
   return v ? String(v).replace('T', ' ').slice(0, 19) : '—'
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
 async function loadStatus() {
   const s = await run('status', () => api.getUpdateStatus())
   if (s) status.value = s
+}
+
+function saveToken() {
+  setGithubToken(tokenDraft.value)
+  tokenSaved.value = !!getGithubToken()
+  tokenDraft.value = ''
+  errorText.value = ''
+  window.$message?.success(
+    tokenSaved.value ? 'GitHub Token 已保存在本机浏览器，正在重新检查更新' : '已清除 GitHub Token',
+  )
+  if (tokenSaved.value) void doCheck()
+}
+
+function clearToken() {
+  setGithubToken('')
+  tokenSaved.value = false
+  tokenDraft.value = ''
+  window.$message?.success('已清除本机保存的 GitHub Token')
+}
+
+function friendlyError(prefix: string, e: unknown) {
+  const raw = e instanceof Error ? e.message : String(e)
+  if (/404|private repo|GitHub Token/i.test(raw)) {
+    return `${prefix}：仓库是私有库，请在上方填写有 repo 权限的 GitHub Token；或确认网络可访问 api.github.com。`
+  }
+  if (/401|403|invalid|expired|scope/i.test(raw)) {
+    return `${prefix}：GitHub Token 无效、已过期或权限不足，请更换后重试。`
+  }
+  if (/SHA256SUMS|mismatch/i.test(raw)) {
+    return `${prefix}：Release 缺少 SHA256SUMS 或摘要不匹配，出于安全已拒绝下载。`
+  }
+  return `${prefix}：${raw}`
 }
 
 async function doCheck() {
@@ -64,31 +117,154 @@ async function doCheck() {
     result.value = r
     downloaded.value = null
     applied.value = null
+    if (r.status) status.value = r.status
     emit('checked', r)
   } else {
-    errorText.value = '检查失败：请确认本机可访问 GitHub API；私有仓库需在服务端设置 NGG_GITHUB_TOKEN 或 GITHUB_TOKEN。'
+    errorText.value = '检查失败：仓库是私有库，请在上方填写 GitHub Token；或确认本机可访问 api.github.com。'
   }
+  return r
 }
 
-async function doDownload() {
-  errorText.value = ''
+async function doDownload(silent = false) {
   const r = result.value
   if (!r?.release || !r.asset) {
-    window.$message?.warning('请先「检查更新」，并确认存在匹配当前平台的资产')
-    return
+    if (!silent) window.$message?.warning('请先「检查更新」，并确认存在匹配当前平台的资产')
+    return null
   }
   const d = await run('download', () =>
     api.downloadUpdate({ tag: r.release!.tag_name, asset: r.asset!.name }),
   )
   if (d) {
     downloaded.value = d
-    window.$message?.success(`已下载并校验 ${d.asset}`)
-  } else {
+    if (!silent) window.$message?.success(`已下载并校验 ${d.asset}`)
+  } else if (!silent) {
     errorText.value = '下载失败：Release 缺少 SHA256SUMS 或摘要不匹配时会拒绝下载。'
+  }
+  return d
+}
+
+async function doApply(silent = false) {
+  const r = result.value
+  if (!r?.release || !r.asset) return null
+  const a = await run('apply', () =>
+    api.applyUpdate({ tag: r.release!.tag_name, asset: r.asset!.name }),
+  )
+  if (a) {
+    applied.value = a
+    if (!silent) {
+      if (a.started) window.$message?.success('更新已在后台启动，完成后页面会自动刷新')
+      else window.$message?.warning('当前平台需在服务器终端执行返回的命令')
+    }
+  } else if (!silent) {
+    errorText.value = '应用失败：请先完成下载与校验，并确认更新脚本随安装包一起部署。'
+  }
+  return a
+}
+
+/* One click: check -> download+SHA256 -> apply -> wait for the service to
+   come back on the NEW version, then reload the Web console automatically. */
+async function waitForRestart(targetTag: string): Promise<boolean> {
+  const want = targetTag.replace(/^v/, '').split('-')[0]
+  for (let i = 0; i < 45; i++) {
+    await sleep(2000)
+    try {
+      const res = await fetch('/api/v1/system', {
+        headers: { Authorization: `Bearer ${getToken()}` },
+        cache: 'no-store',
+      })
+      if (!res.ok) continue
+      const data = await res.json()
+      if (data?.ngg_version === want) return true
+    } catch {
+      // service is restarting; keep polling
+    }
+  }
+  return false
+}
+
+function resetSteps() {
+  steps.value = [
+    { label: '检查 Release 新版本', state: 'pending' },
+    { label: '下载并强制 SHA256 校验', state: 'pending' },
+    { label: '备份 / 替换 / 重启服务', state: 'pending' },
+    { label: '等待服务恢复并自动刷新', state: 'pending' },
+  ]
+}
+
+function setStep(i: number, state: StepState, detail?: string) {
+  const next = steps.value.slice()
+  if (next[i]) {
+    next[i] = { ...next[i], state, detail }
+    steps.value = next
   }
 }
 
-async function doApply() {
+async function quickUpdate() {
+  if (quickRunning.value) return
+  errorText.value = ''
+  restartNote.value = ''
+  resetSteps()
+  quickRunning.value = true
+  try {
+    // 1. check
+    setStep(0, 'running')
+    const r = await doCheck()
+    if (!r) { setStep(0, 'fail'); return }
+    setStep(0, 'done', r.latest)
+    if (!r.update_available || !r.release || !r.asset) {
+      setStep(1, 'done', '已是最新版本，无需下载')
+      setStep(2, 'done', '跳过')
+      setStep(3, 'done', '跳过')
+      restartNote.value = '当前已是最新版本，无需更新。'
+      return
+    }
+
+    // 2. download
+    setStep(1, 'running')
+    const d = await doDownload(true)
+    if (!d) { setStep(1, 'fail'); return }
+    setStep(1, 'done', `${d.asset} · ${Math.round(d.size / 1024 / 1024 * 10) / 10} MB`)
+
+    // 3. apply
+    setStep(2, 'running')
+    const a = await doApply(true)
+    if (!a) { setStep(2, 'fail'); return }
+    if (!a.started) {
+      setStep(2, 'done', '需在服务器终端执行')
+      setStep(3, 'done', '跳过')
+      restartNote.value = a.note || '请按下方返回的命令在服务器终端执行。'
+      return
+    }
+    setStep(2, 'done', '后台脚本已启动')
+
+    // 4. wait for the NEW version, then refresh the Web console
+    setStep(3, 'running')
+    const ok = await waitForRestart(r.release.tag_name)
+    if (ok) {
+      setStep(3, 'done', '服务已恢复，正在刷新')
+      window.location.reload()
+    } else {
+      setStep(3, 'fail', '90 秒内未检测到新版本')
+      restartNote.value = '服务未在 90 秒内以新版本恢复，请查看更新日志并确认服务状态。'
+    }
+  } catch (e) {
+    errorText.value = friendlyError('一键更新中断', e)
+  } finally {
+    quickRunning.value = false
+  }
+}
+
+function confirmQuickUpdate() {
+  window.$dialog?.warning({
+    title: '立即更新',
+    content: '将自动完成：检查新版本 → 下载并 SHA256 校验 → 备份、替换程序文件并重启服务 → 界面自动刷新。期间管理界面会短暂中断（约 10~30 秒），失败会自动回滚。确定继续？',
+    positiveText: '立即更新',
+    negativeText: '取消',
+    onPositiveClick: () => { void quickUpdate() },
+  })
+}
+
+async function manualApply() {
   errorText.value = ''
   const r = result.value
   if (!r?.release || !r.asset) return
@@ -98,23 +274,18 @@ async function doApply() {
     positiveText: '应用更新',
     negativeText: '取消',
     onPositiveClick: async () => {
-      const a = await run('apply', () =>
-        api.applyUpdate({ tag: r.release!.tag_name, asset: r.asset!.name }),
-      )
-      if (a) {
-        applied.value = a
-        if (a.started) window.$message?.success('更新已在后台启动，约 30 秒后刷新页面')
-        else window.$message?.warning('当前平台需在服务器终端执行返回的命令')
-      } else {
-        errorText.value = '应用失败：请先完成下载与校验，并确认更新脚本随安装包一起部署。'
-      }
+      const a = await doApply()
+      if (a?.started) void waitForRestart(r.release!.tag_name).then((ok) => {
+        if (ok) window.location.reload()
+      })
     },
   })
 }
 
 onMounted(() => {
+  tokenSaved.value = !!getGithubToken()
   loadStatus()
-  if (props.autoCheck && !result.value) doCheck()
+  if (props.autoCheck && !result.value) void doCheck()
 })
 </script>
 
@@ -123,7 +294,7 @@ onMounted(() => {
     v-model:show="visible"
     preset="card"
     title="系统更新"
-    :style="{ width: '660px', maxWidth: '92vw' }"
+    :style="{ width: '700px', maxWidth: '94vw' }"
     :bordered="false"
   >
     <div class="upd-section">
@@ -132,7 +303,7 @@ onMounted(() => {
           <div class="upd-h">当前版本</div>
           <div class="upd-v">
             {{ status?.generation_label || 'Gen 2' }} ·
-            v{{ status?.release || '2.1.0' }}
+            v{{ status?.release || '2.1.1' }}
             <NTag size="small" :bordered="false">{{ status?.generation_name || '第二代' }}</NTag>
           </div>
         </div>
@@ -141,19 +312,74 @@ onMounted(() => {
           平台 <span class="mono">{{ status?.platform || '—' }}</span>
         </div>
       </div>
+      <div class="hint" style="margin-top: 8px">
+        这是浏览器访问本机服务的 Web 控制台。更新会替换服务端的
+        <span class="mono">nggd.exe</span> 与 <span class="mono">web/dist</span>，完成后界面自动刷新。
+      </div>
+    </div>
+
+    <!-- Private repository: provide a PAT right here instead of forcing a
+         server-side environment variable the Web UI cannot set. -->
+    <div class="upd-section upd-token">
+      <div class="proto-sec">
+        <span class="proto-sec-title">GitHub Token（私有仓库必填）</span>
+        <NTag v-if="status?.token_configured" size="small" type="success" :bordered="false">
+          服务端已配置
+        </NTag>
+        <NTag v-else-if="tokenSaved" size="small" type="info" :bordered="false">
+          本机浏览器已保存
+        </NTag>
+        <NTag v-else size="small" type="warning" :bordered="false">未配置 · 检查会失败</NTag>
+      </div>
+      <div v-if="needToken" class="hint" style="margin-bottom: 8px">
+        私有仓库的 GitHub API 匿名访问返回 404。请填一个有 <span class="mono">repo</span> 权限的
+        Personal Access Token，保存后会自动重新检查。也可以改用服务端环境变量
+        <span class="mono">NGG_GITHUB_TOKEN</span> / <span class="mono">GITHUB_TOKEN</span>。
+      </div>
+      <NSpace :size="8" :wrap="true" align="center">
+        <NInput
+          v-model:value="tokenDraft"
+          type="password"
+          show-password-on="click"
+          size="small"
+          clearable
+          placeholder="ghp_… / github_pat_…（repo 权限）"
+          style="width: 330px"
+          @keyup.enter="saveToken"
+        />
+        <NButton size="small" type="primary" :disabled="!tokenDraft.trim()" @click="saveToken">
+          保存并重试
+        </NButton>
+        <NButton v-if="tokenSaved" size="small" @click="clearToken">清除</NButton>
+      </NSpace>
+      <div class="hint" style="margin-top: 6px">
+        Token 只保存在本机浏览器 localStorage，且只随 <span class="mono">/update/*</span> 请求发给本机服务，
+        不写入服务端配置、不写日志。若通过域名 HTTPS 远程管理 VPS，Token 会经过网络，请使用最小权限的 Token。
+      </div>
     </div>
 
     <div class="upd-section upd-controls">
       <NSpace align="center" :wrap="true" :size="10">
-        <NButton size="small" type="primary" :loading="isBusy('check')" @click="doCheck">
+        <NButton
+          size="small"
+          type="primary"
+          :loading="quickRunning"
+          :disabled="isBusy('check') || isBusy('download') || isBusy('apply')"
+          @click="confirmQuickUpdate"
+        >
+          立即更新（一键完成）
+        </NButton>
+        <NButton size="small" :loading="isBusy('check')" :disabled="quickRunning" @click="doCheck">
           检查更新
         </NButton>
-        <NButton size="small" :loading="isBusy('download')" :disabled="!result?.asset" @click="doDownload">
+        <NButton size="small" :loading="isBusy('download')" :disabled="!result?.asset || quickRunning" @click="doDownload()">
           下载更新
         </NButton>
-        <NButton size="small" :loading="isBusy('apply')" :disabled="!downloaded" @click="doApply">
+        <NButton size="small" :loading="isBusy('apply')" :disabled="!downloaded || quickRunning" @click="manualApply">
           应用更新
         </NButton>
+      </NSpace>
+      <NSpace align="center" :wrap="true" :size="16" style="margin-top: 10px">
         <span class="upd-switch">
           自动检查
           <NSwitch
@@ -172,10 +398,18 @@ onMounted(() => {
         </span>
       </NSpace>
       <div class="hint" style="margin-top: 8px">
-        自动检查在打开界面时与每 6 小时各执行一次；默认只检查不安装。开启「自动应用更新」后，
-        发现新版本会自动下载、SHA256 校验并替换程序文件、重启服务（失败自动回滚），开启时需二次确认。
-        私有仓库请在服务端设置 <span class="mono">NGG_GITHUB_TOKEN</span> / <span class="mono">GITHUB_TOKEN</span>。
+        「立即更新」会按 检查 → 下载校验 → 备份替换重启 → 自动刷新 一次完成；下面的单步按钮用于排查问题。
+        自动检查在打开界面时与每 6 小时各执行一次；开启「自动应用更新」后同样走完整链路，开启时需二次确认。
       </div>
+    </div>
+
+    <div v-if="steps.length" class="upd-section upd-steps">
+      <div v-for="(s, i) in steps" :key="i" class="upd-step" :class="'is-' + s.state">
+        <span class="upd-step-dot">{{ s.state === 'done' ? '✓' : s.state === 'fail' ? '!' : i + 1 }}</span>
+        <span class="upd-step-label">{{ s.label }}</span>
+        <span v-if="s.detail" class="upd-step-detail">{{ s.detail }}</span>
+      </div>
+      <div v-if="restartNote" class="hint" style="margin-top: 8px">{{ restartNote }}</div>
     </div>
 
     <NAlert v-if="errorText" type="warning" :bordered="false" class="upd-section">
@@ -279,13 +513,18 @@ onMounted(() => {
   border: 1px solid #e6e6eb;
   border-radius: 10px;
 }
+.upd-token {
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+}
 .upd-switch {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   font-size: 12.5px;
   color: #6e6e73;
-  margin-left: 6px;
 }
 .upd-release {
   margin-top: 12px;
@@ -294,6 +533,39 @@ onMounted(() => {
   max-height: 180px;
   margin-top: 8px;
   white-space: pre-wrap;
+}
+.upd-steps {
+  padding: 10px 14px;
+  background: #fafafb;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+}
+.upd-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  color: #8e8e93;
+}
+.upd-step.is-running { color: #0066cc; }
+.upd-step.is-done { color: #1d9a68; }
+.upd-step.is-fail { color: #d64545; }
+.upd-step-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.upd-step-label { flex: 1; }
+.upd-step-detail {
+  font-size: 11.5px;
+  color: #8e8e93;
 }
 a {
   color: #0066cc;

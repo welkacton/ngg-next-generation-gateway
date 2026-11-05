@@ -13,7 +13,7 @@
 | Generation | **2** |
 | Label | **Gen 2** |
 | 名称 | **第二代 · 本地部署与统一控制台** |
-| Release | **v2.1.0** |
+| Release | **v2.1.1** |
 | 仓库 | `welkacton/ngg-next-generation-gateway` |
 
 ---
@@ -24,7 +24,8 @@
 | --- | --- | --- | --- |
 | **Gen 1** | v1.0.0 及以前 | 服务端平台 | Stage 1：统一管理中心 / 多核并行 / Core Adapter / Registry；Stage 2~3：统一网络引擎、userspace 入口、真实 Linux TUN 读环回、10 类规则 + 4 类动作、DNS 引擎；Stage 4：协议中心、ML-KEM-768 混合后量子控制信道、JS/WASM 插件运行时；Stage 5：SD-WAN 探测选路、多租户、跨平台构建矩阵 |
 | Gen 2 首发 | v2.0.0 | 本地部署与统一控制台 | `scripts/deploy-vps.sh`（多发行版 apt/dnf/yum/zypper/pacman、Docker、公网 IP+端口+16 位随机后缀、域名 + Let's Encrypt SSL、备份/回滚/体检）；`installer/windows/`（Inno Setup GUI 安装包、便携 ZIP、一键 bat、真实 Windows 服务）；苹果/UniFi 风极简控制台；规则表与规则集栏的单条/多选/全部启停；界面内仓库更新栏（检查 / 下载并校验 / 应用） |
-| **Gen 2（当前）** | **v2.1.0** | 协议中心重构与全站字体 | 三大类全内核协议目录（加密 / 未加密 / 普通代理，30+ 条且逐条生成可解析配置）；生成结果可自定义编辑、校验并保存为覆盖模板；自定义协议原始 JSON 编辑与增删改；协议单条 / 多选 / 全部启停（停用后真实拒绝生成）；全站西文字体统一为 SF Mono Nerd Font Ligaturized |
+| Gen 2 增补 | v2.1.0 | 协议中心重构与全站字体 | 三大类全内核协议目录（加密 / 未加密 / 普通代理，30+ 条且逐条生成可解析配置）；生成结果可自定义编辑、校验并保存为覆盖模板；自定义协议原始 JSON 编辑与增删改；协议单条 / 多选 / 全部启停（停用后真实拒绝生成）；全站西文字体统一为 SF Mono Nerd Font Ligaturized |
+| **Gen 2（当前）** | **v2.1.1** | Web 端一键更新与协议中心交互优化 | 私有仓库 PAT 可在更新面板直接填写（请求级 context，不落盘不写日志）+「立即更新」一键全链路 + 新版本自动刷新；协议目录按 Mihomo / sing-box / Xray-core / VPN代理 / 自定义 五大类分视图；精简表格列修复文字叠加；点「配置」自动滚动定位；移除冗余 params 输入框与单条详情卡片；大栏目标题加粗放大 |
 
 ### 代际判定标准
 
@@ -40,12 +41,12 @@
 
 | 位置 | 显示内容 |
 | --- | --- |
-| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.1.0` 徽章 + 代际表 |
-| GitHub Releases | tag `v2.1.0`，Release 名称含代际 |
-| Web UI 顶栏 | `Gen 2 · v2.1.0` 徽章 + 代际名称 |
+| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.1.1` 徽章 + 代际表 |
+| GitHub Releases | tag `v2.1.1`，Release 名称含代际 |
+| Web UI 顶栏 | `Gen 2 · v2.1.1` 徽章 + 代际名称 |
 | `GET /api/v1/update/status` | `generation` / `generation_label` / `generation_name` / `release` |
-| `nggd -version` | `NGG 2.1.0`（来自 `internal/engine.NGGVersion = version.Release`） |
-| `GET /api/v1/system` | `ngg_version: "2.1.0"` |
+| `nggd -version` | `NGG 2.1.1`（来自 `internal/engine.NGGVersion = version.Release`） |
+| `GET /api/v1/system` | `ngg_version: "2.1.1"` |
 
 ---
 

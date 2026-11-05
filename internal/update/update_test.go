@@ -208,3 +208,58 @@ func TestApplyRequiresStagedAndVerifiedUpdate(t *testing.T) {
 		}
 	}
 }
+
+// A private repo answers 404/401 to anonymous requests. The Web UI supplies
+// a PAT per request through the context; this test proves it actually reaches
+// GitHub without ever being persisted on the server.
+func TestRequestTokenUnlocksPrivateRepo(t *testing.T) {
+	t.Setenv("NGG_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	const pat = "ui-pat-from-browser"
+	const envPat = "server-env-pat"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if auth != "Bearer "+pat && auth != "Bearer "+envPat {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"tag_name":"v9.9.9","name":"r","published_at":"2026-11-05T00:00:00Z",`+
+			`"body":"","html_url":"https://example.invalid/r","assets":[]}`)
+	}))
+	defer ts.Close()
+
+	c := New(t.TempDir())
+	c.APIBase = ts.URL
+	if st := c.Status(); st.TokenConfigured {
+		t.Fatal("token_configured must be false when no server env token is set")
+	}
+	if _, err := c.Check(context.Background()); err == nil {
+		t.Fatal("anonymous check against a private repo must fail")
+	}
+
+	res, err := c.Check(WithToken(context.Background(), pat))
+	if err != nil {
+		t.Fatalf("check with UI token: %v", err)
+	}
+	if res.Latest != "v9.9.9" {
+		t.Fatalf("unexpected latest: %+v", res)
+	}
+
+	// A per-request token wins over the server-side environment variable.
+	t.Setenv("NGG_GITHUB_TOKEN", envPat)
+	if !c.Status().TokenConfigured {
+		t.Fatal("token_configured must reflect the server env token")
+	}
+	if _, err := c.Check(WithToken(context.Background(), pat)); err != nil {
+		t.Fatalf("UI token must take precedence: %v", err)
+	}
+	if _, err := c.Check(context.Background()); err != nil {
+		t.Fatalf("server env token must still work: %v", err)
+	}
+}

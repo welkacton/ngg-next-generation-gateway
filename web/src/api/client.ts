@@ -1,10 +1,26 @@
 import axios, { AxiosError, type AxiosResponse } from 'axios'
 
 export const TOKEN_KEY = 'ngg_token'
+export const GITHUB_TOKEN_KEY = 'ngg_github_token'
 export const API_BASE = '/api/v1'
 
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+/**
+ * GitHub PAT for PRIVATE repositories. Only ever attached to /update/*
+ * requests, stored in this browser's localStorage (never sent to the repo,
+ * never written into the server config or logs by the client).
+ */
+export function getGithubToken(): string {
+  return localStorage.getItem(GITHUB_TOKEN_KEY) || ''
+}
+
+export function setGithubToken(token: string): void {
+  const v = token.trim()
+  if (v) localStorage.setItem(GITHUB_TOKEN_KEY, v)
+  else localStorage.removeItem(GITHUB_TOKEN_KEY)
 }
 
 export function setToken(token: string): void {
@@ -29,6 +45,11 @@ client.interceptors.request.use((config) => {
   const token = getToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  // Private-repo PAT is scoped strictly to update endpoints.
+  const gh = getGithubToken()
+  if (gh && (config.url || '').startsWith('/update/')) {
+    config.headers['X-GitHub-Token'] = gh
   }
   return config
 })

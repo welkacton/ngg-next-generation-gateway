@@ -512,6 +512,7 @@ export interface UpdateStatus {
   update_dir: string
   script_path: string
   script_ready: boolean
+  token_configured: boolean
   [key: string]: unknown
 }
 

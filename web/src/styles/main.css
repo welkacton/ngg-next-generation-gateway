@@ -342,6 +342,14 @@ body {
   background: rgba(0, 102, 204, 0.06);
   color: #0066cc;
 }
+.update-pill.needs-token {
+  border-color: rgba(199, 135, 26, 0.38);
+  background: rgba(199, 135, 26, 0.07);
+  color: #a06a10;
+}
+.update-pill.needs-token .update-dot {
+  background: #c7871a;
+}
 .update-dot {
   width: 6px;
   height: 6px;
@@ -474,4 +482,90 @@ body {
 .proto-checkcell {
   display: inline-flex;
   align-items: center;
+}
+
+/* ---- Protocol center v2: bigger section titles, compact non-overlapping cells ---- */
+
+.major-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.major-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: #1d1d1f;
+  line-height: 1.4;
+}
+
+.major-sub {
+  font-size: 11.5px;
+  color: #a1a1a6;
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace;
+  font-feature-settings: 'calt' 0, 'liga' 0;
+}
+
+.flash-target {
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.35) !important;
+  transition: box-shadow 0.35s ease;
+}
+
+/* Every custom cell is clipped to its own column so long kernel / security
+   strings can never paint over the neighbouring column. */
+.proto-name-cell,
+.proto-meta-cell {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.proto-id {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1d1d1f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.proto-custom-tag {
+  flex-shrink: 0;
+}
+
+.proto-sub,
+.proto-kind {
+  font-size: 11px;
+  color: #8e8e93;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.proto-dot {
+  margin: 0 5px;
+  color: #c7c7cc;
+}
+
+.proto-name {
+  color: #6e6e73;
+}
+
+.proto-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* Defensive: never let table cell text overflow into its neighbour. */
+.n-data-table .n-data-table-td .proto-name-cell,
+.n-data-table .n-data-table-td .proto-meta-cell {
+  min-width: 0;
 }

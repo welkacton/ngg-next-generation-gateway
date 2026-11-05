@@ -211,13 +211,19 @@ async function maybeAutoApply() {
   }
 }
 
+const needsGithubToken = ref(false)
+
 async function silentCheck() {
   try {
     checkResult.value = await api.checkUpdate()
     if (checkResult.value?.status) updateStatus.value = checkResult.value.status
+    needsGithubToken.value = false
     await maybeAutoApply()
-  } catch {
-    // 检查失败不弹提示，也不伪造「已是最新」状态
+  } catch (e) {
+    // 检查失败不弹提示，也不伪造「已是最新」状态；私有仓库缺 Token 时
+    // 只在顶栏给出一个温和的可操作提示，点开面板即可填写。
+    const msg = e instanceof Error ? e.message : String(e)
+    needsGithubToken.value = /404|401|403|GitHub Token|private repo/i.test(msg)
   }
 }
 
@@ -298,12 +304,12 @@ onUnmounted(() => {
             </span>
             <button
               class="update-pill"
-              :class="{ 'has-update': hasUpdate }"
+              :class="{ 'has-update': hasUpdate, 'needs-token': needsGithubToken && !hasUpdate }"
               type="button"
               @click="showUpdatePanel = true"
             >
-              <span v-if="hasUpdate" class="update-dot" />
-              {{ hasUpdate ? '有新版本' : '系统更新' }}
+              <span v-if="hasUpdate || needsGithubToken" class="update-dot" />
+              {{ hasUpdate ? '有新版本' : needsGithubToken ? '需要 GitHub Token' : '系统更新' }}
             </button>
             <span class="header-status" :title="connected ? 'WebSocket 已连接' : 'WebSocket 未连接'">
               <span :class="['ws-dot', connected ? 'ws-on' : 'ws-off']" />
