@@ -88,6 +88,15 @@ func (t *TunDevice) Open(ctx context.Context, cfg TunConfig) error {
 		mtu = 1500
 	}
 
+	// Resolve the physical interface BEFORE the adapter exists: every dial the
+	// engine makes while the TUN is up must leave through it, otherwise the
+	// traffic would be routed back into the tunnel and loop.
+	if idx, err := primaryInterfaceIndex(); err == nil {
+		setEgressInterface(idx)
+	} else {
+		return fmt.Errorf("%w：无法确定物理网卡（%v），为避免流量环路已取消创建", ErrTUNUnsupported, err)
+	}
+
 	dev, err := tun.CreateTUN(name, mtu)
 	if err != nil {
 		return fmt.Errorf("%w：创建 wintun 网卡失败：%v", ErrTUNUnsupported, err)
@@ -317,6 +326,7 @@ func (t *TunDevice) Close(_ context.Context) error {
 	if name != "" {
 		_, _ = runNetsh("interface", "set", "interface", "name="+name, "admin=disable")
 	}
+	setEgressInterface(0)
 	return nil
 }
 
@@ -410,13 +420,6 @@ func (t *TunDevice) SetDefaultRoute(enable bool) error {
 	ip, _, err := parseIPv4CIDR(cfg.IPv4)
 	if err != nil {
 		return err
-	}
-	// Pin NGG's own dials to the physical NIC first, or every proxied
-	// connection would be routed back into this adapter and loop.
-	if idx, err := primaryInterfaceIndex(); err == nil {
-		setEgressInterface(idx)
-	} else {
-		return fmt.Errorf("无法确定物理网卡，已取消接管默认路由以避免环路: %w", err)
 	}
 	if _, err := runNetsh("interface", "ipv4", "add", "route", "0.0.0.0/0", "interface="+name,
 		"nexthop="+ip.String(), "metric=1", "store=active"); err != nil {
