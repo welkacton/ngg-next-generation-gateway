@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # NGG VPS deployment helper (systemd-based Linux, no Go/Node needed on the VPS).
 #
-#   sudo ./scripts/deploy-vps.sh install   --version v1.0.0
+#   sudo ./scripts/deploy-vps.sh install   --version v1.0.0 --public
+#   sudo ./scripts/deploy-vps.sh install   --version v1.0.0 --domain ngg.example.com --with-tls
 #   sudo ./scripts/deploy-vps.sh install   --file ./ngg-v1.0.0-linux-amd64.tar.gz
+#   ./scripts/deploy-vps.sh docker        # Docker Compose path (Alpine / no systemd)
 #   sudo ./scripts/deploy-vps.sh status
 #   sudo ./scripts/deploy-vps.sh upgrade   --version v1.0.1
 #   sudo ./scripts/deploy-vps.sh backup
@@ -28,11 +30,15 @@ BACKUPDIR=${BACKUPDIR:-/var/backups/ngg}
 SERVICE_USER=${SERVICE_USER:-ngg}
 SERVICE=${SERVICE:-ngg}
 PORT=${PORT:-9090}
+WEB_PORT=${WEB_PORT:-8080}
+PUBLIC_IP=${PUBLIC_IP:-""}
 UNIT="/etc/systemd/system/${SERVICE}.service"
+GATE_PATH=""
+DISTRO="unknown"; PKG_TOOL=""; REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 VERSION=""; FILE=""; TOKEN="${GITHUB_TOKEN:-}"; DOMAIN=""; EMAIL=""
-OUTPUT=""; WITH_TLS=0; WITH_NGINX=0; CONFIGURE_FIREWALL=0; ENABLE_TUN=0
-ASSUME_YES=0; KEEP_DATA=0; SKIP_CHECKSUM=0
+OUTPUT=""; WITH_TLS=0; WITH_NGINX=0; PUBLIC_MODE=0; CONFIGURE_FIREWALL=0; ENABLE_TUN=0
+ASSUME_YES=0; KEEP_DATA=0; SKIP_CHECKSUM=0; NO_INSTALL_DEPS=0
 TMP=""; PKG=""; TARBALL=""; CHECKSUMS=""; API_TOKEN=""; BASIC_PASS=""
 
 log()  { printf '[ngg] %s\n' "$*"; }
@@ -48,6 +54,7 @@ usage() {
 
 命令:
   install     从 GitHub Release（或本地 tar.gz）全新安装并启动 systemd 服务
+  docker      用 Docker Compose 部署（不需要 systemd；容器环境首选）
   upgrade     备份后替换二进制与 Web UI，保留配置与数据；失败自动回滚二进制
   backup      打包 /etc/ngg 配置 + 数据目录 + Web UI 到 /var/backups/ngg
   restore     从备份包恢复（会先停止服务）
@@ -59,25 +66,144 @@ usage() {
   --version v1.0.0        Release tag（install / upgrade 必填，除非用 --file）
   --file PATH             使用本地 Release tar.gz（离线部署；跳过下载）
   --token TOKEN           GitHub PAT（私有仓库；也可用环境变量 GITHUB_TOKEN）
-  --domain FQDN           安装 Nginx 反向代理（等价于 --with-nginx）
-  --with-tls              配合 --domain 调用 certbot 申请证书（需自备邮箱 --email）
-  --email ADDRESS         certbot 登记邮箱
-  --configure-firewall    用 ufw/firewalld 放行 SSH/80/443（不激活已关闭的防火墙）
+  --public                公网访问：Nginx 监听 WEB_PORT，URL = http://公网IP:端口/16位随机后缀
+  --web-port N            公网入口端口（默认 8080）
+  --public-ip IP          手动指定公网 IP（默认自动探测）
+  --domain FQDN           绑定域名（等价于 --public + server_name）
+  --with-tls              配合 --domain 用 certbot certonly 申请证书并生成 443 站点
+  --email ADDRESS         Let's Encrypt 登记邮箱
+  --configure-firewall    ufw/firewalld 放行 SSH/80/443/WEB_PORT（不激活已关闭的防火墙）
   --enable-tun            把 network.tun.autoroute 打开（需 /dev/net/tun）
-  --port N                控制面端口（默认 9090，通过 NGG_PORT 覆盖）
+  --port N                NGG 控制面端口（默认 9090，仅本机监听）
+  --no-install-deps       不自动安装系统依赖（自行备好 curl/tar/openssl/nginx）
   --output PATH           backup 输出路径
   --yes                   uninstall 跳过交互确认
   --keep-data             uninstall 保留 /etc/ngg、数据目录与备份
   --skip-checksum         跳过 SHA256 校验（不推荐，仅用于自构建包）
 
-安全提示: 控制面只监听 127.0.0.1，远程管理请走 SSH 隧道或 Nginx + HTTPS +
-Basic Auth；任何情况下都不要把 9090 直接暴露到公网。
+支持发行版: Debian/Ubuntu/Mint/Kali/Deepin/UOS(apt)、RHEL/CentOS/Rocky/Alma/
+Fedora/AmazonLinux(dnf/yum)、openSUSE/SLES(zypper)、Arch/Manjaro(pacman)。
+Alpine(OpenRC) 无 systemd，请改用 docker 子命令。
+
+安全提示: NGG 控制面本身仍只监听 127.0.0.1，公网入口由 Nginx 反向代理；
+公网路径用 16 位随机后缀 + Cookie 门禁 + NGG Bearer Token 三重保护，
+绑定域名后请务必 --with-tls 启用 HTTPS。不要把 9090 直接暴露到公网。
 USAGE
 }
 
 need_root()    { [ "$(id -u)" -eq 0 ] || die "请用 root 运行（sudo $0 $*）"; }
 need_cmd()     { command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"; }
 need_systemd() { command -v systemctl >/dev/null 2>&1 || die "需要 systemd（systemctl）"; }
+
+# ---- Multi-distro support -------------------------------------------------
+detect_distro() {
+  local id="" like="" pretty=""
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    id="${ID:-}"; like="${ID_LIKE:-}"; pretty="${PRETTY_NAME:-$id}"
+  fi
+  case "$id $like" in
+    *debian*|*ubuntu*|*mint*|*raspbian*|*pop*|*kali*|*deepin*|*uos*|*elementary*)
+      DISTRO=debian; PKG_TOOL=apt ;;
+    *rhel*|*fedora*|*centos*|*rocky*|*almalinux*|*amzn*|*ol*|*scientific*|*virtuozzo*)
+      DISTRO=rhel; PKG_TOOL=dnf
+      if ! command -v dnf >/dev/null 2>&1 && command -v yum >/dev/null 2>&1; then PKG_TOOL=yum; fi ;;
+    *suse*|*opensuse*|*sles*) DISTRO=suse;   PKG_TOOL=zypper ;;
+    *arch*|*manjaro*|*endeavour*|*garuda*) DISTRO=arch;   PKG_TOOL=pacman ;;
+    *alpine*) DISTRO=alpine; PKG_TOOL=apk ;;
+    *) DISTRO=unknown; PKG_TOOL="" ;;
+  esac
+  log "发行版: ${pretty} → ${DISTRO} / ${PKG_TOOL:-未知}"
+  # Alpine has no systemd. It is fine for the docker subcommand, but the
+  # systemd install path must refuse it explicitly.
+}
+
+# Install a list of distro-specific package names.
+pkg_install() {
+  [ "$#" -gt 0 ] || return 0
+  log "安装系统依赖: $*"
+  case "$PKG_TOOL" in
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq && apt-get install -y --no-install-recommends "$@" ;;
+    dnf|yum) "$PKG_TOOL" install -y "$@" ;;
+    zypper)  zypper --non-interactive install --no-recommends "$@" ;;
+    pacman)  pacman -Sy --noconfirm --needed "$@" ;;
+    apk)     apk add --no-cache "$@" ;;
+    *) warn "无法识别包管理器，请手动安装: $*"; return 1 ;;
+  esac
+}
+
+# Generic dependency name -> distro package name.
+map_pkg() {
+  case "$1:$DISTRO" in
+    curl:*)            printf 'curl' ;;
+    tar:*)             printf 'tar' ;;
+    openssl:*)         printf 'openssl' ;;
+    python3:*)         printf 'python3' ;;
+    nginx:*)           printf 'nginx' ;;
+    htpasswd:debian)   printf 'apache2-utils' ;;
+    htpasswd:rhel)     printf 'httpd-tools' ;;
+    htpasswd:suse)     printf 'apache2-utils' ;;
+    htpasswd:arch)     printf 'apache-tools' ;;
+    htpasswd:*)        printf 'apache2-utils' ;;
+    certbot:debian)    printf 'certbot python3-certbot-nginx' ;;
+    certbot:rhel)      printf 'certbot python3-certbot-nginx' ;;
+    certbot:suse)      printf 'certbot python3-certbot-nginx' ;;
+    certbot:arch)      printf 'certbot certbot-nginx' ;;
+    certbot:*)         printf 'certbot' ;;
+    ufw:*)             printf 'ufw' ;;
+    firewalld:*)       printf 'firewalld' ;;
+    *)                 printf '%s' "$1" ;;
+  esac
+}
+
+# Only install what is actually missing; never touch the system when
+# --no-install-deps is given.
+ensure_deps() {
+  [ "$NO_INSTALL_DEPS" -eq 1 ] && { log "跳过依赖安装（--no-install-deps）"; return 0; }
+  [ "$PKG_TOOL" = "" ] && { warn "未知发行版：跳过自动安装依赖，缺失时脚本会明确报错"; return 0; }
+  local missing=() p
+  for p in curl tar openssl; do
+    command -v "$p" >/dev/null 2>&1 || missing+=("$(map_pkg "$p")")
+  done
+  if ! command -v python3 >/dev/null 2>&1 && ! command -v jq >/dev/null 2>&1; then
+    missing+=("$(map_pkg python3)")
+  fi
+  if [ "$WITH_NGINX" -eq 1 ]; then
+    command -v nginx >/dev/null 2>&1 || missing+=("$(map_pkg nginx)")
+    if [ "$WITH_TLS" -eq 1 ] && ! command -v certbot >/dev/null 2>&1; then
+      # certbot map may return two packages
+      read -r -a cb <<<"$(map_pkg certbot)"; missing+=("${cb[@]}")
+    fi
+  fi
+  if [ "$CONFIGURE_FIREWALL" -eq 1 ]; then
+    if [ "$DISTRO" = debian ]; then
+      command -v ufw >/dev/null 2>&1 || missing+=("$(map_pkg ufw)")
+    elif ! command -v firewall-cmd >/dev/null 2>&1; then
+      missing+=("$(map_pkg firewalld)")
+    fi
+  fi
+  if [ "${#missing[@]}" -gt 0 ]; then
+    # shellcheck disable=SC2086
+    pkg_install "${missing[@]}" || warn "部分依赖安装失败，后续步骤会如实报错"
+  else
+    log "系统依赖已齐备"
+  fi
+}
+
+public_ip() {
+  if [ -n "$PUBLIC_IP" ]; then printf '%s' "$PUBLIC_IP"; return 0; fi
+  local ip=""
+  ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  [ -z "$ip" ] && ip="$(curl -fsS --max-time 5 https://ifconfig.me/ip 2>/dev/null || true)"
+  if [ -z "$ip" ] && command -v ip >/dev/null 2>&1; then
+    ip="$(ip -4 route get 1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+  fi
+  [ -z "$ip" ] && ip="<VPS公网IP>"
+  printf '%s' "$ip"
+}
 
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then
@@ -212,8 +338,18 @@ prepare_bundle() {
 
 ensure_user_dirs() {
   if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER" \
-      || die "创建系统用户 $SERVICE_USER 失败"
+    # nologin lives in /sbin on RHEL-family, /usr/sbin on Debian-family.
+    local nologin="/usr/sbin/nologin"
+    [ -x /sbin/nologin ] && nologin="/sbin/nologin"
+    if command -v useradd >/dev/null 2>&1; then
+      useradd --system --no-create-home --shell "$nologin" "$SERVICE_USER" \
+        || die "创建系统用户 $SERVICE_USER 失败"
+    elif command -v adduser >/dev/null 2>&1; then
+      adduser -S -D -H -s "$nologin" "$SERVICE_USER" \
+        || die "创建系统用户 $SERVICE_USER 失败"
+    else
+      die "找不到 useradd/adduser，无法创建系统用户 $SERVICE_USER"
+    fi
   fi
   install -d -m 0755 "$PREFIX" "$PREFIX/web" "$CONF" "$CONF/cores.d" "$DATA" "$LOGDIR"
   chown -R "$SERVICE_USER":"$SERVICE_USER" "$DATA" "$LOGDIR" "$CONF" "$PREFIX/web"
@@ -322,11 +458,12 @@ wait_healthy() {
 }
 
 configure_firewall() {
-  log "配置防火墙（只放行 SSH / HTTP / HTTPS，绝不放行 9090）"
+  log "配置防火墙（只放行 SSH / 80 / 443 / 公网入口 ${WEB_PORT}，绝不放行 9090）"
   if command -v ufw >/dev/null 2>&1; then
     ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
     ufw allow 80/tcp >/dev/null 2>&1 || true
     ufw allow 443/tcp >/dev/null 2>&1 || true
+    [ "$WITH_NGINX" -eq 1 ] && ufw allow "${WEB_PORT}/tcp" >/dev/null 2>&1 || true
     if ufw status 2>/dev/null | grep -qi '^Status: active'; then
       ufw reload >/dev/null 2>&1 || true
       log "ufw 规则已应用（防火墙原本就是开启状态）"
@@ -337,76 +474,142 @@ configure_firewall() {
     firewall-cmd --permanent --add-service=ssh >/dev/null 2>&1 || true
     firewall-cmd --permanent --add-service=http >/dev/null 2>&1 || true
     firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true
+    if [ "$WITH_NGINX" -eq 1 ]; then
+      firewall-cmd --permanent --add-port="${WEB_PORT}/tcp" >/dev/null 2>&1 || true
+    fi
     firewall-cmd --reload >/dev/null 2>&1 || true
     log "firewalld 规则已应用"
   else
-    warn "未检测到活动的 ufw/firewalld，请自行在云厂商安全组只放行 22/80/443"
+    warn "未检测到活动的 ufw/firewalld，请在云厂商安全组放行 22/80/443/${WEB_PORT}（按实际需要）"
   fi
+}
+
+# Append one nginx server block. The secret path sets a cookie; all other
+# paths require that cookie. This keeps the Web UI's absolute /assets and /api
+# URLs working while hiding the panel behind a 16-character random suffix.
+# NOTE: no auth_basic here on purpose — browsers would replace the Web UI's
+# "Authorization: Bearer <token>" header with Basic credentials and nginx
+# would return 401 before the request ever reaches NGG.
+render_gate_server() {
+  local listen="$1" tls="$2" file="$3"
+  {
+    printf 'server {\n'
+    printf '    listen %s;\n' "$listen"
+    if [ -n "$tls" ]; then
+      printf '    ssl_certificate     /etc/letsencrypt/live/%s/fullchain.pem;\n' "$DOMAIN"
+      printf '    ssl_certificate_key /etc/letsencrypt/live/%s/privkey.pem;\n' "$DOMAIN"
+      printf '    ssl_protocols TLSv1.2 TLSv1.3;\n'
+    fi
+    printf '    server_name %s;\n' "${DOMAIN:-_}"
+    printf '    client_max_body_size 32m;\n'
+    printf '    location /.well-known/acme-challenge/ { root /var/www/html; }\n'
+    printf '    location = /%s {\n' "$GATE_PATH"
+    local secure=""
+    [ -n "$tls" ] && secure="; Secure"
+    printf '        add_header Set-Cookie "ngg_gate=%s; Path=/; HttpOnly; SameSite=Strict%s; Max-Age=31536000" always;\n' "$GATE_PATH" "$secure"
+    printf '        return 302 /;\n'
+    printf '    }\n'
+    printf '    location / {\n'
+    printf '        if ($ngg_gate_ok = 0) { return 404; }\n'
+    printf '        proxy_pass http://127.0.0.1:%s;\n' "$PORT"
+    printf '        proxy_http_version 1.1;\n'
+    printf '        proxy_set_header Host $host;\n'
+    printf '        proxy_set_header X-Real-IP $remote_addr;\n'
+    printf '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n'
+    printf '        proxy_set_header X-Forwarded-Proto $scheme;\n'
+    printf '        proxy_set_header Upgrade $http_upgrade;\n'
+    printf '        proxy_set_header Connection "upgrade";\n'
+    printf '        proxy_read_timeout 300s;\n'
+    printf '        proxy_send_timeout 300s;\n'
+    printf '    }\n'
+    printf '}\n\n'
+  } >> "$file"
 }
 
 setup_nginx() {
   [ "$WITH_NGINX" -eq 1 ] || return 0
-  [ -n "$DOMAIN" ] || die "--with-nginx 需要 --domain <FQDN>"
   if ! command -v nginx >/dev/null 2>&1; then
-    warn "未安装 nginx，跳过反向代理；可先执行: apt install -y nginx certbot python3-certbot-nginx"
+    warn "未安装 nginx，跳过公网入口；可加 --no-install-deps 之外的方式先安装 nginx"
     return 0
   fi
   need_cmd openssl
-  BASIC_PASS="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16)"
-  local auth_file="$CONF/htpasswd"
-  if command -v htpasswd >/dev/null 2>&1; then
-    htpasswd -bcB "$auth_file" ngg "$BASIC_PASS" >/dev/null
+  # 16-character random suffix (8 random bytes -> 16 hex chars).
+  GATE_PATH="$(openssl rand -hex 8)"
+  local name="${DOMAIN:-_}"
+  local site link=""
+  if [ -d /etc/nginx/sites-enabled ]; then
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+    site="/etc/nginx/sites-available/ngg.conf"
+    link="/etc/nginx/sites-enabled/ngg.conf"
   else
-    printf 'ngg:%s\n' "$(openssl passwd -apr1 "$BASIC_PASS")" > "$auth_file"
+    mkdir -p /etc/nginx/conf.d
+    site="/etc/nginx/conf.d/ngg.conf"
   fi
-  chmod 0640 "$auth_file"
-  for grp in www-data nginx apache; do
-    if getent group "$grp" >/dev/null 2>&1; then chgrp "$grp" "$auth_file"; break; fi
-  done
 
-  local site="/etc/nginx/sites-available/ngg.conf"
-  mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-  cat > "$site" <<NGINX
-# NGG control plane reverse proxy. Generated by deploy-vps.sh.
-# The control API still binds to 127.0.0.1; this is the only public entry.
-server {
-    listen 80;
-    server_name ${DOMAIN};
+  {
+    printf '# Generated by deploy-vps.sh. NGG still binds to 127.0.0.1 only.\n'
+    printf 'map $cookie_ngg_gate $ngg_gate_ok {\n'
+    printf '    default 0;\n'
+    printf '    "%s" 1;\n' "$GATE_PATH"
+    printf '}\n\n'
+  } > "$site"
 
-    client_max_body_size 32m;
-    auth_basic "NGG Control Plane";
-    auth_basic_user_file ${auth_file};
+  # One HTTP server: public port for IP access (+ port 80 for ACME / domain).
+  render_gate_server "0.0.0.0:${WEB_PORT}" "" "$site"
+  if [ -n "$DOMAIN" ] && [ "$WEB_PORT" != "80" ]; then
+    # Second plain-HTTP listener for the domain (ACME challenge + redirect-free access).
+    render_gate_server "80" "" "$site"
+  fi
 
-    location / {
-        proxy_pass http://127.0.0.1:${PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-    }
-}
-NGINX
-  ln -sfn "$site" /etc/nginx/sites-enabled/ngg.conf
-  nginx -t >/dev/null 2>&1 || { rm -f /etc/nginx/sites-enabled/ngg.conf; die "nginx -t 失败，已回滚站点配置"; }
-  systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+  [ -n "$link" ] && ln -sfn "$site" "$link"
+  if ! nginx -t >/dev/null 2>&1; then
+    [ -n "$link" ] && rm -f "$link"
+    rm -f "$site"
+    die "nginx -t 失败，已回滚站点配置（检查是否已有同名 map / 端口冲突）"
+  fi
+  systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || nginx -s reload >/dev/null 2>&1 || true
 
   if [ "$WITH_TLS" -eq 1 ]; then
+    [ -n "$DOMAIN" ] || die "--with-tls 需要 --domain <FQDN>"
+    mkdir -p /var/www/html
     if command -v certbot >/dev/null 2>&1; then
-      local mail_args=()
+      local mail_args=(--register-unsafely-without-email)
       [ -n "$EMAIL" ] && mail_args=(-m "$EMAIL")
-      certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
-        "${mail_args[@]+"${mail_args[@]}"}" --redirect || warn "certbot 未成功，站点仍以 HTTP + Basic Auth 运行（不要在此状态长期使用）"
+      if certbot certonly --webroot -w /var/www/html -d "$DOMAIN" \
+          --non-interactive --agree-tos "${mail_args[@]+"${mail_args[@]}"}"; then
+        if [ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+          render_gate_server "443 ssl" "yes" "$site"
+          if nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+            log "SSL 证书已签发并绑定 https://${DOMAIN}/${GATE_PATH}"
+          else
+            warn "443 站点 nginx -t 失败；证书已签发但 HTTPS 站点未启用，请检查 $site"
+          fi
+        fi
+      else
+        warn "certbot 未成功（域名是否已解析到本机？80 端口是否被占用？）；当前仍为 HTTP"
+      fi
     else
-      warn "未安装 certbot；请先 apt install -y certbot python3-certbot-nginx 再执行："
-      warn "  certbot --nginx -d $DOMAIN --redirect"
+      warn "未安装 certbot；请先安装后执行: certbot certonly --webroot -w /var/www/html -d $DOMAIN"
     fi
   fi
-  log "Nginx 已配置: http://${DOMAIN}/ → 127.0.0.1:${PORT}（Basic Auth 用户 ngg）"
+
+  local ip; ip="$(public_ip)"
+  local http_url="http://${ip}:${WEB_PORT}/${GATE_PATH}"
+  {
+    printf 'NGG public web gate (generated by deploy-vps.sh)\n'
+    printf 'secret path : /%s\n' "$GATE_PATH"
+    printf 'IP access   : %s\n' "$http_url"
+    [ -n "$DOMAIN" ] && printf 'domain      : http://%s/%s\n' "$DOMAIN" "$GATE_PATH"
+    [ "$WITH_TLS" -eq 1 ] && printf 'HTTPS       : https://%s/%s\n' "$DOMAIN" "$GATE_PATH"
+    printf 'API token   : %s\n' "$API_TOKEN"
+    printf 'NOTE: open the secret path ONCE in your browser to set the gate cookie,\n'
+    printf '      then the Web UI loads from /. NGG Bearer token is still required.\n'
+  } > "$CONF/web-gate.txt"
+  chmod 0600 "$CONF/web-gate.txt"
+  log "公网入口已就绪: $http_url"
+  if [ -n "$DOMAIN" ]; then log "域名入口: http://${DOMAIN}/${GATE_PATH}（加 --with-tls 可升级为 HTTPS）"; fi
+  log "门禁信息已保存到 $CONF/web-gate.txt (0600)"
 }
 
 print_access() {
@@ -418,16 +621,23 @@ print_access() {
   log "数据:      $DATA"
   log "本机地址:  http://127.0.0.1:${PORT}/?token=${API_TOKEN}"
   log "SSH 隧道:  ssh -L ${PORT}:127.0.0.1:${PORT} <user>@<vps>  然后浏览器打开上面的地址"
-  if [ -n "$DOMAIN" ] && [ -n "$BASIC_PASS" ]; then
-    log "Nginx:     http://${DOMAIN}/  用户 ngg / 密码 ${BASIC_PASS}"
-    log "⚠ Basic Auth 只是额外一层，NGG 的 Bearer Token 仍然必需；请尽快启用 HTTPS"
+  if [ -n "$GATE_PATH" ]; then
+    log "公网入口:  http://$(public_ip):${WEB_PORT}/${GATE_PATH}"
+    [ -n "$DOMAIN" ] && log "域名入口:  http://${DOMAIN}/${GATE_PATH}"
+    [ "$WITH_TLS" -eq 1 ] && log "HTTPS:     https://${DOMAIN}/${GATE_PATH}"
+    log "门禁信息:  $CONF/web-gate.txt（首次打开秘密路径会写入 Cookie，之后从 / 访问）"
+    log "⚠ 秘密路径 + Cookie 只是外层门禁，NGG Bearer Token 仍然必需；公网请尽快启用 HTTPS"
   fi
   log "⚠ 请把上面的 Token 保存到密码管理器，不要提交到仓库、不要发到聊天里"
   echo
 }
 
 cmd_install() {
-  need_root; need_systemd; need_cmd curl; need_cmd tar
+  need_root; need_systemd
+  detect_distro
+  [ "$DISTRO" = "alpine" ] && die "Alpine 使用 OpenRC 而非 systemd；请改用: $0 docker（Docker Compose 部署）"
+  ensure_deps
+  need_cmd curl; need_cmd tar; need_cmd openssl
   prepare_bundle
   ensure_user_dirs
   copy_payload
@@ -467,6 +677,47 @@ cmd_upgrade() {
   fi
   rm -f "$PREFIX/nggd.bak"; rm -rf "$PREFIX/web/dist.bak"
   log "升级完成，配置与数据未改动；备份位于 $BACKUPDIR"
+}
+
+cmd_docker() {
+  # Docker path: no systemd, no Go/Node on the host, works on Alpine too.
+  need_cmd docker
+  local compose=""
+  if docker compose version >/dev/null 2>&1; then compose="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then compose="docker-compose"
+  else die "需要 Docker Compose v2（docker compose）或 docker-compose"; fi
+  [ -f "$REPO_ROOT/docker-compose.yml" ] || die "找不到 $REPO_ROOT/docker-compose.yml；请在仓库根目录运行"
+  detect_distro
+  cd "$REPO_ROOT"
+  if [ ! -f .env ]; then
+    cp .env.example .env
+    log "已生成 .env（请按需编辑 NGG_TOKEN / TZ）"
+  fi
+  # Generate a random token if the .env has no explicit one.
+  local token
+  token="$(awk -F= '/^NGG_TOKEN=/{print $2; exit}' .env)"
+  if [ -z "$token" ]; then
+    token="$(random_hex)"
+    sed -i "s#^NGG_TOKEN=.*#NGG_TOKEN=${token}#" .env
+    API_TOKEN="$token"
+    log "已生成随机 API Token 并写入 .env"
+  else
+    API_TOKEN="$token"
+  fi
+  log "启动容器: $compose up -d --build"
+  $compose up -d --build || die "docker compose 启动失败"
+  log "容器状态:"; $compose ps
+  log "本机地址: http://127.0.0.1:${PORT}/?token=${API_TOKEN}"
+  if [ "$WITH_NGINX" -eq 1 ]; then
+    if [ "$(id -u)" -ne 0 ]; then
+      warn "公网入口需要 root 配置宿主机 Nginx，请改用: sudo $0 docker --public ..."
+    else
+      setup_nginx
+      [ "$CONFIGURE_FIREWALL" -eq 1 ] && configure_firewall
+      [ -n "$GATE_PATH" ] && log "公网入口: http://$(public_ip):${WEB_PORT}/${GATE_PATH}"
+    fi
+  fi
+  log "提示: Docker Desktop 请把 docker-compose.yml 里的 network_mode: host 换成注释掉的 ports 映射"
 }
 
 cmd_backup() {
@@ -514,6 +765,10 @@ cmd_status() {
   else
     warn "找不到配置 $CONF/ngg.yaml"
   fi
+  if [ -f "$CONF/web-gate.txt" ]; then
+    log "公网门禁信息 ($CONF/web-gate.txt):"
+    grep -E 'secret path|IP access|domain|HTTPS' "$CONF/web-gate.txt" | sed 's/^/[ngg]   /'
+  fi
 }
 
 listen_entries() {
@@ -537,6 +792,8 @@ cmd_doctor() {
   check "控制面端口在监听" "listen_entries | grep -qE '127.0.0.1:${PORT}'"
   check "控制面未监听公网" "! listen_entries | grep -qE '0\\.0\\.0\\.0:${PORT}|\\*:${PORT}'"
   check "/dev/net/tun 可用（TUN 可选）" "[ -e /dev/net/tun ]"
+  check "公网门禁信息存在（如启用 --public）" "[ ! -f $CONF/web-gate.txt ] || [ -s $CONF/web-gate.txt ]"
+  check "Nginx 配置语法正确（如已安装）" "! command -v nginx >/dev/null 2>&1 || nginx -t"
   check "磁盘剩余 > 1GB" "[ \$(df -Pk $DATA | awk 'NR==2{print \$4}') -gt 1048576 ]"
   log "体检结果: $ok 项通过 / $bad 项未通过（TUN 未通过不影响 userspace 入口）"
 }
@@ -551,7 +808,7 @@ cmd_uninstall() {
   fi
   systemctl stop "$SERVICE" 2>/dev/null || true
   systemctl disable "$SERVICE" 2>/dev/null || true
-  rm -f "$UNIT" /etc/nginx/sites-enabled/ngg.conf /etc/nginx/sites-available/ngg.conf
+  rm -f "$UNIT" /etc/nginx/sites-enabled/ngg.conf /etc/nginx/sites-available/ngg.conf /etc/nginx/conf.d/ngg.conf
   systemctl daemon-reload 2>/dev/null || true
   command -v nginx >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
   rm -rf "$PREFIX"
@@ -572,10 +829,14 @@ while [ $# -gt 0 ]; do
     --file)            FILE="${2:-}"; shift 2 ;;
     --token)           TOKEN="${2:-}"; shift 2 ;;
     --domain)          DOMAIN="${2:-}"; WITH_NGINX=1; shift 2 ;;
+    --public)          PUBLIC_MODE=1; WITH_NGINX=1; shift ;;
+    --web-port)        WEB_PORT="${2:-}"; shift 2 ;;
+    --public-ip)       PUBLIC_IP="${2:-}"; shift 2 ;;
     --with-nginx)      WITH_NGINX=1; shift ;;
     --with-tls)        WITH_TLS=1; WITH_NGINX=1; shift ;;
     --email)           EMAIL="${2:-}"; shift 2 ;;
     --configure-firewall) CONFIGURE_FIREWALL=1; shift ;;
+    --no-install-deps) NO_INSTALL_DEPS=1; shift ;;
     --enable-tun)      ENABLE_TUN=1; shift ;;
     --port)            PORT="${2:-}"; shift 2 ;;
     --output)          OUTPUT="${2:-}"; shift 2 ;;
@@ -589,6 +850,7 @@ done
 
 case "$CMD" in
   install)   cmd_install ;;
+  docker)    cmd_docker ;;
   upgrade)   cmd_upgrade ;;
   backup)    cmd_backup ;;
   restore)   cmd_restore ;;

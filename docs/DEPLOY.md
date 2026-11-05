@@ -85,7 +85,9 @@ sudo ./scripts/deploy-vps.sh status
 ```
 
 `deploy-vps.sh` 支持 `install / upgrade / backup / restore / status / doctor / uninstall`，
-并能可选配置 ufw/firewalld、Nginx + Basic Auth + certbot HTTPS。
+并能可选配置 ufw/firewalld、Nginx 公网入口（`--public`：公网 IP + 端口 + 16 位随机后缀 +
+Cookie 门禁）与 `--domain --with-tls` 的 certbot HTTPS。**不要**给 Nginx 加 Basic Auth，
+它会覆盖 Web UI 的 Bearer 头导致 401。
 
 **备选：从源码构建安装**（需要 VPS 上有 Go 1.26+、Node 20+）
 

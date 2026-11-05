@@ -11,7 +11,7 @@
 | 约束 | 原因 |
 | --- | --- |
 | 控制 API 只监听 `127.0.0.1:9090`，且所有 `/api/` 请求必须带 Bearer Token | 代码里 socket 层与中间件**双重**校验回环地址，非回环直接 403。把 `server.listen` 改成 `0.0.0.0` 不是「开放远程管理」，而是直接失效 |
-| 远程管理走 **SSH 隧道**，或 **Nginx + HTTPS + Basic Auth** 反向代理到本机 9090 | 这是唯一两种被支持的远程访问方式 |
+| 远程管理走 **SSH 隧道**，或 **Nginx 公网入口（随机秘密路径 + Cookie 门禁 + HTTPS）** 反代到本机 9090 | 这是唯二被支持的远程访问方式；**不要**给 Nginx 加 `auth_basic`，它会覆盖 Web UI 的 Bearer 头导致 401 |
 | 云安全组 / 防火墙只放行 22、可选的 80/443，**绝不放行 9090 / 18080 / 18053** | 9090 是控制面，18080 是代理入口，18053 是 DNS |
 | `configs/ngg.yaml`（含 Token）与 `data/`（含节点凭据、私钥）不入库、不外传 | 已 gitignore；备份文件请加密保存 |
 | 仓库当前为 **Private** | 下载 Release 资产需要 GitHub PAT；不要把 PAT 写进脚本或提交 |
@@ -25,19 +25,27 @@
 
 **最低配置**：1 vCPU / 1 GB RAM / 10 GB 磁盘；x86_64 或 ARM64 均可（Release 提供 amd64 / arm64 / arm / 386）。
 
+**支持的发行版**（`deploy-vps.sh` 会自动读 `/etc/os-release` 并选择包管理器，无需手工区分）：
+
+| 家族 | 发行版 | 包管理器 |
+| --- | --- | --- |
+| Debian | Debian 11/12/13、Ubuntu 20.04~24.04、Linux Mint、Pop!_OS、Kali、Deepin、UOS、Raspberry Pi OS | `apt-get` |
+| RHEL | RHEL 8/9、CentOS Stream、Rocky、AlmaLinux、Fedora、Amazon Linux、Oracle Linux | `dnf`（老版本自动回退 `yum`） |
+| SUSE | openSUSE Leap / Tumbleweed、SLES | `zypper` |
+| Arch | Arch Linux、Manjaro、EndeavourOS | `pacman` |
+| Alpine | Alpine Linux | **无 systemd，请改用 `deploy-vps.sh docker`** |
+
+脚本还会自动处理这些差异：`/sbin/nologin` vs `/usr/sbin/nologin`、`sites-enabled` vs `conf.d`、
+`apache2-utils` vs `httpd-tools`、`ufw` vs `firewalld`、`python3` 缺失等。用 `--no-install-deps`
+可禁止自动装包，改为自己准备依赖。
+
 ```bash
-# 以 Ubuntu 22.04/24.04、Debian 12 为例
 ssh root@<VPS_IP>
-adduser nggadmin && usermod -aG sudo nggadmin     # 用非 root 账号日常运维
-apt update && apt upgrade -y
-apt install -y curl tar ca-certificates openssl
+adduser nggadmin && usermod -aG sudo nggadmin     # 建议用非 root 账号日常运维
+# 依赖（curl / tar / openssl / nginx / certbot）由脚本自动安装，无需手工执行
 timedatectl set-timezone Asia/Shanghai           # 可选
-
-# Rocky / AlmaLinux 9 等价命令
-# dnf install -y curl tar openssl ca-certificates
+systemctl --version                              # 确认是 systemd
 ```
-
-确认系统使用 systemd：`systemctl --version`。Docker 方案见第 3 节，可跳过后续 systemd 步骤。
 
 **私有仓库凭据**（只在本机使用，不要写进仓库）：
 
@@ -71,16 +79,25 @@ chmod +x deploy-vps.sh
 ```bash
 export GITHUB_TOKEN='ghp_xxx'
 
-# 在线安装指定 Release（脚本自动识别 amd64 / arm64 / arm / 386）
+# 在线安装指定 Release（脚本自动识别 amd64 / arm64 / arm / 386 与发行版）
 sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0
 
-# 可选：配置防火墙 + Nginx 反向代理 + Let's Encrypt
+# 「先用公网 IP + 端口 + 16 位随机后缀访问」（最常用）
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0 \
+  --public --web-port 8080 --configure-firewall
+
+# 之后把域名 A 记录指向 VPS，再补 SSL（相同或再次执行 install 均可）
 sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0 \
   --domain ngg.example.com --with-tls --email you@example.com --configure-firewall
 
 # 离线 / 内网：在有网机器下载 Release 包与 SHA256SUMS，scp 到 VPS 后
-sudo ./scripts/deploy-vps.sh install --file /root/ngg-v1.0.0-linux-amd64.tar.gz
+sudo ./scripts/deploy-vps.sh install --file /root/ngg-v1.0.0-linux-amd64.tar.gz --public
 ```
+
+`--public` 会打印形如 `http://203.0.113.7:8080/9f3ac1b27e4d6058` 的地址，并把秘密路径、
+域名、Token 一起写到 `/etc/ngg/web-gate.txt`（`0600`）。**首次在浏览器打开这个完整秘密路径**
+会写入 Cookie 并跳转到 `/`，之后 Web UI 的 `/assets`、`/api/v1` 等绝对路径才能正常加载。
+换浏览器 / 清 Cookie 后需要再打开一次秘密路径。
 
 > `--file` 时脚本会在同目录寻找 `SHA256SUMS` 或 `<包名>.sha256` 并校验；
 > 自构建包可加 `--skip-checksum`（不推荐）。
@@ -92,9 +109,10 @@ sudo ./scripts/deploy-vps.sh install --file /root/ngg-v1.0.0-linux-amd64.tar.gz
 3. 安装 `nggd`、`web/dist`、`cores.d` 描述文件；
 4. 从模板生成 `/etc/ngg/ngg.yaml`：**全部改为绝对路径**、生成 32 字节随机 API Token、权限 `0600`；
 5. 生成 systemd unit（含 `CAP_NET_ADMIN` 供 TUN、`ProtectSystem=full` + `ReadWritePaths` 最小可写面）；
-6. 可选配置 ufw/firewalld 与 Nginx（Basic Auth + WebSocket + certbot）；
-7. `systemctl enable --now ngg`，轮询 `/api/v1/health` 直到通过；
-8. 打印访问地址、Token 与 SSH 隧道命令。
+6. 探测发行版并自动安装缺失依赖（curl / tar / openssl / python3 / nginx / certbot / 防火墙工具）；
+7. 可选配置 ufw/firewalld 与 Nginx 公网入口（16 位随机秘密路径 + Cookie 门禁 + WebSocket；`--with-tls` 用 certbot 签发证书并生成 443 站点）；
+8. `systemctl enable --now ngg`，轮询 `/api/v1/health` 直到通过；
+9. 打印本机地址、`IP:端口/随机后缀`、域名/HTTPS 地址与 SSH 隧道命令。
 
 ### 2.4 常用参数
 
@@ -103,11 +121,15 @@ sudo ./scripts/deploy-vps.sh install --file /root/ngg-v1.0.0-linux-amd64.tar.gz
 | `--version vX.Y.Z` | — | Release tag；`install` / `upgrade` 必填（除非 `--file`） |
 | `--file PATH` | — | 本地 tar.gz，离线部署 |
 | `--token TOKEN` | `$GITHUB_TOKEN` | GitHub PAT（私有仓库） |
-| `--domain FQDN` | — | 启用 Nginx 反向代理 |
-| `--with-tls` / `--email` | — | 调用 certbot 申请证书并强制 HTTPS |
-| `--configure-firewall` | 关 | ufw/firewalld 放行 22/80/443；防火墙未启用时只写规则、不擅自激活 |
+| `--public` | 关 | 启用公网入口：`http://公网IP:端口/16位随机后缀` |
+| `--web-port N` | 8080 | 公网入口监听端口 |
+| `--public-ip IP` | 自动探测 | 手动指定公网 IP（NAT / 内网穿透场景） |
+| `--domain FQDN` | — | 绑定域名（同时启用 Nginx，`server_name` + 80 监听） |
+| `--with-tls` / `--email` | — | `certbot certonly --webroot` 签发证书并生成 443 站点 |
+| `--configure-firewall` | 关 | ufw/firewalld 放行 22/80/443/`WEB_PORT`；防火墙未启用时只写规则、不擅自激活 |
+| `--no-install-deps` | 关 | 禁止自动装包，自行准备依赖 |
 | `--enable-tun` | 关 | 打开 `network.tun.autoroute`（需 `/dev/net/tun`） |
-| `--port N` | 9090 | 通过 `NGG_PORT` 覆盖控制面端口 |
+| `--port N` | 9090 | NGG 控制面端口（**仅本机监听**） |
 | `--skip-checksum` | 关 | 跳过 SHA256（仅自构建包） |
 | `PREFIX` / `CONF` / `DATA` / `LOGDIR` | `/opt/ngg` / `/etc/ngg` / `/var/lib/ngg` / `/var/log/ngg` | 环境变量覆盖路径 |
 
@@ -128,11 +150,21 @@ ssh -L 9090:127.0.0.1:9090 nggadmin@<VPS_IP>
 
 ---
 
-## 3. 方式 B：Docker Compose（已有容器环境时）
+## 3. 方式 B：Docker Compose（容器环境 / Alpine / 无 systemd）
+
+一键（脚本会自动生成 `.env` 和随机 Token，兼容 `docker compose` v2 与旧版 `docker-compose`）：
 
 ```bash
 git clone https://github.com/welkacton/ngg-next-generation-gateway.git
 cd ngg-next-generation-gateway
+./scripts/deploy-vps.sh docker                     # 不需要 root（需在当前用户属于 docker 组）
+sudo ./scripts/deploy-vps.sh docker --public --web-port 8080   # 需要公网入口时加 sudo
+docker compose logs -f ngg
+```
+
+手工等价步骤：
+
+```bash
 cp .env.example .env
 # 可选：在 .env 里设置 NGG_TOKEN（留空则首次启动自动生成并写回 runtime/configs/ngg.yaml）
 docker compose up -d --build
@@ -142,7 +174,8 @@ docker compose logs -f ngg          # 日志里会打印自动生成的 API Toke
 - Linux 上 `network_mode: host` 保证 LAN 入口与 TUN 正常；Docker Desktop 需改用 `docker-compose.yml` 里注释掉的 `ports`。
 - 配置持久化在 `./runtime/configs/ngg.yaml`，数据在 `./runtime/data/`，升级不会丢。
 - 升级：`git pull && docker compose up -d --build`。
-- 远程访问同样走 SSH 隧道或宿主机 Nginx 反代到 `127.0.0.1:9090`。
+- 远程访问同样走 SSH 隧道或宿主机 Nginx 公网入口（第 5 节）；`docker --public` 会自动配置宿主机 Nginx。
+- **Alpine / OpenRC** 没有 systemd，`install` 会明确拒绝并提示改用本节的 `docker` 子命令。
 
 ---
 
@@ -204,24 +237,53 @@ ssh -N -L 9090:127.0.0.1:9090 nggadmin@<VPS_IP>      # 保持窗口打开
 
 也可用 VS Code / Termius 的端口转发，效果相同。
 
-### 5.2 Nginx + Basic Auth + HTTPS（需要域名）
+### 5.2 公网 IP + 端口 + 16 位随机后缀（阶段一）
 
 ```bash
-apt install -y nginx apache2-utils certbot python3-certbot-nginx
-htpasswd -bcB /etc/ngg/htpasswd ngg '<随机强密码>'
-cp deploy/nginx/ngg.conf.example /etc/nginx/sites-available/ngg.conf
-sed -i 's/ngg.example.com/<你的域名>/' /etc/nginx/sites-available/ngg.conf
-ln -sfn /etc/nginx/sites-available/ngg.conf /etc/nginx/sites-enabled/ngg.conf
-nginx -t && systemctl reload nginx
-certbot --nginx -d <你的域名> --redirect
-# 一键脚本等价命令：deploy-vps.sh install --domain <域名> --with-tls --email <邮箱>
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0 \
+  --public --web-port 8080 --configure-firewall
 ```
 
-访问 `https://<域名>/?token=<TOKEN>`：
+脚本会：
 
-- Nginx 的 Basic Auth 是**额外一层**，NGG 的 Bearer Token 仍然必需；Web UI 首次用 `?token=` 绑定后会在本地保存。
-- WebSocket `/api/v1/ws` 需要 `Upgrade` 头，模板已配置；若日志出现大量 WS 断连，先检查这两行。
-- 浏览器若同时弹出 Basic Auth 与 NGG 登录，先完成 Basic Auth，再粘贴 Token。
+1. 生成 16 位十六进制随机后缀（如 `9f3ac1b27e4d6058`），写入 `/etc/ngg/web-gate.txt`（0600）；
+2. 生成 Nginx 站点：监听 `0.0.0.0:8080`，**只有** `/<后缀>` 这条路径返回 `Set-Cookie` 并 302 到 `/`；
+   其它路径在没有该 Cookie 时一律返回 404；
+3. 反代到 `127.0.0.1:9090`（NGG 仍然只监听回环，中间件照常校验）；
+4. 打印 `http://<公网IP>:8080/<16位后缀>`。
+
+**访问方式**：先在浏览器打开这个**完整秘密路径**，Cookie 写入后自动跳到 `/`，此时粘贴
+`?token=<TOKEN>` 完成绑定。换浏览器 / 清 Cookie 后重开一次秘密路径即可。
+
+> 为什么用 Cookie 门禁而不是把 Web UI 挂到 `/<后缀>/` 子路径？Vite 产物里的 `/assets/...`、
+> `/api/v1/...` 都是绝对路径，挂子路径会 404；Cookie 方案不需要重新编译前端。
+>
+> ⚠️ **不要在 Nginx 上加 `auth_basic`**：浏览器会把 Web UI 的 `Authorization: Bearer <token>`
+> 头替换成 Basic 凭据，Nginx 会直接返回 401，请求到不了 NGG。这是早期版本的一个坑，现已移除。
+
+### 5.3 绑定域名 + SSL 证书（阶段二）
+
+域名 A 记录指向 VPS 公网 IP、80/443 放行后：
+
+```bash
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0 \
+  --domain ngg.example.com --with-tls --email you@example.com --configure-firewall
+# 或仅补证书（脚本会重新生成站点配置，秘密路径会更换并写入 web-gate.txt）
+```
+
+脚本用 `certbot certonly --webroot -w /var/www/html -d <域名>` 签发证书
+（不改写 Nginx 配置，避免破坏门禁），成功后追加一个 443 server 块：
+
+```
+https://ngg.example.com/<16位后缀>   → Cookie 门禁 → 127.0.0.1:9090
+http://<公网IP>:8080/<16位后缀>      → 仍可用（HTTP，仅建议临时使用）
+```
+
+手工等价步骤见 `deploy/nginx/ngg.conf.example`；证书路径为
+`/etc/letsencrypt/live/<域名>/fullchain.pem` 与 `privkey.pem`。
+
+- WebSocket `/api/v1/ws` 需要 `Upgrade` / `Connection "upgrade"` 头，模板已配置。
+- 续期：`certbot renew` 由发行版的 systemd timer / cron 自动执行，`nginx -t` 可随时校验。
 - **不要**把 `server.listen` 改成 `0.0.0.0` 来「省掉 Nginx」：中间件会拒绝所有非回环请求。
 
 ---
@@ -229,19 +291,21 @@ certbot --nginx -d <你的域名> --redirect
 ## 6. 防火墙与云安全组
 
 ```bash
-# ufw（Ubuntu / Debian）
+# ufw（Debian / Ubuntu）
 ufw allow OpenSSH
-ufw allow 80/tcp && ufw allow 443/tcp
+ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 8080/tcp
 ufw status                       # 确认规则后再 ufw enable，避免把自己锁在门外
 # 注意：不要 ufw allow 9090
 
-# firewalld（Rocky / AlmaLinux）
+# firewalld（RHEL / Rocky / Alma / Fedora / openSUSE / Arch）
 firewall-cmd --permanent --add-service=ssh --add-service=http --add-service=https
+firewall-cmd --permanent --add-port=8080/tcp
 firewall-cmd --reload
 ```
 
-云厂商控制台的安全组同样只放行 22（建议限制来源 IP）、80、443。
-`deploy-vps.sh install --configure-firewall` 会添加上述规则，但**不会擅自启用**原本关闭的 ufw。
+云厂商控制台的安全组同样只放行 22（建议限制来源 IP）、80、443、`WEB_PORT`。
+`deploy-vps.sh install --configure-firewall` 会按发行版选择 ufw/firewalld 添加上述规则，
+但**不会擅自启用**原本关闭的 ufw。
 
 ---
 
@@ -261,6 +325,9 @@ sudo ./scripts/deploy-vps.sh install --version v1.0.0 --enable-tun   # 或手工
   **TUN 内 TCP 流终止需要 userspace TCP 协议栈，尚未实现**。TCP 数据面由 `127.0.0.1:18080` 的
   SOCKS5 / HTTP CONNECT userspace 入口承载。请勿把 NGG 当作已完成「全局 TUN 全流量接管」。
 - Windows / macOS 明确返回 `ErrTUNUnsupported`，自动使用 userspace 入口。
+- **`--enable-tun` 的真实含义**：只是把 `autoroute` 打开、让 NGG 尝试创建/配置 TUN；由于 TCP 流终止
+  未实现，开启后 TCP 包会被 Fail-Closed 丢弃。**不要**把它当「已经全局代理」用于生产。
+  完整缺口与实施计划见 [`TUN-GLOBAL-TAKEOVER.md`](TUN-GLOBAL-TAKEOVER.md)。
 
 ---
 
@@ -310,6 +377,11 @@ sudo ./scripts/deploy-vps.sh uninstall --keep-data --yes
 | Web UI 显示「尚未构建」 | 包内 `web-dist` 未复制到 `/opt/ngg/web/dist`，或 `server.web_dir` 仍是相对路径 |
 | 重启后「状态丢失」 | `storage.dir` 仍是相对路径 `data`，SQLite 落在 `/opt/ngg/data/`；改为 `/var/lib/ngg` |
 | Nginx 502 | 后端没起来；`systemctl status ngg`、`journalctl -u ngg -n 80` |
+| 浏览器一直 404，打不开面板 | 没先访问 `http://IP:端口/<16位后缀>` 设置门禁 Cookie；从 `/etc/ngg/web-gate.txt` 取回秘密路径 |
+| Web UI 报 401、`/api/v1/*` 全失败 | Nginx 上加了 `auth_basic`；移除它（会覆盖 Bearer 头）。改用秘密路径 + Cookie + NGG Token |
+| certbot 签发失败 | 域名 A 记录未生效 / 80 被占用 / 云安全组没放行 80；先用 `curl -I http://<域名>/.well-known/acme-challenge/test` 验证 |
+| `Unknown lvalue` / `useradd: invalid shell` | 老发行版差异；脚本已自动探测 `/sbin/nologin` 与 systemd 版本，必要时用 `--no-install-deps` 手工准备 |
+| Alpine 提示无 systemd | 改用 `./scripts/deploy-vps.sh docker` |
 | WebSocket 反复断开 | 反代缺少 `Upgrade` / `Connection "upgrade"` 头，或 `proxy_read_timeout` 太短 |
 | TUN 不生效 | 检查 `/dev/net/tun`、`CAP_NET_ADMIN`、`autoroute: true`；容器需 `--cap-add NET_ADMIN` |
 | 端口被占用 | `ss -ltnp | grep -E '9090|18080|18053'`；改 `--port` 或配置里的端口 |
@@ -321,13 +393,15 @@ sudo ./scripts/deploy-vps.sh uninstall --keep-data --yes
 
 - [ ] `systemctl is-active ngg` = `active`，`systemctl is-enabled ngg` = `enabled`
 - [ ] `curl -H "Authorization: Bearer <TOKEN>" http://127.0.0.1:9090/api/v1/health` 返回 200
-- [ ] 浏览器通过 SSH 隧道或 `https://<域名>/?token=<TOKEN>` 打开管理界面，Web UI 不是「尚未构建」状态页
+- [ ] 浏览器通过 SSH 隧道 / `http://IP:端口/<后缀>` / `https://<域名>/<后缀>` 打开管理界面，Web UI 不是「尚未构建」状态页
 - [ ] `ss -ltn` 里 9090 只绑定 `127.0.0.1`，公网扫描不到 9090 / 18080 / 18053
 - [ ] `/etc/ngg/ngg.yaml` 权限 `0600`，四个路径字段均为绝对路径
+- [ ] 若启用 `--public`：先打开秘密路径 → 跳转 `/` → 用 Token 绑定成功；直接访问 `/` 应返回 404
+- [ ] 若启用 `--with-tls`：`nginx -t` 通过，`https://<域名>/<后缀>` 证书有效，HTTP 仅用于 ACME
 - [ ] `GET /api/v1/cores` 可见三个内置内核；安装后多核可并行启动
 - [ ] `sudo ./scripts/deploy-vps.sh doctor` 无关键 FAIL（TUN 可选）
 - [ ] 已执行一次 `backup` 并把备份文件加密存放到 VPS 之外
-- [ ] Token、Basic Auth 密码、PAT 已保存到密码管理器，未出现在仓库 / 聊天 / 截图里
+- [ ] Token、秘密路径、PAT 已保存到密码管理器，未出现在仓库 / 聊天 / 截图里
 
 ---
 
@@ -340,3 +414,4 @@ sudo ./scripts/deploy-vps.sh uninstall --keep-data --yes
 | [`04-installation.md`](04-installation.md) | Phase 1 基线安装说明、配置字段、离线内核、systemd unit 细节 |
 | [`05-troubleshooting.md`](05-troubleshooting.md) | 更细的故障排查 |
 | [`07-stage2-network-engine.md`](07-stage2-network-engine.md) | 统一网络引擎与 TUN 能力边界 |
+| [`TUN-GLOBAL-TAKEOVER.md`](TUN-GLOBAL-TAKEOVER.md) | TUN 一键全局接管的可行性、缺口与实施计划 |

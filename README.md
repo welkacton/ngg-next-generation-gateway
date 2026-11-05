@@ -19,14 +19,18 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
-| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v1.0.0 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
+| VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
 | **Windows 安装程序** | 双击 `NGG-Setup-v1.0.0.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
 | 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v1.0.0` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
 `scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →
-系统用户与目录 → 绝对路径配置 + 随机 Token → systemd unit → 可选防火墙 / Nginx HTTPS → 健康检查 / 备份 / 升级 / 卸载。
+发行版探测（apt/dnf/yum/zypper/pacman）与依赖安装 → 系统用户与目录 → 绝对路径配置 + 随机 Token →
+systemd unit → 可选防火墙 / 公网入口（`http://公网IP:端口/16位随机后缀`） / 域名 + Let's Encrypt SSL →
+健康检查 / 备份 / 升级 / 卸载。`docker` 子命令覆盖无 systemd 的环境。
 Windows 端提供 Inno Setup GUI 安装包、便携 ZIP、PowerShell 安装/卸载脚本，以及 `nggd.exe` 内置的
 **Windows 服务**（开机自启、失败重启、优雅停止、`logs/ngg-service.log`）。
 
@@ -160,6 +164,7 @@ installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、�
 | `docs/DEPLOY.md` | 私有仓库部署、Docker/systemd/软路由、安全清单、已知边界 |
 | `docs/DEPLOY-VPS.md` | **VPS 完整手册**：系统准备、Release 一键安装、systemd、SSH 隧道 / Nginx HTTPS、防火墙、备份回滚、排障清单 |
 | `docs/INSTALL-WINDOWS.md` | **Windows 完整手册**：GUI 安装包、便携 ZIP、Windows 服务、Token/日志、系统代理、升级卸载、排障清单 |
+| `docs/TUN-GLOBAL-TAKEOVER.md` | **TUN 一键全局接管**：代码级现状、为何现在做不到、P0~P4 实施计划与真实验收标准 |
 | `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
 | `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 

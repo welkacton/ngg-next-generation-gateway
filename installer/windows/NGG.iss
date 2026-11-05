@@ -57,6 +57,8 @@ Source: "{#StageDir}\docs\*"; DestDir: "{app}\docs"; Flags: ignoreversion recurs
 Source: "{#StageDir}\scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "install.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "install.bat"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "set-system-proxy.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\NGG Web UI"; Filename: "http://127.0.0.1:9090/"

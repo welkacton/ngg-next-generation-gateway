@@ -14,7 +14,7 @@
 | **Windows 服务**（开机自启、失败自动重启、优雅停止） | ✅ 已实现：`cmd/nggd/service_windows.go` 通过 `golang.org/x/sys/windows/svc` 接入 SCM |
 |  userspace 统一入口（SOCKS5 / SOCKS4a / HTTP CONNECT） | ✅ 默认 `127.0.0.1:18080` |
 | 内置 DNS 引擎 | ✅ 默认 `127.0.0.1:18053` |
-| **统一 TUN / 全局流量接管** | ❌ Windows 明确返回 `ErrTUNUnsupported`，自动改用 userspace 入口；不需要 TUN 驱动、不需要 Wintun |
+| **统一 TUN / 全局流量接管** | ❌ Windows 明确返回 `ErrTUNUnsupported`，自动改用 userspace 入口；不需要 TUN 驱动、不需要 Wintun。点 TUN 按钮**不会**自动装虚拟网卡，见 §6.5 与 [`TUN-GLOBAL-TAKEOVER.md`](TUN-GLOBAL-TAKEOVER.md) |
 | 系统托盘 App / 原生设置面板 / 一键改系统代理 | ❌ **未实现**（`platforms/desktop/` 仍为骨架），本文提供手动命令 |
 | iOS / Android 等原生客户端 | ❌ 骨架，见 [`DEPLOY.md`](DEPLOY.md) 第 10 节 |
 
@@ -60,14 +60,44 @@ Get-Content "$env:ProgramFiles\NGG\NGG-ACCESS.txt"
 
 ---
 
-## 3. 方式 B：便携 ZIP + PowerShell（推荐给自动化 / 无 GUI 场景）
+## 3. 方式 B：便携 ZIP（推荐给自动化 / 无 GUI 场景）
 
-下载 `NGG-v1.0.0-windows-amd64.zip` 并解压，然后用**管理员 PowerShell**执行：
+> ⚠️ **文档里出现 `C:\path\to\...` 时那是占位符，必须换成你解压后的真实目录。**
+> 直接复制占位符会得到 `cd : 找不到路径`；在 `C:\Users\Admin>` 下直接执行 `.\install.ps1`
+> 会得到「-File 形式参数的实际参数不存在」——因为当前目录里根本没有这个文件。
+
+### 3.1 最省事：双击 `install.bat`
+
+1. 下载 `NGG-v1.0.0-windows-amd64.zip` → **右键 → 全部解压**（不要直接在压缩包里双击）；
+2. 进入解压出来的文件夹，确认里面有 `nggd.exe`、`install.ps1`、`install.bat`、`web-dist\`；
+3. **双击 `install.bat`** → UAC 点「是」→ 自动以管理员身份安装并打开浏览器。
+
+这一步不需要手敲任何命令，也不需要自己开管理员 PowerShell。
+
+### 3.2 手工命令（把路径换成你自己的）
+
+假设解压到 `C:\Users\Admin\Downloads\NGG-v1.0.0-windows-amd64`：
 
 ```powershell
-cd C:\path\to\NGG-v1.0.0-windows-amd64
+# 1) 先进入真实目录（按需改盘符/路径）
+Set-Location "$env:USERPROFILE\Downloads\NGG-v1.0.0-windows-amd64"
+
+# 2) 确认文件在眼前（这一步能避免 90% 的路径错误）
+Get-ChildItem | Select-Object Name
+
+# 3) 以管理员身份运行的 PowerShell 里执行
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -OpenBrowser
 ```
+
+如果不知道解压到哪了，用资源管理器地址栏复制路径，或：
+
+```powershell
+Get-ChildItem -Path "$env:USERPROFILE\Downloads" -Filter "install.ps1" -Recurse -ErrorAction SilentlyContinue |
+  Select-Object -ExpandProperty DirectoryName
+```
+
+> `-File .\install.ps1` 用的是**当前目录**；`cd` 失败时后面的命令仍在 `C:\Users\Admin` 执行，
+> 所以务必先 `Set-Location` 成功并看到 `install.ps1` 存在。
 
 静默安装（不弹等待提示）：
 
@@ -75,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -OpenBrowser
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -Silent
 ```
 
-在线下载并安装（私有仓库需 PAT）：
+在线下载并安装（**必须在一个含 `install.ps1` 的目录里执行**，私有仓库需 PAT）：
 
 ```powershell
 $env:GITHUB_TOKEN = 'ghp_xxx'
@@ -83,6 +113,12 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v1.0.0 -Silent -
 ```
 
 脚本会用 `SHA256SUMS` 校验下载包；若 Release 没有该文件会给出明确警告。
+
+### 3.3 直接双击 EXE（方式 A）其实更简单
+
+如果你只想要「下载 → 双击 → 完成」，用 `NGG-Setup-v1.0.0.exe`（Inno Setup 安装包），
+它会自己放好文件、注册服务、启动、打开浏览器，**完全不需要 PowerShell 命令**。
+便携 ZIP 是给自动化/静默部署用的。
 
 ### install.ps1 参数
 
@@ -210,13 +246,39 @@ New-NetFirewallRule -DisplayName 'NGG Ingress 18080' -Direction Inbound -Protoco
 控制面 `9090` 永远保持 `127.0.0.1`，中间件会拒绝任何非回环来源（403）。远程管理请在 VPS 上走
 SSH 隧道 / Nginx HTTPS（见 [`DEPLOY-VPS.md`](DEPLOY-VPS.md) 第 5 节），Windows 本机不需要。
 
+### 6.5 关于「打开 TUN 按钮就自动装虚拟网卡、接管全部流量」
+
+**目前做不到，且按钮不会假装成功。** 如实说明：
+
+- Windows 版 `nggd.exe` 的 `tun_other.go` 明确返回 `ErrTUNUnsupported`，**没有 Wintun/TAP 驱动、没有虚拟网卡**；
+- Linux 虽有真 TUN，但 `tunLoop()` 目前只做真实 L3 解析 + IPv4 UDP/53 DNS 应答，**TUN 里的 TCP 流终止需要 userspace TCP/IP 协议栈，尚未实现**，这类包会被 Fail-Closed 丢弃（不泄漏、不伪装成功）；
+- 真正决定「这个连接走哪个内核」的是 NGG 的 `RuleEngine → Dispatcher → CoreAdapterBridge → EgressManager`，不是虚拟网卡本身；虚拟网卡只负责把裸 IP 包交给 NGG。
+
+要实现「按钮 → 自动装虚拟网卡 → 自动接管全部流量 → 自动决定去向」，需要补齐：
+Wintun 签名驱动 + 路由/DNS 事务式接管与还原 + `gVisor netstack` 之类的 userspace TCP/IP 栈 +
+与现有决策链接线 + Windows 防回环 + 失败自动回滚。**这是一次数据面开发，不是改个开关。**
+完整设计、代码级现状与 P0~P4 分阶段验收标准见 [`TUN-GLOBAL-TAKEOVER.md`](TUN-GLOBAL-TAKEOVER.md)。
+
+在那之前，Windows 想让大部分应用走 NGG，可用系统代理过渡（**不是全局接管**，不遵守系统代理的程序和 UDP 会绕过）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\installer\windows\set-system-proxy.ps1 -Enable
+powershell -ExecutionPolicy Bypass -File .\installer\windows\set-system-proxy.ps1 -ShowStatus
+powershell -ExecutionPolicy Bypass -File .\installer\windows\set-system-proxy.ps1 -Disable   # 完整还原
+```
+
+脚本会把 `127.0.0.1:18080` 设为 WinINET/WinHTTP 代理，并先把原设置备份到
+`%LOCALAPPDATA%\NGG\proxy-backup.json`，`-Disable` 时精确还原。
+
 ---
 
 ## 7. 故障排查
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| 安装脚本报 `Administrator privileges are required` | 用「以管理员身份运行」打开 PowerShell |
+| `cd : 找不到路径 "C:\path\to\..."` | 复制了文档占位符。换成解压后的真实目录，例如 `Set-Location "$env:USERPROFILE\Downloads\NGG-v1.0.0-windows-amd64"`；或直接用 `install.bat` / `NGG-Setup-v1.0.0.exe` |
+| `-File 形式参数的实际参数 ".\install.ps1" 不存在` | 当前目录里没有 `install.ps1`。先 `Set-Location` 到解压目录并 `Get-ChildItem` 确认；`-File` 是相对**当前目录**解析的 |
+| 安装脚本报 `Administrator privileges are required` | 用「以管理员身份运行」打开 PowerShell；更简单是双击 `install.bat`（会自动提权） |
 | 服务启动失败 / 错误 1053 | 看 `<安装目录>\logs\ngg-service.log`；最常见是 `-config` 路径不对、配置文件 ACL 不允许 SYSTEM 读取、或 YAML 语法错误 |
 | 服务起来了但健康检查 401 | Token 不匹配；从 `NGG-ACCESS.txt` 或 `configs\ngg.yaml` 复制，注意别带多余引号 |
 | 健康检查 403 | 请求不是回环来源；确认没有把 `server.listen` 改成 `0.0.0.0` |
@@ -251,4 +313,5 @@ SSH 隧道 / Nginx HTTPS（见 [`DEPLOY-VPS.md`](DEPLOY-VPS.md) 第 5 节），W
 | [`DEPLOY.md`](DEPLOY.md) | 全场景部署速查与 3X-UI / Remnawave 配置兼容 |
 | [`04-installation.md`](04-installation.md) | Phase 1 基线安装说明、配置字段、离线内核 |
 | [`05-troubleshooting.md`](05-troubleshooting.md) | 通用故障排查 |
+| [`TUN-GLOBAL-TAKEOVER.md`](TUN-GLOBAL-TAKEOVER.md) | **TUN 一键全局接管的可行性、缺口与 P0~P4 实施计划** |
 | [`platforms/desktop/README.md`](../platforms/desktop/README.md) | 桌面端系统代理示例与未实现清单 |

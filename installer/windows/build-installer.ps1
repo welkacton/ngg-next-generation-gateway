@@ -102,10 +102,14 @@ try {
   if (-not (Test-Path (Join-Path $StageDir 'nggd.exe'))) { Fail "StageDir has no nggd.exe: $StageDir" }
 
   # Installer scripts must be inside the bundle for both ZIP and EXE.
+  # Put them at the ZIP root as well so `install.bat` / `.\install.ps1` work
+  # right after extracting, without hunting through subfolders.
   $stageInstaller = Join-Path $StageDir 'installer'
   New-Item -ItemType Directory -Path $stageInstaller -Force | Out-Null
-  foreach ($f in @('install.ps1', 'uninstall.ps1')) {
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination (Join-Path $stageInstaller $f) -Force
+  foreach ($f in @('install.ps1', 'uninstall.ps1', 'install.bat', 'set-system-proxy.ps1')) {
+    $src = Join-Path $PSScriptRoot $f
+    Copy-Item -LiteralPath $src -Destination (Join-Path $stageInstaller $f) -Force
+    Copy-Item -LiteralPath $src -Destination (Join-Path $StageDir $f) -Force
   }
   # NGG.iss references these directories with wildcards; keep them non-empty.
   foreach ($d in @('docs', 'scripts', 'configs', 'web-dist')) {
@@ -143,7 +147,7 @@ try {
       }
       # The generated .iss lives in the output dir, so installer script sources
       # must be absolute (Inno resolves relative Source paths from the .iss dir).
-      foreach ($scriptName in @('install.ps1', 'uninstall.ps1')) {
+      foreach ($scriptName in @('install.ps1', 'uninstall.ps1', 'install.bat', 'set-system-proxy.ps1')) {
         $abs = (Join-Path $PSScriptRoot $scriptName).Replace('\', '/')
         $issText = $issText.Replace(('Source: "' + $scriptName + '"'), ('Source: "' + $abs + '"'))
       }
