@@ -171,10 +171,12 @@ func (r *Registry) snapshot() map[string]Spec {
 }
 
 type Filter struct {
-	Category string
-	Group    string
-	Search   string
-	Enabled  string // "", "true", "false"
+	Category      string
+	Group         string
+	Search        string
+	Enabled       string // "", "true", "false"
+	Kernel        string // only protocols whose Kernels contain this value
+	ExcludeGroups []Group
 }
 
 func (r *Registry) List(category string) []Spec { return r.Query(Filter{Category: category}) }
@@ -190,6 +192,28 @@ func (r *Registry) Query(f Filter) []Spec {
 		}
 		if f.Group != "" && string(s.Group) != f.Group {
 			continue
+		}
+		excluded := false
+		for _, g := range f.ExcludeGroups {
+			if s.Group == g {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		if f.Kernel != "" {
+			found := false
+			for _, k := range s.Kernels {
+				if k == f.Kernel {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
 		}
 		if f.Enabled == "true" && !s.Enabled {
 			continue
@@ -358,7 +382,9 @@ func (r *Registry) Delete(id string) error {
 }
 
 func (r *Registry) SaveConfig(id, content, format string) (Spec, error) {
-	if err := ValidateConfig([]byte(content), format); err != nil {
+	// The editor shows JSONC-style comments; persist only clean config text.
+	clean := string(StripComments([]byte(content), format))
+	if err := ValidateConfig([]byte(clean), format); err != nil {
 		return Spec{}, fmt.Errorf("invalid %s config: %w", format, err)
 	}
 	r.mu.Lock()
@@ -368,7 +394,7 @@ func (r *Registry) SaveConfig(id, content, format string) (Spec, error) {
 		return Spec{}, fmt.Errorf("protocol %q not registered", id)
 	}
 	before := r.snapshot()
-	s.ConfigContent = content
+	s.ConfigContent = clean
 	s.ConfigFormat = format
 	r.specs[id] = s
 	if err := r.persistLocked(); err != nil {
@@ -481,6 +507,24 @@ func builtinSpec(id string) (Spec, bool) {
 	return s, ok
 }
 
+// GeneratePreview renders a config for a Spec that has NOT been registered
+// yet. The visual editor uses it while the user is still defining a new
+// custom protocol, so no fake "already saved" state is ever shown.
+func GeneratePreview(s Spec, kernel string, params map[string]any) ([]byte, string, error) {
+	if params == nil {
+		params = map[string]any{}
+	}
+	for k, v := range s.Params {
+		if _, exists := params[k]; !exists {
+			params[k] = v
+		}
+	}
+	if s.ConfigKind == "" {
+		s.ConfigKind = KindOutbound
+	}
+	return generate(s, kernel, params)
+}
+
 // GenerateConfig is the low-level, registry-free generator kept for callers
 // and tests that only know a protocol id.
 func GenerateConfig(protocolID, kernel string, params map[string]any) ([]byte, string, error) {
@@ -499,10 +543,14 @@ func str(params map[string]any, k, def string) string {
 }
 
 func port(params map[string]any, def int) int {
-	if v, ok := params["port"]; ok {
-		n := 0
-		if _, err := fmt.Sscanf(fmt.Sprint(v), "%d", &n); err == nil && n > 0 {
-			return n
+	// Different kernels name the same field differently: Mihomo/Xray use
+	// "port", sing-box uses "server_port". Accept both from the visual editor.
+	for _, k := range []string{"port", "server_port"} {
+		if v, ok := params[k]; ok {
+			n := 0
+			if _, err := fmt.Sscanf(fmt.Sprint(v), "%d", &n); err == nil && n > 0 {
+				return n
+			}
 		}
 	}
 	return def
@@ -612,7 +660,6 @@ func generate(s Spec, kernel string, params map[string]any) ([]byte, string, err
 
 	mType, sType, xType := kernelTypes(s.ID)
 	rest := extras(params, "server", "port", "kernel", "protocol")
-	base := map[string]any{"server": server, "port": p}
 
 	switch s.ConfigKind {
 	case KindPolicy:
@@ -655,25 +702,97 @@ func generate(s Spec, kernel string, params map[string]any) ([]byte, string, err
 		return []byte(strings.Join(lines, "\n") + "\n"), "conf", nil
 	}
 
-	// Default: a real kernel-native outbound fragment.
+	// Default: a real kernel-native outbound fragment. The SAME visual fields
+	// are mapped onto each kernel's official syntax; see schema.go.
+	return outboundConfig(s, kernel, params, mType, sType, xType, server, p, rest)
+}
+
+func hasValue(params map[string]any, key string) (any, bool) {
+	v, ok := params[key]
+	if !ok || v == nil {
+		return nil, false
+	}
+	if s, isStr := v.(string); isStr && strings.TrimSpace(s) == "" {
+		return nil, false
+	}
+	return v, true
+}
+
+// outboundConfig emits the three genuinely different kernel grammars.
+// Every key used below matches that kernel's official documentation.
+func outboundConfig(s Spec, kernel string, params map[string]any, mType, sType, xType, server string, p int, rest map[string]any) ([]byte, string, error) {
 	switch kernel {
 	case "mihomo":
-		entry := map[string]any{"name": s.ID, "type": mType}
-		for k, v := range base {
-			entry[k] = v
+		// YAML: proxies: [ { name, type, server, port, ... } ]
+		entry := map[string]any{
+			"name":   str(params, "name", s.ID),
+			"type":   str(params, "type", mType),
+			"server": str(params, "server", server),
+			"port":   p,
 		}
-		for k, v := range rest {
-			entry[k] = v
+		for _, k := range []string{"cipher", "password", "uuid", "alterId", "network", "tls", "sni", "skip-cert-verify", "udp", "client-fingerprint"} {
+			if v, ok := hasValue(params, k); ok {
+				entry[k] = v
+			}
+		}
+		// Keep any extra user-supplied keys instead of silently dropping them.
+		for k, v := range extras(params, "server", "port", "name", "type", "kernel", "protocol") {
+			if _, exists := entry[k]; !exists {
+				entry[k] = v
+			}
 		}
 		b, err := yamlBytes(map[string]any{"proxies": []any{entry}})
 		return b, "yaml", err
+
 	case "xray-core":
-		cfg := map[string]any{"protocol": xType, "tag": s.ID + "-out", "settings": map[string]any{"servers": []any{map[string]any{"address": server, "port": p}}}}
-		if len(rest) > 0 {
-			cfg["ngg_params"] = rest
+		// JSON: { protocol, tag, settings.vnext[].users[], streamSettings }
+		user := map[string]any{}
+		if v, ok := hasValue(params, "id"); ok {
+			user["id"] = v
+		} else if v, ok := hasValue(params, "uuid"); ok {
+			user["id"] = v
+		}
+		for _, k := range []string{"alterId", "security", "flow"} {
+			if v, ok := hasValue(params, k); ok {
+				user[k] = v
+			}
+		}
+		vnext := map[string]any{
+			"address": str(params, "address", server),
+			"port":    p,
+			"users":   []any{user},
+		}
+		cfg := map[string]any{
+			"protocol": str(params, "protocol", xType),
+			"tag":      str(params, "tag", s.ID+"-out"),
+			"settings": map[string]any{"vnext": []any{vnext}},
+		}
+		stream := map[string]any{}
+		if v, ok := hasValue(params, "network"); ok {
+			stream["network"] = v
+		}
+		if v, ok := hasValue(params, "stream_security"); ok {
+			stream["security"] = v
+		}
+		if v, ok := hasValue(params, "serverName"); ok {
+			stream["tlsSettings"] = map[string]any{"serverName": v}
+		}
+		ws := map[string]any{}
+		if v, ok := hasValue(params, "path"); ok {
+			ws["path"] = v
+		}
+		if v, ok := hasValue(params, "Host"); ok {
+			ws["headers"] = map[string]any{"Host": v}
+		}
+		if len(ws) > 0 {
+			stream["wsSettings"] = ws
+		}
+		if len(stream) > 0 {
+			cfg["streamSettings"] = stream
 		}
 		b, err := jsonBytes(cfg)
 		return b, "json", err
+
 	case "external-helper":
 		b := []byte(fmt.Sprintf("# %s (%s) handled by an external helper\nserver=%s\nport=%d\n", s.Name, s.ID, server, p))
 		return b, "conf", nil
@@ -684,10 +803,38 @@ func generate(s Spec, kernel string, params map[string]any) ([]byte, string, err
 		}
 		b, err := jsonBytes(cfg)
 		return b, "json", err
+
 	default: // sing-box and any other kernel
-		cfg := map[string]any{"type": sType, "tag": s.ID + "-out", "server": server, "server_port": p}
-		if len(rest) > 0 {
-			cfg["params"] = rest
+		// JSON: { type, tag, server, server_port, tls:{}, transport:{} }
+		cfg := map[string]any{
+			"type":        str(params, "type", sType),
+			"tag":         str(params, "tag", s.ID+"-out"),
+			"server":      str(params, "server", server),
+			"server_port": p,
+		}
+		for _, k := range []string{"uuid", "password", "method", "flow", "udp_over_tcp"} {
+			if v, ok := hasValue(params, k); ok {
+				cfg[k] = v
+			}
+		}
+		tls := map[string]any{}
+		if v, ok := hasValue(params, "tls"); ok {
+			tls["enabled"] = v
+		}
+		if v, ok := hasValue(params, "server_name"); ok {
+			tls["server_name"] = v
+		} else if v, ok := hasValue(params, "sni"); ok {
+			tls["server_name"] = v
+		}
+		if len(tls) > 0 {
+			cfg["tls"] = tls
+		}
+		if v, ok := hasValue(params, "transport"); ok {
+			tr := map[string]any{"type": v}
+			if w, ok := hasValue(params, "path"); ok {
+				tr["path"] = w
+			}
+			cfg["transport"] = tr
 		}
 		b, err := jsonBytes(cfg)
 		return b, "json", err
@@ -699,8 +846,11 @@ func generate(s Spec, kernel string, params map[string]any) ([]byte, string, err
 func ValidateConfig(content []byte, format string) error {
 	switch strings.ToLower(format) {
 	case "json":
+		// The visual code editor shows JSONC-style line comments for every
+		// field. Strip whole-line comments before parsing (URLs inside
+		// string values are never touched).
 		var v any
-		return json.Unmarshal(content, &v)
+		return json.Unmarshal(StripComments(content, "json"), &v)
 	case "yaml", "yml":
 		var v any
 		return yaml.Unmarshal(content, &v)

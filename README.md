@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.1.1
+### 🏷️ Generation 2 / 第二代 · Release v2.1.2
 
 **第二代 · 本地部署与统一控制台** — VPS / Windows 安装包、极简控制台、规则与规则集批量启停、仓库内更新栏
 
@@ -18,10 +18,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | **Gen 1** | v1.0.0 及以前 | 服务端平台 | Stage 1~5：统一管理中心、网络引擎、规则/DNS、协议中心、后量子、插件、SD-WAN、多租户 |
 | Gen 2 首发 | v2.0.0 | 本地部署与统一控制台 | 多发行版 VPS 一键部署、公网/域名/SSL、Windows 原生服务安装包、极简 UI、规则与规则集批量启停、界面内仓库更新栏 |
 | Gen 2 增补 | v2.1.0 | 协议中心重构与全站字体 | 三大类全内核协议目录、配置生成可自定义编辑、自定义协议 JSON 编辑、协议批量启停、全站 SF Mono Nerd Font |
-| **Gen 2（当前）** | **v2.1.1** | Web 端一键更新与协议中心交互优化 | 界面内填 GitHub Token（私有仓库）→「立即更新」一键完成检查/校验下载/重启/自动刷新；协议目录改 Mihomo / sing-box / Xray-core / VPN代理 / 自定义 五大类；精简表格列消除文字叠加；点配置自动定位；取消冗余 params 与单条详情卡片 |
+| Gen 2 增补 | v2.1.1 | Web 端一键更新与交互优化 | 界面内填 GitHub Token（私有仓库）→「立即更新」一键完成检查/校验下载/重启/自动刷新；协议目录五类视图；精简表格列；点配置自动定位；取消冗余 params 与单条详情卡片 |
+| **Gen 2（当前）** | **v2.1.2** | 按内核的官方语法配置 | 目录只留 Mihomo / sing-box / Xray-core 三内核支持的加密协议（明文与普通代理移出目录）；按三份官方配置文档建立字段 schema，同一组可视化字段生成三种不同语法；两个编辑卡片合并为「可视化表单 + 带逐字段中文注释的代码编辑」 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.1.1`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.1.2`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -34,19 +35,19 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 仓库当前为 `private`，只有仓库所有者授权账号可以 clone；部署到自己的服务器、电脑、NAS 或软路由时，
 请先用有权限的账号完成克隆或下载 Release 产物。若日后要共享，由所有者手动改为 Public。
 
-> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.1.1>
-> → `NGG-Setup-v2.1.1.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.1.1-windows-amd64.zip`
+> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.1.2>
+> → `NGG-Setup-v2.1.2.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.1.2-windows-amd64.zip`
 > （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
-| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.1.1 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.1.2 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
 | VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
 | VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
-| **Windows 安装程序** | 双击 `NGG-Setup-v2.1.1.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
+| **Windows 安装程序** | 双击 `NGG-Setup-v2.1.2.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
-| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.1.1` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
+| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.1.2` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
 `scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →

@@ -2,7 +2,7 @@
 
 > 官方文档：`internal/version/version.go` 是代际与 Release 的单一事实来源；
 > `internal/update` 负责真实的 GitHub Release 检查、校验下载与更新交接。
-> 界面顶栏的「Gen 2 · v2.1.1」徽章与「系统更新」按钮读取的都是这两个模块的真实数据。
+> 界面顶栏的「Gen 2 · v2.1.2」徽章与「系统更新」按钮读取的都是这两个模块的真实数据。
 
 ---
 
@@ -12,7 +12,7 @@
 
 | 元素 | 行为 |
 | --- | --- |
-| `Gen 2 · v2.1.1` 徽章 | 来自 `GET /api/v1/update/status`，显示代际、版本号与代际名称 |
+| `Gen 2 · v2.1.2` 徽章 | 来自 `GET /api/v1/update/status`，显示代际、版本号与代际名称 |
 | 「系统更新」胶囊按钮 | 打开更新面板；发现新版本时显示蓝点与「有新版本」；私有仓库缺 Token 时显示「需要 GitHub Token」 |
 | 更新面板 | 当前版本 / 仓库 / 平台、**GitHub Token 输入**、**「立即更新（一键完成）」**、分步进度、单步排查按钮、自动检查/自动应用开关、Release 说明、校验结果、日志路径 |
 
@@ -34,13 +34,13 @@
 
 > 「立即更新」仍需一次二次确认（会短暂中断服务）；自动应用默认关闭，生产环境建议手动确认。
 
-> **首次升级引导（重要）**：v2.1.0 及更早的二进制里，更新模块只认服务端环境变量，
-> **没有**「界面填 Token」和「立即更新」按钮。因此已装 v2.1.0 的机器无法靠界面把自己升到 v2.1.1。
-> 请任选其一完成这一次引导升级：
-> 1. 直接双击 `NGG-Setup-v2.1.1.exe` 覆盖安装（推荐，配置、API Token、数据都会保留；安装程序会先停服务再替换 `nggd.exe`）；
-> 2. 或临时给 NGG 服务配置 `NGG_GITHUB_TOKEN` 环境变量并重启服务，让旧版能检查到 v2.1.1，再用旧版的三步按钮完成一次更新。
+> **首次升级引导**：v2.1.0 及更早的二进制里更新模块只认服务端环境变量，
+> **没有**「界面填 Token」和「立即更新」按钮。已装 v2.1.0 的机器请任选其一完成一次引导：
+> 1. 直接双击 `NGG-Setup-v2.1.2.exe` 覆盖安装（推荐，配置、API Token、数据都会保留；安装程序会先停服务再替换 `nggd.exe`）；
+> 2. 或临时给 NGG 服务配置 `NGG_GITHUB_TOKEN` 并重启服务，用旧版的三步按钮更新一次。
 >
-> 之后的所有版本（v2.1.2 起）都可以在 v2.1.1 的 Web 界面里点「立即更新」直接完成。
+> **已经装了 v2.1.1 的机器可以直接在 Web 界面点「立即更新」升到 v2.1.2** ——
+> 这是首次真正可用的端到端一键更新：填 Token → 检查 → SHA256 校验下载 → 替换重启 → 自动刷新。
 
 ---
 
@@ -52,7 +52,7 @@
 | --- | --- |
 | `GET /api/v1/update/status` | 代际、Release、仓库、OS/Arch、安装目录、更新暂存目录、更新脚本是否就绪、`token_configured`（服务端是否已配 PAT，**不返回 Token 值**） |
 | `POST /api/v1/update/check` | 真实请求 GitHub Releases API（`/releases/latest`，无 latest 时回退列表取最新非 draft），返回 tag、发布时间、说明、资产列表、是否有新版本、当前平台匹配的资产 |
-| `POST /api/v1/update/download` | body `{"tag":"v2.1.1","asset":"NGG-Setup-v2.1.1.exe"}`（省略则使用最近一次检查结果）；下载资产与 `SHA256SUMS`，**校验通过才落盘**到 `<data>/updates/<tag>/` |
+| `POST /api/v1/update/download` | body `{"tag":"v2.1.2","asset":"NGG-Setup-v2.1.2.exe"}`（省略则使用最近一次检查结果）；下载资产与 `SHA256SUMS`，**校验通过才落盘**到 `<data>/updates/<tag>/` |
 | `POST /api/v1/update/apply` | 校验暂存文件与 `SHA256SUMS` 存在后，启动平台更新脚本；无脚本 / 未下载 / 摘要缺失都会明确报错，不会伪装成功 |
 
 `check` 返回示例（真实字段，非模拟）：
@@ -60,12 +60,12 @@
 ```json
 {
   "current": "2.1.0",
-  "latest": "v2.1.1",
+  "latest": "v2.1.2",
   "update_available": true,
   "source": "github-api",
   "checked_at": "2026-11-05T03:00:00Z",
-  "release": { "tag_name": "v2.1.1", "published_at": "...", "body": "...", "assets": [] },
-  "asset": { "name": "NGG-Setup-v2.1.1.exe", "size": 15176447, "url": "..." },
+  "release": { "tag_name": "v2.1.2", "published_at": "...", "body": "...", "assets": [] },
+  "asset": { "name": "NGG-Setup-v2.1.2.exe", "size": 15176447, "url": "..." },
   "status": { "generation": 2, "generation_label": "Gen 2", "release": "2.1.0",
               "platform": "windows/amd64", "script_ready": true, "token_configured": false }
 }

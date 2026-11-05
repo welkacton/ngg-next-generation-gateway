@@ -28,13 +28,20 @@ func (s *Server) handleStages(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProtocols(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	list := s.engine.Protocols().Query(protocols.Filter{
+	f := protocols.Filter{
 		Category: q.Get("category"),
 		Group:    q.Get("group"),
 		Search:   q.Get("search"),
 		Enabled:  q.Get("enabled"),
-	})
-	writeJSON(w, http.StatusOK, list)
+		Kernel:   q.Get("kernel"),
+	}
+	// The protocol directory only shows protocols supported by the three
+	// kernels. Plaintext and plain-proxy entries remain registered (API
+	// compatibility, include_all=true) but are no longer listed by default.
+	if q.Get("include_all") != "true" {
+		f.ExcludeGroups = []protocols.Group{protocols.GroupPlaintext, protocols.GroupPlainProxy}
+	}
+	writeJSON(w, http.StatusOK, s.engine.Protocols().Query(f))
 }
 
 func (s *Server) handleProtocolByID(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +85,9 @@ func (s *Server) handleProtocolByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": true, "protocol": id, "kernel": body.Kernel,
 			"format": format, "content": string(content), "validated": true,
-			"customized": spec.ConfigContent != "" && !body.Regenerate,
+			"annotated_content": string(protocols.Annotate(content, format, body.Kernel)),
+			"doc_url":           protocols.DocFor(body.Kernel),
+			"customized":        spec.ConfigContent != "" && !body.Regenerate,
 		})
 		return
 	}
