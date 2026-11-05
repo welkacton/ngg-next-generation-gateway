@@ -174,16 +174,7 @@ func runNetsh(args ...string) (string, error) {
 }
 
 func (t *TunDevice) installHandlers(ctx context.Context) {
-	fwd := tcp.NewForwarder(t.stack, 0, 65535, func(r *tcp.ForwarderRequest) {
-		id := r.ID()
-		var wq waiter.Queue
-		ep, err := r.CreateEndpoint(&wq)
-		if err != nil {
-			r.Complete(true)
-			return
-		}
-		r.Complete(false)
-		conn := gonet.NewTCPConn(&wq, ep)
+	installForwarders(t.stack, func(conn *gonet.TCPConn, id stack.TransportEndpointID) {
 		dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 		client := &net.TCPAddr{IP: net.ParseIP(id.RemoteAddress.String()), Port: int(id.RemotePort)}
 		t.active.Add(1)
@@ -195,19 +186,44 @@ func (t *TunDevice) installHandlers(ctx context.Context) {
 			}
 			_ = t.engine.HandleTCP(ctx, conn, ConnRequest{Dst: dst, ClientAddr: client, Network: "tcp"})
 		}()
+	}, func(conn *gonet.UDPConn, id stack.TransportEndpointID) {
+		go t.handleUDP(conn, id)
 	})
-	t.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
+}
 
-	ufwd := udp.NewForwarder(t.stack, func(r *udp.ForwarderRequest) {
+// installForwarders wires a gVisor stack to NGG's protocol handlers. It is
+// separated from TunDevice so the packet path can be unit-tested without an
+// elevated wintun adapter (see tun_windows_test.go).
+func installForwarders(
+	s *stack.Stack,
+	onTCP func(*gonet.TCPConn, stack.TransportEndpointID),
+	onUDP func(*gonet.UDPConn, stack.TransportEndpointID),
+) {
+	fwd := tcp.NewForwarder(s, 0, 65535, func(r *tcp.ForwarderRequest) {
+		id := r.ID()
+		var wq waiter.Queue
+		// CreateEndpoint performs the 3-way handshake and only returns once
+		// the client has ACKed, so it must happen before Complete().
+		ep, err := r.CreateEndpoint(&wq)
+		if err != nil {
+			r.Complete(true)
+			return
+		}
+		r.Complete(false)
+		onTCP(gonet.NewTCPConn(&wq, ep), id)
+	})
+	s.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
+
+	ufwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
+		id := r.ID()
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
 			return
 		}
-		conn := gonet.NewUDPConn(&wq, ep)
-		go t.handleUDP(conn, r.ID())
+		onUDP(gonet.NewUDPConn(&wq, ep), id)
 	})
-	t.stack.SetTransportProtocolHandler(udp.ProtocolNumber, ufwd.HandlePacket)
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, ufwd.HandlePacket)
 }
 
 // handleUDP relays DNS to the configured upstream and drops other UDP so a

@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.6.2", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.6.3", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.6.2），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.6.3），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -615,6 +615,10 @@ SHA-256 `07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51`，
 
 - 进程具备提升令牌（Windows 服务以 LocalSystem 运行即满足）
 - `wintun.dll` 与 `nggd.exe` 同目录（点一次「下载并安装驱动」即可）
+
+验收脚本：以管理员运行 `scripts/verify-tun.ps1`（`-ExecutionPolicy Bypass`）。它会用临时实例
+真实创建网卡、只对 `1.1.1.1/32` 加一条临时路由并发出一次真实 HTTP 请求、读回收发计数，
+随后删除路由并销毁网卡，结果写入 `data/tun-verify/report.json`。
 
 UDP 处理策略：`53/tcp` 之外的 UDP 默认丢弃（TCP-only 调度器无法代理，直发又会绕过隧道），
 DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可用。
