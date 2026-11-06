@@ -83,6 +83,26 @@ function notify(kind: 'success' | 'warning' | 'error' | 'info', text: string): v
 
 let basePromise: Promise<void> | null = null
 
+/* 事件去重：同一个告警文本 8 秒内只提示一次；同内核同原因的启动失败
+ * 30 秒内只提示一次。内核崩溃重启会连续产生事件，不去重会刷屏。 */
+const ALERT_WINDOW_MS = 8000
+const CORE_FAIL_WINDOW_MS = 30000
+const alertSeen = new Map<string, number>()
+const coreFailSeen = new Map<string, number>()
+
+function onceWithin(seen: Map<string, number>, key: string, windowMs: number): boolean {
+  const now = Date.now()
+  const last = seen.get(key) ?? 0
+  if (now - last < windowMs) return false
+  seen.set(key, now)
+  if (seen.size > 100) {
+    for (const [k, ts] of seen) {
+      if (now - ts > windowMs * 8) seen.delete(k)
+    }
+  }
+  return true
+}
+
 export const useCoresStore = defineStore('cores', {
   state: (): CoresState => ({
     cores: [],
@@ -478,10 +498,33 @@ export const useCoresStore = defineStore('cores', {
     applyEvent(event: GatewayEvent): void {
       if (!event || !event.type) return
       switch (event.type) {
-        case 'core.state':
+        case 'core.state': {
+          // 崩溃重启事件由后端以 core.state + state=failed + reason 发出：
+          // 只提示一次可读原因，不再走「系统告警」弹窗。
+          const payload = event.payload as any
+          const reason =
+            payload && typeof payload === 'object' && typeof payload.reason === 'string'
+              ? payload.reason.trim()
+              : ''
+          if (payload && payload.state === 'failed' && reason) {
+            const key = `${event.core_id || payload.id || ''}|${reason}`
+            if (onceWithin(coreFailSeen, key, CORE_FAIL_WINDOW_MS)) {
+              const title = event.core_id ? `内核 ${event.core_id} 启动失败` : '内核启动失败'
+              if (window.$notification) {
+                window.$notification.error({
+                  title,
+                  content: reason,
+                  duration: 10000,
+                })
+              } else {
+                notify('error', `${title}：${reason}`)
+              }
+            }
+          }
           this.refreshCores()
           this.refreshSystemInfo()
           break
+        }
         case 'core.log':
           if (Array.isArray(event.payload)) {
             for (const item of event.payload) this.appendLog(item)
@@ -532,6 +575,8 @@ export const useCoresStore = defineStore('cores', {
           // v2.6.3 servers sent the handshake as system.alert; stay
           // compatible with them so upgrading is not required first.
           if (/event stream connected/i.test(text)) break
+          // 同一条告警 8 秒内只弹一次：崩溃重启等高频事件不再刷屏。
+          if (!onceWithin(alertSeen, text, ALERT_WINDOW_MS)) break
           if (window.$notification) {
             window.$notification.warning({
               title: '系统告警',

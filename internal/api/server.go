@@ -24,6 +24,7 @@ import (
 	"github.com/ngg-project/ngg/internal/profiles"
 	"github.com/ngg-project/ngg/internal/protocols"
 	"github.com/ngg-project/ngg/internal/rulesets"
+	"github.com/ngg-project/ngg/internal/subscription"
 	"github.com/ngg-project/ngg/internal/update"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
@@ -45,6 +46,8 @@ type Server struct {
 	gateway      *gateway.Store
 	agents       *agentHandlers
 	clients      *clientHandlers
+	subs         *subscriptionHandlers
+	subRenderer  *subscription.Renderer
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -83,6 +86,18 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 			// 订阅地址优先用「对外地址」；为空时由 handler 退回相对路径。
 			s.clients.SetSubscriptionBase(s.agents.cfg.PublicBase)
 		}
+		// 用户订阅：节点 + 协议 + 规则集 + DNS 一体渲染，链接由公网监听提供。
+		s.subRenderer = subscription.New(subscription.Options{
+			Users: eng.Users(), Hosts: eng.Hosts(), RuleSets: eng.RuleSets(),
+			Gateway: eng.Gateway(), DataDir: dataDir,
+			BaseURL: func() string {
+				if s.agents != nil && s.agents.cfg != nil {
+					return s.agents.cfg.PublicBase()
+				}
+				return ""
+			},
+		})
+		s.subs = newSubscriptionHandlers(eng.Users(), s.subRenderer)
 	}
 	// User-defined GitHub rule sources live beside the cached catalogs. A
 	// read failure must not take down the control plane; built-ins stay usable.
@@ -119,7 +134,11 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 }
 
 func (s *Server) Handler() http.Handler { return s.http.Handler }
-func (s *Server) Addr() string          { return s.http.Addr }
+
+// SubscriptionRenderer exposes the per-user renderer to the public listener so
+// /sub/u/<token> can serve Clash / Surge / sing-box / v2ray bodies.
+func (s *Server) SubscriptionRenderer() *subscription.Renderer { return s.subRenderer }
+func (s *Server) Addr() string                                 { return s.http.Addr }
 
 func (s *Server) ListenAndServe() error {
 	ln, err := net.Listen("tcp", s.http.Addr)
@@ -182,6 +201,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/cores/{id}/logs", s.handleLogs)
 	m.HandleFunc("DELETE /api/v1/cores/{id}/logs", s.handleClearLogs)
 	m.HandleFunc("GET /api/v1/cores/{id}/stats", s.handleStats)
+	// 内核诊断：二进制 / 版本 / 配置校验 / 端口占用 / 日志尾部，用于定位启动失败。
+	m.HandleFunc("GET /api/v1/cores/{id}/diagnostics", s.handleCoreDiagnostics)
 
 	m.HandleFunc("GET /api/v1/registry", s.handleRegistry)
 	m.HandleFunc("POST /api/v1/registry/reload", s.handleRegistryReload)
@@ -281,6 +302,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/hosts/export", s.handleHostExport)
 	m.HandleFunc("PUT /api/v1/hosts/import", s.handleHostImport)
 	m.HandleFunc("POST /api/v1/hosts/{id}/probe", s.handleHostProbe)
+	m.HandleFunc("GET /api/v1/hosts/{id}/provision", s.handleHostProvision)
+	m.HandleFunc("POST /api/v1/hosts/{id}/provision", s.handleHostProvision)
 	m.HandleFunc("POST /api/v1/hosts/{id}/role", s.handleHostRole)
 	m.HandleFunc("GET /api/v1/hosts/{id}", s.handleHostByID)
 	m.HandleFunc("PUT /api/v1/hosts/{id}", s.handleHostByID)
@@ -364,6 +387,9 @@ func (s *Server) routes() {
 	}
 	if s.clients != nil {
 		s.clients.Register(m)
+	}
+	if s.subs != nil {
+		s.subs.Register(m)
 	}
 
 	m.HandleFunc("/", s.handleStatic)

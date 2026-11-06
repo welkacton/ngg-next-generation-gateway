@@ -28,7 +28,14 @@ import {
   NTag,
 } from 'naive-ui'
 import * as api from '../api/ngg'
-import type { PortalUser, UserResetStrategy, UserStats, UserStatus } from '../api/ngg'
+import type {
+  PortalUser,
+  SubscriptionTarget,
+  UserResetStrategy,
+  UserStats,
+  UserStatus,
+  UserSubscription,
+} from '../api/ngg'
 import { useApiAction } from '../composables/useApi'
 import { formatBytes, formatTime } from '../utils/format'
 
@@ -248,6 +255,182 @@ function relativeSeen(u?: PortalUser | null): string {
   return `${Math.floor(sec / 86400)} 天前`
 }
 
+/* ------------------------------------------------------------------ *
+ * 订阅：用户 → 节点（出口主机）→ 协议 → 规则集 → DNS
+ *
+ * 链接与配置正文全部由后端按真实绑定渲染；前端只负责展示、复制与下载。
+ * 下载走订阅链接本身（后端按 token 校验 enabled / 过期），拿不到正文就报错，
+ * 绝不在本地拼一份看起来能用的文件。
+ * ------------------------------------------------------------------ */
+
+const showSubDrawer = ref(false)
+const subUser = ref<PortalUser | null>(null)
+const sub = ref<UserSubscription | null>(null)
+const subError = ref('')
+
+interface SubForm {
+  node_id: string
+  protocol: string
+  rule_set_ids: string[]
+  dns_profile: string
+}
+
+const subForm = ref<SubForm>({ node_id: '', protocol: 'vless', rule_set_ids: [], dns_profile: 'system' })
+const hostOptions = ref<{ label: string; value: string }[]>([])
+const ruleSetOptions = ref<{ label: string; value: string }[]>([])
+
+const PROTOCOL_OPTIONS = [
+  { label: 'VLESS', value: 'vless' },
+  { label: 'Trojan', value: 'trojan' },
+  { label: 'Shadowsocks', value: 'shadowsocks' },
+  { label: 'SOCKS5', value: 'socks5' },
+  { label: 'HTTP', value: 'http' },
+]
+
+const DNS_OPTIONS = [
+  { label: '系统 DNS', value: 'system' },
+  { label: '网关 DNS', value: 'gateway' },
+  { label: '配置中不写 DNS', value: 'off' },
+]
+
+interface TargetSpec {
+  key: SubscriptionTarget
+  label: string
+  ext: string
+}
+
+const TARGETS: TargetSpec[] = [
+  { key: 'clash', label: 'Clash / mihomo', ext: '.yaml' },
+  { key: 'surge', label: 'Surge', ext: '.conf' },
+  { key: 'singbox', label: 'sing-box', ext: '.json' },
+  { key: 'v2ray', label: 'v2rayN', ext: '.txt' },
+  { key: 'socks', label: 'SOCKS5', ext: '.txt' },
+]
+
+const subWarnings = computed<string[]>(() => sub.value?.warnings ?? [])
+
+const subAddress = computed(() => {
+  const p = sub.value
+  if (!p || !p.token) return ''
+  const base = (p.base_url || '').replace(/\/+$/, '')
+  return `${base}/sub/u/${p.token}`
+})
+
+const targetRows = computed(() =>
+  TARGETS.map((t) => ({ ...t, link: sub.value?.links?.[t.key] ?? '' })),
+)
+
+function applyPayload(p: UserSubscription): void {
+  sub.value = p
+  subError.value = ''
+  subForm.value = {
+    node_id: p.node_id || '',
+    protocol: p.protocol || 'vless',
+    rule_set_ids: [...(p.rule_set_ids ?? [])],
+    dns_profile: p.dns_profile || 'system',
+  }
+}
+
+async function loadSubscriptionOptions(): Promise<void> {
+  const [hostsRes, setsRes] = await Promise.all([
+    api.listHosts().catch(() => null),
+    api.listRuleSets().catch(() => null),
+  ])
+  hostOptions.value = (hostsRes?.hosts ?? []).map((h) => ({
+    label: `${h.name} · ${h.address}`,
+    value: h.id,
+  }))
+  ruleSetOptions.value = (setsRes?.rulesets ?? []).map((s) => ({
+    label: s.name || s.id,
+    value: s.id,
+  }))
+}
+
+async function openSubscription(u: PortalUser): Promise<void> {
+  subUser.value = u
+  sub.value = null
+  subError.value = ''
+  showSubDrawer.value = true
+  void loadSubscriptionOptions()
+  try {
+    applyPayload(await api.getUserSubscription(u.id))
+  } catch (e) {
+    // A 422 here means the binding is not usable yet (未绑定节点 / 缺少端口或
+    // 凭据). The reason is shown below the drawer title so the form can be used
+    // to fix it; nothing is faked to make the links look usable.
+    subError.value = errorDetail(e)
+    subForm.value = { node_id: '', protocol: 'vless', rule_set_ids: [], dns_profile: 'system' }
+  }
+}
+
+function errorDetail(e: unknown): string {
+  const err = e as { response?: { status?: number; data?: { error?: string } }; message?: string }
+  const detail = err?.response?.data?.error || err?.message || '订阅不可用'
+  const status = err?.response?.status
+  return status ? `HTTP ${status} · ${detail}` : detail
+}
+
+async function saveSubscription(): Promise<void> {
+  if (!subUser.value) return
+  const res = await run('sub-save', () =>
+    api.saveUserSubscription(subUser.value!.id, {
+      node_id: subForm.value.node_id,
+      protocol: subForm.value.protocol,
+      rule_set_ids: [...subForm.value.rule_set_ids],
+      dns_profile: subForm.value.dns_profile,
+    }),
+    '订阅绑定已保存',
+  )
+  if (res) applyPayload(res)
+}
+
+function rotateSubscription(): void {
+  const u = subUser.value
+  if (!u) return
+  window.$dialog?.warning({
+    title: '轮换订阅链接',
+    content: '轮换后旧链接立即失效，已导入旧链接的客户端需要重新导入。',
+    positiveText: '轮换',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      const res = await run('sub-rotate', () => api.rotateUserSubscription(u.id), '订阅链接已轮换')
+      if (res) applyPayload(res)
+    },
+  })
+}
+
+async function copyText(text: string, okMsg = '已复制到剪贴板'): Promise<void> {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    window.$message?.success(okMsg)
+  } catch {
+    window.$message?.warning('浏览器拒绝了剪贴板访问，请手动全选复制')
+  }
+}
+
+async function downloadTarget(row: TargetSpec & { link: string }): Promise<void> {
+  if (!row.link) {
+    window.$message?.warning('该客户端暂无可用订阅链接')
+    return
+  }
+  try {
+    const res = await fetch(row.link, { credentials: 'omit' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const text = await res.text()
+    if (!text.trim()) throw new Error('响应为空')
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `ngg-${row.key}${row.ext}`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    window.$message?.warning(`下载失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 function expiryText(u: PortalUser): string {
   if (!u.expires_at || u.expires_at.startsWith('0001-')) return '永不过期'
   return formatTime(u.expires_at)
@@ -307,25 +490,24 @@ const columns = computed<any[]>(() => [
   {
     title: '操作',
     key: 'actions',
-    width: 186,
+    width: 250,
     fixed: 'right',
     render: (u: PortalUser) =>
-      h(NSpace, { size: 4, wrap: false }, {
-        default: () => [
-          h(NButton, { size: 'tiny', type: 'primary', onClick: () => openEdit(u) }, { default: () => '编辑' }),
-          h(NButton, {
-            size: 'tiny',
-            loading: isBusy('reset:' + u.id),
-            onClick: () => resetUsage(u),
-          }, { default: () => '重置用量' }),
-          h(NButton, {
-            size: 'tiny',
-            type: 'error',
-            loading: isBusy('del:' + u.id),
-            onClick: () => confirmDelete(u),
-          }, { default: () => '删除' }),
-        ],
-      }),
+      h('div', { class: 'row-actions' }, [
+        h(NButton, { size: 'tiny', type: 'primary', onClick: () => openEdit(u) }, { default: () => '编辑' }),
+        h(NButton, { size: 'tiny', onClick: () => openSubscription(u) }, { default: () => '订阅' }),
+        h(NButton, {
+          size: 'tiny',
+          loading: isBusy('reset:' + u.id),
+          onClick: () => resetUsage(u),
+        }, { default: () => '重置用量' }),
+        h(NButton, {
+          size: 'tiny',
+          type: 'error',
+          loading: isBusy('del:' + u.id),
+          onClick: () => confirmDelete(u),
+        }, { default: () => '删除' }),
+      ]),
   },
 ])
 
@@ -389,7 +571,7 @@ onMounted(refresh)
         :data="filtered"
         :row-key="(row: any) => String(row.id)"
         :bordered="false"
-        :scroll-x="1440"
+        :scroll-x="1520"
         size="small"
         :pagination="{ pageSize: 20 }"
       />
@@ -499,6 +681,87 @@ onMounted(refresh)
         </template>
       </NDrawerContent>
     </NDrawer>
+
+    <NDrawer v-model:show="showSubDrawer" :width="560" placement="right">
+      <NDrawerContent closable :native-scrollbar="false">
+        <template #header>
+          <NSpace :size="8" align="center">
+            <span>订阅</span>
+            <NTag v-if="subUser" size="small" :bordered="false">{{ subUser.username }}</NTag>
+          </NSpace>
+        </template>
+
+        <NAlert v-if="subError" type="error" :bordered="false" class="sub-block">{{ subError }}</NAlert>
+
+        <NAlert
+          v-for="(w, i) in subWarnings"
+          :key="'w' + i"
+          type="warning"
+          :bordered="false"
+          class="sub-warning"
+        >{{ w }}</NAlert>
+
+        <NCard size="small" title="订阅地址" class="user-panel">
+          <NSpace :size="8" align="center" :wrap="false">
+            <NInput :value="subAddress" readonly size="small" placeholder="绑定节点后生成" />
+            <NButton size="small" :disabled="!subAddress" @click="copyText(subAddress)">复制</NButton>
+          </NSpace>
+          <NSpace :size="8" style="margin-top: 8px">
+            <NButton
+              size="small"
+              :disabled="!subUser"
+              :loading="isBusy('sub-rotate')"
+              @click="rotateSubscription"
+            >轮换链接</NButton>
+            <NTag v-if="sub" size="small" :bordered="false">token {{ sub.token.slice(0, 8) }}…</NTag>
+          </NSpace>
+        </NCard>
+
+        <NCard size="small" title="绑定" class="user-panel">
+          <div class="kv-label">节点（出口主机）</div>
+          <NSelect
+            v-model:value="subForm.node_id"
+            size="small"
+            clearable
+            filterable
+            :options="hostOptions"
+            placeholder="选择节点"
+          />
+          <div class="kv-label" style="margin-top: 10px">协议</div>
+          <NSelect v-model:value="subForm.protocol" size="small" :options="PROTOCOL_OPTIONS" />
+          <div class="kv-label" style="margin-top: 10px">规则集</div>
+          <NSelect
+            v-model:value="subForm.rule_set_ids"
+            size="small"
+            multiple
+            clearable
+            :options="ruleSetOptions"
+            placeholder="不绑定规则集"
+          />
+          <div class="kv-label" style="margin-top: 10px">DNS</div>
+          <NSelect v-model:value="subForm.dns_profile" size="small" :options="DNS_OPTIONS" />
+          <NSpace :size="8" style="margin-top: 12px">
+            <NButton
+              size="small"
+              type="primary"
+              :loading="isBusy('sub-save')"
+              :disabled="!subUser"
+              @click="saveSubscription"
+            >保存绑定</NButton>
+          </NSpace>
+        </NCard>
+
+        <NCard size="small" title="客户端" class="user-panel">
+          <div v-for="row in targetRows" :key="row.key" class="sub-target">
+            <span class="sub-target__name">{{ row.label }}</span>
+            <NSpace :size="6" :wrap="false">
+              <NButton size="tiny" :disabled="!row.link" @click="copyText(row.link, '订阅链接已复制')">复制链接</NButton>
+              <NButton size="tiny" :disabled="!row.link" @click="downloadTarget(row)">下载配置</NButton>
+            </NSpace>
+          </div>
+        </NCard>
+      </NDrawerContent>
+    </NDrawer>
   </div>
 </template>
 
@@ -580,5 +843,27 @@ onMounted(refresh)
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.sub-block {
+  margin-bottom: 10px;
+}
+.sub-warning {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.sub-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f2f2f4;
+}
+.sub-target:last-child {
+  border-bottom: none;
+}
+.sub-target__name {
+  font-size: 12.5px;
+  color: #1d1d1f;
 }
 </style>

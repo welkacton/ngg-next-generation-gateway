@@ -14,13 +14,24 @@ import {
   NInput,
   NInputNumber,
   NModal,
+  NRadioButton,
+  NRadioGroup,
   NSelect,
   NSpace,
   NSwitch,
   NTag,
 } from 'naive-ui'
 import * as api from '../api/ngg'
-import type { HostChainHop, HostRole, HostStats, HostView, RemoteHost } from '../api/ngg'
+import type {
+  HostChainHop,
+  HostProvision,
+  HostRole,
+  HostStats,
+  HostView,
+  ProvisionProtocol,
+  RemoteHost,
+} from '../api/ngg'
+import client from '../api/client'
 import { useApiAction } from '../composables/useApi'
 import { formatBytes, formatTime, prettyJson } from '../utils/format'
 
@@ -294,6 +305,7 @@ async function refresh() {
   if (res) {
     hosts.value = res.hosts ?? []
     stats.value = res.stats ?? null
+    void loadAllProvisions()
   }
   const m = await run('metrics', () => api.getHostStats())
   if (m) metrics.value = m
@@ -487,6 +499,110 @@ function probeType(h: HostView): 'success' | 'error' | 'default' {
 function cardStatusClass(h: HostView): string {
   if (!h.probe) return 'host-card--unknown'
   return h.probe.online ? 'host-card--online' : 'host-card--offline'
+}
+
+/* ------------------------------------------------------------------ *
+ * VPS 部署（provision）：把已登记的主机真正绑定成可用节点
+ * 脚本由后端生成，只含该节点自己的凭据；NGG 的会话凭据不会进入脚本。
+ * ------------------------------------------------------------------ */
+
+const PROVISION_OPTIONS: Array<{ label: string; value: ProvisionProtocol }> = [
+  { label: 'VLESS', value: 'vless' },
+  { label: 'Trojan', value: 'trojan' },
+  { label: 'Shadowsocks', value: 'shadowsocks' },
+]
+const PROVISION_DEFAULT_PORT: Record<ProvisionProtocol, number> = {
+  vless: 443,
+  trojan: 443,
+  shadowsocks: 8388,
+}
+
+const provisions = ref<Record<string, HostProvision>>({})
+const showDeploy = ref(false)
+const deployHost = ref<HostView | null>(null)
+const deployProtocol = ref<ProvisionProtocol>('vless')
+const deployPort = ref<number | null>(443)
+const deploySni = ref('')
+const deployProvision = ref<HostProvision | null>(null)
+
+function provisionLabel(h: HostView): string {
+  const p = provisions.value[h.id]
+  return p ? `${p.protocol.toUpperCase()} :${p.port}` : '未部署'
+}
+
+/** 读取已保存的部署脚本：404 表示「还没生成过」，必须静默，不能弹全局错误。 */
+async function loadProvision(id: string): Promise<void> {
+  try {
+    const res = await client.get<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`, {
+      silentError: true,
+    })
+    provisions.value = { ...provisions.value, [id]: res.data }
+    if (deployHost.value?.id === id) deployProvision.value = res.data
+  } catch {
+    // 无已保存的部署脚本
+  }
+}
+
+async function loadAllProvisions(): Promise<void> {
+  await Promise.allSettled(hosts.value.map((h) => loadProvision(h.id)))
+}
+
+function openDeploy(h: HostView): void {
+  deployHost.value = h
+  const saved = provisions.value[h.id]
+  deployProvision.value = saved ?? null
+  if (saved) {
+    deployProtocol.value = saved.protocol
+    deployPort.value = saved.port
+    deploySni.value = saved.endpoint.sni === 'www.bing.com' ? '' : saved.endpoint.sni
+  } else {
+    deployProtocol.value = 'vless'
+    deployPort.value = PROVISION_DEFAULT_PORT.vless
+    deploySni.value = ''
+  }
+  showDeploy.value = true
+  void loadProvision(h.id)
+}
+
+watch(deployProtocol, (p) => {
+  // 只在端口还是某个协议默认值时才联动，避免覆盖手填端口
+  const current = Number(deployPort.value ?? 0)
+  if (!current || Object.values(PROVISION_DEFAULT_PORT).includes(current)) {
+    deployPort.value = PROVISION_DEFAULT_PORT[p]
+  }
+})
+
+async function generateProvision(): Promise<void> {
+  const h = deployHost.value
+  if (!h) return
+  const port = Number(deployPort.value ?? 0)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    window.$message?.warning('端口需在 1–65535')
+    return
+  }
+  const res = await run(
+    'deploy-gen',
+    () =>
+      api.provisionHost(h.id, {
+        protocol: deployProtocol.value,
+        port,
+        sni: deploySni.value.trim(),
+      }),
+    '部署脚本已生成',
+  )
+  if (res) {
+    deployProvision.value = res
+    provisions.value = { ...provisions.value, [h.id]: res }
+  }
+}
+
+async function copyText(text: string, ok: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    window.$message?.success(ok)
+  } catch {
+    window.$message?.warning('浏览器未授予剪贴板权限')
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -687,12 +803,19 @@ onMounted(() => {
             </NTag>
             <span v-if="chainHops(h.chain).length" class="host-card__chain-n">{{ chainHops(h.chain).length }} 跳</span>
           </div>
+          <div class="host-card__chain">
+            <span class="host-card__chain-k">部署</span>
+            <NTag size="small" :bordered="false" :type="provisions[h.id] ? 'success' : 'default'">
+              {{ provisionLabel(h) }}
+            </NTag>
+          </div>
           <div v-if="h.tags?.length" class="host-card__tags">
             <NTag v-for="t in h.tags.slice(0, 4)" :key="t" size="small" :bordered="false">{{ t }}</NTag>
           </div>
           <div class="host-card__foot">
             <NSpace :size="6" :wrap="true">
               <NButton size="tiny" type="primary" @click="openDetail(h)">详情</NButton>
+              <NButton size="tiny" type="info" @click="openDeploy(h)">部署到 VPS</NButton>
               <NButton size="tiny" :loading="isBusy('probe:' + h.id)" @click="probeOne(h)">探测</NButton>
               <NButton size="tiny" :loading="isBusy('role:' + h.id)" @click="switchRole(h, 'inbound')">设为入站</NButton>
               <NButton size="tiny" :loading="isBusy('role:' + h.id)" @click="switchRole(h, 'outbound')">设为出站</NButton>
@@ -1154,6 +1277,88 @@ onMounted(() => {
       </template>
     </NModal>
 
+    <!-- 部署到 VPS：生成可粘贴执行的脚本，并展示真实连接参数 -->
+    <NModal
+      v-model:show="showDeploy"
+      preset="card"
+      :title="`部署到 VPS · ${deployHost?.name ?? ''}`"
+      style="width: 760px"
+      :bordered="false"
+    >
+      <NSpace vertical :size="12" style="width: 100%">
+        <div class="hint">
+          选择协议后生成脚本，复制到 VPS 上以 root 执行，这台机器就成为可用的代理节点。
+          脚本只安装内核并写入最小配置，不含 NGG 的会话凭据；凭据本身是该节点自己的 UUID / 密码。
+        </div>
+
+        <NGrid cols="1 m:3" responsive="screen" :x-gap="10" :y-gap="8">
+          <NGi>
+            <div class="kv-label">协议</div>
+            <NRadioGroup v-model:value="deployProtocol" size="small">
+              <NRadioButton v-for="o in PROVISION_OPTIONS" :key="o.value" :value="o.value">
+                {{ o.label }}
+              </NRadioButton>
+            </NRadioGroup>
+          </NGi>
+          <NGi>
+            <div class="kv-label">端口</div>
+            <NInputNumber v-model:value="deployPort" :min="1" :max="65535" style="width: 100%" />
+          </NGi>
+          <NGi>
+            <div class="kv-label">SNI（可空）</div>
+            <NInput v-model:value="deploySni" placeholder="留空则用主机域名或 www.bing.com" />
+          </NGi>
+        </NGrid>
+
+        <NSpace align="center" :size="10" :wrap="true">
+          <NButton size="small" type="primary" :loading="isBusy('deploy-gen')" @click="generateProvision">
+            生成部署脚本
+          </NButton>
+          <span class="hint">目标机器：<span class="mono">{{ deployHost?.address ?? '—' }}</span></span>
+        </NSpace>
+
+        <template v-if="deployProvision">
+          <div class="deploy-block">
+            <div class="deploy-block__head">
+              <span class="deploy-block__title">部署脚本（bash）</span>
+              <NButton size="tiny" @click="copyText(deployProvision.script, '脚本已复制')">复制</NButton>
+            </div>
+            <pre class="mono deploy-pre">{{ deployProvision.script }}</pre>
+          </div>
+
+          <NCard size="small" title="连接参数（客户端按此填写）">
+            <NDescriptions :column="2" size="small" label-placement="left" bordered>
+              <NDescriptionsItem label="协议">{{ deployProvision.endpoint.protocol.toUpperCase() }}</NDescriptionsItem>
+              <NDescriptionsItem label="地址"><span class="mono">{{ deployProvision.endpoint.address }}</span></NDescriptionsItem>
+              <NDescriptionsItem label="端口">{{ deployProvision.endpoint.port }}</NDescriptionsItem>
+              <NDescriptionsItem label="传输">{{ deployProvision.endpoint.transport }}</NDescriptionsItem>
+              <NDescriptionsItem label="TLS">{{ deployProvision.endpoint.tls ? '开启（自签证书）' : '关闭' }}</NDescriptionsItem>
+              <NDescriptionsItem label="SNI">{{ deployProvision.endpoint.sni }}</NDescriptionsItem>
+              <NDescriptionsItem label="凭据" :span="2">
+                <div class="deploy-cred">
+                  <span class="mono">{{ deployProvision.endpoint.credential }}</span>
+                  <NButton size="tiny" quaternary @click="copyText(deployProvision.endpoint.credential, '凭据已复制')">
+                    复制凭据
+                  </NButton>
+                </div>
+              </NDescriptionsItem>
+              <NDescriptionsItem label="生成时间" :span="2">{{ formatTime(deployProvision.generated_at) }}</NDescriptionsItem>
+            </NDescriptions>
+          </NCard>
+
+          <div>
+            <div class="kv-label">部署说明（脚本实际行为与限制）</div>
+            <ul class="deploy-notes">
+              <li v-for="(n, i) in deployProvision.notes" :key="i">{{ n }}</li>
+            </ul>
+          </div>
+        </template>
+        <NAlert v-else type="info" :bordered="false">
+          该节点尚未生成部署脚本。选择协议后点「生成部署脚本」。
+        </NAlert>
+      </NSpace>
+    </NModal>
+
     <!-- JSON 全量导入导出 -->
     <NModal v-model:show="showJson" preset="card" title="节点库 JSON（全量）" style="width: 720px" :bordered="false">
       <NSpace vertical :size="10" style="width: 100%">
@@ -1259,5 +1464,57 @@ onMounted(() => {
   grid-template-columns: 84px minmax(0, 1fr) minmax(0, 1fr);
   gap: 6px;
   min-width: 0;
+}
+
+/* 部署到 VPS */
+.deploy-block {
+  border: 1px solid #ececf0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.deploy-block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #fafafb;
+  border-bottom: 1px solid #ececf0;
+}
+.deploy-block__title {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #3a3a3c;
+  margin-right: auto;
+}
+.deploy-pre {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 300px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.55;
+  background: #fff;
+  white-space: pre;
+  tab-size: 2;
+}
+.deploy-cred {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.deploy-cred .mono {
+  word-break: break-all;
+}
+.deploy-notes {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: #3a3a3c;
+}
+.deploy-notes li {
+  margin-bottom: 2px;
 }
 </style>

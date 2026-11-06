@@ -102,6 +102,13 @@ func run(configPath string, noRestore bool, stop <-chan struct{}) error {
 		}
 		return string(sub.Body), sub.Headers, true
 	})
+	// 用户订阅：/sub/u/<token> 走「节点 + 协议 + 规则集 + DNS」渲染器。
+	agentEP.SetUserSubscription(func(_ context.Context, token, target string) (string, map[string]string, bool) {
+		if r := srv.SubscriptionRenderer(); r != nil {
+			return r.RenderToken(token, target)
+		}
+		return "", nil, false
+	})
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	defer agentCancel()
 	go func() {

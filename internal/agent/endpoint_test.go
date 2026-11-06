@@ -159,3 +159,103 @@ func TestEnabledFollowsConfig(t *testing.T) {
 		t.Fatal("Enabled must follow the persisted config")
 	}
 }
+
+func TestUserSubscriptionRoute(t *testing.T) {
+	ep, _, _, _ := newTestEndpoint(t)
+
+	// Without a resolver the route must 404 with an empty body, exactly like
+	// /sub/{token} does — the two can never be told apart from outside.
+	rec := httptest.NewRecorder()
+	ep.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sub/u/tok-1?target=clash", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("without a resolver = %d, want 404", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("404 body must be empty, got %q", rec.Body.String())
+	}
+
+	ep.SetUserSubscription(func(ctx context.Context, token, target string) (string, map[string]string, bool) {
+		if token != "tok-1" {
+			return "", nil, false
+		}
+		return "body:" + target, map[string]string{
+			"subscription-userinfo":   "upload=0; download=7; total=100",
+			"profile-update-interval": "24",
+			"Content-Type":            "text/yaml; charset=utf-8",
+		}, true
+	})
+
+	rec = httptest.NewRecorder()
+	ep.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sub/u/tok-1?target=surge", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("known token = %d, want 200", rec.Code)
+	}
+	if rec.Body.String() != "body:surge" {
+		t.Fatalf("the target must reach the resolver, body = %q", rec.Body.String())
+	}
+	if got := rec.Header().Get("subscription-userinfo"); got != "upload=0; download=7; total=100" {
+		t.Fatalf("subscription-userinfo = %q", got)
+	}
+	if got := rec.Header().Get("profile-update-interval"); got != "24" {
+		t.Fatalf("profile-update-interval = %q", got)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/yaml") {
+		t.Fatalf("Content-Type = %q", got)
+	}
+
+	// The default target is clash; the resolver sees it explicitly.
+	rec = httptest.NewRecorder()
+	ep.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sub/u/tok-1", nil))
+	if rec.Body.String() != "body:clash" {
+		t.Fatalf("default target must be clash, body = %q", rec.Body.String())
+	}
+
+	// Unknown token and unknown user both 404 with an empty body.
+	for _, path := range []string{"/sub/u/other", "/sub/u/other?target=surge"} {
+		rec = httptest.NewRecorder()
+		ep.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s = %d, want 404", path, rec.Code)
+		}
+		if rec.Body.Len() != 0 {
+			t.Fatalf("%s 404 body must be empty, got %q", path, rec.Body.String())
+		}
+	}
+}
+
+func TestUserSubscriptionDefaultsContentType(t *testing.T) {
+	ep, _, _, _ := newTestEndpoint(t)
+	ep.SetUserSubscription(func(ctx context.Context, token, target string) (string, map[string]string, bool) {
+		return "plain", nil, true
+	})
+	rec := httptest.NewRecorder()
+	ep.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sub/u/any", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Fatalf("Content-Type = %q, want text/plain", got)
+	}
+}
+
+// The device-token route must keep its old behaviour after /sub/u/{token} was
+// added: a renderer set through SetSubscription must not be reached by the new
+// path and vice versa.
+func TestSubscriptionRoutesStaySeparate(t *testing.T) {
+	ep, _, _, _ := newTestEndpoint(t)
+	ep.SetSubscription(func(ctx context.Context, token string) (string, map[string]string, bool) {
+		return "device:" + token, nil, token == "dev-token"
+	})
+
+	rec := httptest.NewRecorder()
+	ep.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sub/dev-token", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "device:dev-token" {
+		t.Fatalf("device route broken: %d %q", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	ep.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sub/u/dev-token", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("the user route must not fall back to the device renderer: %d %q", rec.Code, rec.Body.String())
+	}
+}

@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -354,9 +356,30 @@ func (e *Engine) startLocked(ctx context.Context, id contracts.CoreID) error {
 	if err != nil {
 		return err
 	}
+	// Drift guard: the config may still point at a port that a stale process
+	// kept bound. Reconcile with the allocator BEFORE validating, so the kernel
+	// never starts into a bind() failure it cannot explain.
+	if note, rerr := e.reconcileWorkerPorts(ctx, id, params); rerr != nil {
+		e.logLine(id, "ngg", "port reconcile failed: "+rerr.Error())
+	} else if note != "" {
+		e.logLine(id, "ngg", note)
+		if content, err = e.configs.Read(id); err != nil {
+			return err
+		}
+	}
 	// Fail-Closed: never start a kernel with a config its own validator rejects.
 	if _, err := e.configs.Validate(ctx, id, content); err != nil {
 		return fmt.Errorf("refusing to start %q: native config validation failed: %w", id, err)
+	}
+
+	// Pre-flight: the binary must actually execute on THIS host. An antivirus
+	// quarantine, a wrong architecture or a missing runtime fails here with a
+	// clear message instead of an opaque start-then-crash.
+	if err := e.preflightBinary(ctx, id, a.VersionArgs()); err != nil {
+		e.logLine(id, "ngg", "preflight failed: "+err.Error())
+		_ = e.store.AddAudit("core.start", id, "preflight failed: "+err.Error())
+		e.setState(id, contracts.StateFailed, truncateText(err.Error(), 300))
+		return err
 	}
 
 	e.setState(id, contracts.StateStarting, "starting native kernel")
@@ -365,23 +388,34 @@ func (e *Engine) startLocked(ctx context.Context, id contracts.CoreID) error {
 	restartPolicy := core.RestartPolicy{
 		Enabled: true, MaxRetries: e.cfg.Supervisor.RestartMax, Backoff: e.cfg.RestartBackoff(),
 	}
-	_, err = e.supervisor.Start(ctx, core.StartOptions{
+	// Crash restarts stay OFF until the kernel survives the startup window: a
+	// kernel that cannot bind its port must fail ONCE with the real reason
+	// instead of looping and stacking notifications.
+	handle, err := e.supervisor.Start(ctx, core.StartOptions{
 		ID: id, Binary: e.versions.BinaryPath(id), Args: a.RunArgs(configPath),
 		Env: a.Environment(configPath), WorkDir: filepath.Dir(configPath),
-		Policy: restartPolicy,
+		Policy: core.RestartPolicy{
+			Enabled: false, MaxRetries: restartPolicy.MaxRetries, Backoff: restartPolicy.Backoff,
+		},
 		OnLine: func(stream, line string) { e.logLine(id, stream, line) },
 		OnRestart: func(attempt int, exitErr error) {
+			msg := e.failureMessage(id, exitErr, "崩溃退出")
 			e.mu.Lock()
 			if rt := e.runtime[id]; rt != nil {
 				rt.restarts++
 				rt.state = contracts.StateStarting
-				rt.message = fmt.Sprintf("独立崩溃恢复中，第 %d 次重启", attempt)
+				rt.message = msg
 				rt.updatedAt = time.Now().UTC()
 			}
 			e.mu.Unlock()
 			e.logLine(id, "ngg", fmt.Sprintf("crash recovery attempt %d after %v", attempt, exitErr))
-			e.bus.Publish(contracts.Event{Type: "system.alert", CoreID: id,
-				Payload: map[string]any{"message": fmt.Sprintf("kernel crashed, independent restart #%d", attempt)}})
+			// A crash restart is a lifecycle fact of ONE kernel, not a global
+			// system alert: publishing it as core.state keeps the UI from
+			// stacking modal "系统告警" popups while still carrying the reason.
+			e.bus.Publish(contracts.Event{Type: "core.state", CoreID: id, Payload: map[string]any{
+				"id": id, "state": string(contracts.StateFailed),
+				"reason": msg, "attempt": attempt, "event": "core.crash_restart",
+			}})
 			e.publishState(id)
 		},
 		OnExit: func(exitErr error) {
@@ -393,7 +427,7 @@ func (e *Engine) startLocked(ctx context.Context, id contracts.CoreID) error {
 					rt.state, rt.message = contracts.StateStopped, "stopped by NGG"
 				} else {
 					rt.state = contracts.StateFailed
-					rt.message = fmt.Sprintf("process exited: %v", exitErr)
+					rt.message = e.failureMessage(id, exitErr, "进程异常退出")
 				}
 				rt.updatedAt = time.Now().UTC()
 			}
@@ -406,6 +440,32 @@ func (e *Engine) startLocked(ctx context.Context, id contracts.CoreID) error {
 		e.setState(id, contracts.StateFailed, err.Error())
 		return err
 	}
+
+	// Startup window: a kernel that dies within 3s is reported as a failed
+	// start carrying its real stderr, never as {"ok":true,"message":"started"}.
+	exited := false
+	select {
+	case <-handle.Done():
+		exited = true
+	case <-time.After(kernelStartupGrace):
+		exited = !e.supervisor.IsRunning(id)
+	}
+	if exited {
+		full := e.startupFailureMessage(id, handle.Err())
+		e.mu.Lock()
+		if rt := e.runtime[id]; rt != nil {
+			rt.state = contracts.StateFailed
+			rt.message = truncateText(full, 300)
+			rt.updatedAt = time.Now().UTC()
+		}
+		e.mu.Unlock()
+		e.logLine(id, "ngg", "start failed: "+full)
+		_ = e.store.AddAudit("core.start", id, "failed after launch: "+full)
+		e.publishState(id)
+		return fmt.Errorf("%s", full)
+	}
+	e.supervisor.SetRestartPolicy(id, restartPolicy)
+
 	version := ""
 	if info, err := e.versions.InstalledVersion(ctx, id); err == nil {
 		version = info.Version
@@ -419,6 +479,14 @@ func (e *Engine) startLocked(ctx context.Context, id contracts.CoreID) error {
 	rt.version, rt.autoStart, rt.updatedAt = version, true, time.Now().UTC()
 	e.mu.Unlock()
 	e.health.MarkStarted(id)
+	if e.supervisor.RestartCount(id) > 0 {
+		// The kernel already crashed during the startup handshake and the
+		// supervisor is restarting it. Reporting "running" here would erase the
+		// real crash reason the UI must show; publish the captured state instead.
+		e.publishState(id)
+		_ = e.store.AddAudit("core.start", id, fmt.Sprintf("exited during startup, independent restart #%d", e.supervisor.RestartCount(id)))
+		return nil
+	}
 	e.setState(id, contracts.StateRunning, "")
 	_ = e.store.SetDesired(id, contracts.StateRunning, true, version)
 	_ = e.store.AddAudit("core.start", id, fmt.Sprintf("pid=%d ports=%v version=%s", e.supervisor.PID(id), params.Ports(), version))
@@ -697,6 +765,276 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 
 func (e *Engine) logLine(id contracts.CoreID, stream, line string) {
 	e.logs.Append(contracts.LogEntry{CoreID: id, Stream: stream, Line: line})
+}
+
+// ---------------------------------------------------------------------------
+// Crash explanation + read-only accessors used by the diagnostics endpoint.
+// Every value below comes from the real OS / the real installed binary.
+// ---------------------------------------------------------------------------
+
+// portConflictSignals are the real error strings kernels emit when they cannot
+// bind an allocated port. Matched case-insensitively against recent stderr.
+var portConflictSignals = []string{
+	"address already in use",
+	"only one usage of each socket address",
+	"address in use",
+	"listen tcp",
+	"listen udp",
+	"bind: ",
+}
+
+// kernelStartupGrace is how long Start() watches a freshly launched kernel
+// before declaring the start successful.
+const kernelStartupGrace = 3 * time.Second
+
+// preflightBinary executes the kernel's own version command before any service
+// start. It catches the failures that make a binary un-runnable on this host
+// (antivirus quarantine, wrong architecture, missing runtime, removed file)
+// while the error can still name the cause.
+func (e *Engine) preflightBinary(ctx context.Context, id contracts.CoreID, args []string) error {
+	bin := e.versions.BinaryPath(id)
+	if bin == "" {
+		return fmt.Errorf("二进制无法执行：未找到内核 %q 的可执行文件路径", id)
+	}
+	if len(args) == 0 {
+		// A descriptor without a version command must not be executed bare: for
+		// a proxy binary "no arguments" means "run the server", which would hang
+		// this check. The startup window still catches a broken launch.
+		return nil
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, bin, args...)
+	cmd.Dir = filepath.Dir(bin)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if runCtx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("二进制无法执行：3 秒内没有任何响应（可能被杀毒软件拦截）：%s", bin)
+	}
+	detail := strings.TrimSpace(string(out))
+	if detail == "" {
+		detail = "没有任何输出（可能被杀毒软件隔离或缺少运行库）"
+	}
+	return fmt.Errorf("二进制无法执行：%v（%s）", err, truncateText(detail, 200))
+}
+
+// startupFailureMessage describes a kernel that exited inside the startup
+// window, quoting the last stderr lines the kernel actually printed.
+func (e *Engine) startupFailureMessage(id contracts.CoreID, exitErr error) string {
+	reason := "无错误码"
+	if exitErr != nil && strings.TrimSpace(exitErr.Error()) != "" {
+		reason = strings.TrimSpace(exitErr.Error())
+	}
+	tail := e.supervisor.RecentStderr(id, 5)
+	if len(tail) == 0 {
+		if evidence := e.recentEvidence(id); len(evidence) > 0 {
+			tail = evidence
+			if len(tail) > 5 {
+				tail = tail[len(tail)-5:]
+			}
+		}
+	}
+	msg := fmt.Sprintf("%s 启动后立即退出（%s）", id, reason)
+	if advice := portConflictAdvice(tail, e.occupiedPorts(id)); advice != "" {
+		msg += " · " + advice
+	}
+	if len(tail) == 0 {
+		return truncateText(msg+"：内核没有任何输出", 900)
+	}
+	lines := make([]string, 0, len(tail))
+	for _, line := range tail {
+		lines = append(lines, truncateText(strings.TrimSpace(line), 160))
+	}
+	return truncateText(msg+"："+strings.Join(lines, " | "), 900)
+}
+
+// failureMessage turns a raw process exit into ONE readable line: exit status,
+// the actionable cause when stderr shows a port conflict, and the last output
+// line as evidence. Truncated to 300 characters because the UI renders it in
+// the status column and in a single notification.
+func (e *Engine) failureMessage(id contracts.CoreID, exitErr error, verb string) string {
+	exitText := "进程已退出（无错误信息）"
+	if exitErr != nil {
+		exitText = strings.TrimSpace(exitErr.Error())
+		if exitText == "" {
+			exitText = "进程已退出（无错误信息）"
+		}
+	}
+	parts := []string{verb + "：" + exitText}
+	tail := e.recentEvidence(id)
+	if advice := portConflictAdvice(tail, e.occupiedPorts(id)); advice != "" {
+		parts = append(parts, advice)
+	}
+	if line := lastOutputLine(tail); line != "" {
+		parts = append(parts, "最近输出："+line)
+	}
+	return truncateText(strings.Join(parts, " · "), 300)
+}
+
+// recentEvidence prefers the kernel's stderr ring (real error channel) and
+// falls back to the log ring sink so a kernel that reports through stdout still
+// yields the decisive line.
+func (e *Engine) recentEvidence(id contracts.CoreID) []string {
+	if tail := e.supervisor.RecentStderr(id, stderrTailLimit); len(tail) > 0 {
+		return tail
+	}
+	entries := e.logs.Latest(id, 20)
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Stream == "ngg" {
+			continue
+		}
+		out = append(out, entry.Line)
+	}
+	return out
+}
+
+// occupiedPorts reports which of the kernel's allocated ports are bound right
+// now by any OS listener.
+func (e *Engine) occupiedPorts(id contracts.CoreID) []int {
+	params, ok := e.ports.Get(id)
+	if !ok {
+		return nil
+	}
+	return e.ports.Check(params.Ports())
+}
+
+func portConflictAdvice(tail []string, occupied []int) string {
+	ports := append([]int(nil), occupied...)
+	seen := false
+	for _, line := range tail {
+		if !isPortConflictLine(line) {
+			continue
+		}
+		seen = true
+		// The kernel names the port it could not bind, which may not be one of
+		// the currently allocated ports (e.g. a stale generated config).
+		if p := portFromLine(line); p > 0 && !containsInt(ports, p) {
+			ports = append(ports, p)
+		}
+	}
+	if !seen {
+		return ""
+	}
+	if len(ports) > 0 {
+		shown := ports
+		suffix := ""
+		if len(shown) > 3 {
+			shown, suffix = shown[:3], " 等"
+		}
+		numbers := make([]string, 0, len(shown))
+		for _, p := range shown {
+			numbers = append(numbers, fmt.Sprint(p))
+		}
+		return fmt.Sprintf("端口 %s%s 被占用，请停止占用该端口的进程，或修改内核端口后重启",
+			strings.Join(numbers, "、"), suffix)
+	}
+	return "端口监听失败（疑似被其他进程占用），请停止占用端口的进程，或修改内核端口后重启"
+}
+
+func isPortConflictLine(line string) bool {
+	lower := strings.ToLower(line)
+	for _, s := range portConflictSignals {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// portFromLine extracts the last ":<port>" occurrence of an error line.
+func portFromLine(line string) int {
+	best := 0
+	for i := 0; i < len(line); i++ {
+		if line[i] != ':' {
+			continue
+		}
+		j := i + 1
+		for j < len(line) && line[j] >= '0' && line[j] <= '9' {
+			j++
+		}
+		if j == i+1 || j-(i+1) > 5 {
+			continue
+		}
+		if n, err := strconv.Atoi(line[i+1 : j]); err == nil && n > 0 && n <= 65535 {
+			best = n
+		}
+	}
+	return best
+}
+
+func containsInt(values []int, want int) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// lastOutputLine picks the most recent non-empty stderr line.
+func lastOutputLine(tail []string) string {
+	for i := len(tail) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(tail[i]); line != "" {
+			return truncateText(line, 180)
+		}
+	}
+	return ""
+}
+
+// truncateText is rune-safe: messages are Chinese, byte slicing would emit
+// broken UTF-8 into the WebSocket / JSON payloads.
+func truncateText(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// BinaryPath is the active binary file of a kernel.
+func (e *Engine) BinaryPath(id contracts.CoreID) string { return e.versions.BinaryPath(id) }
+
+// VersionArgs is the adapter's native version invocation (e.g. ["version"]).
+func (e *Engine) VersionArgs(id contracts.CoreID) []string {
+	a, err := e.registry.Get(id)
+	if err != nil {
+		return nil
+	}
+	return a.VersionArgs()
+}
+
+// PortParams returns the isolated port block allocated to a kernel.
+func (e *Engine) PortParams(id contracts.CoreID) (core.RuntimeParams, bool) { return e.ports.Get(id) }
+
+// IsRunning reports whether the supervisor holds a live OS process.
+func (e *Engine) IsRunning(id contracts.CoreID) bool { return e.supervisor.IsRunning(id) }
+
+// CoreLogTail returns the most recent n log lines (oldest first) of a kernel.
+func (e *Engine) CoreLogTail(id contracts.CoreID, n int) []string {
+	entries := e.logs.Latest(id, n)
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		line := entry.Line
+		if entry.Stream != "" && entry.Stream != "ngg" {
+			line = "[" + entry.Stream + "] " + line
+		}
+		if !entry.Time.IsZero() {
+			line = entry.Time.Local().Format("15:04:05") + " " + line
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// StderrTail returns up to n recent stderr lines of the kernel's process.
+func (e *Engine) StderrTail(id contracts.CoreID, n int) []string {
+	return e.supervisor.RecentStderr(id, n)
 }
 
 func (e *Engine) publishState(id contracts.CoreID) {

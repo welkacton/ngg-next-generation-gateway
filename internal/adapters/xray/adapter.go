@@ -28,7 +28,7 @@ func (a *Adapter) Descriptor() contracts.CoreDescriptor {
 		Capability: contracts.Capability{
 			Protocols: []string{
 				"vless", "vmess", "trojan", "shadowsocks", "socks", "http",
-				"wireguard", "hysteria2", "tuic", " freedom", "blackhole", "dns",
+				"wireguard", "hysteria2", "tuic", "freedom", "blackhole", "dns",
 			},
 			InboundTypes:     []string{"socks", "http", "dokodemo-door", "tproxy(disabled-in-worker-mode)"},
 			Features:         []string{"xtls-rprx-vision", "reality", "routing", "stats-api"},

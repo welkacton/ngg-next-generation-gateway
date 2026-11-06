@@ -715,3 +715,26 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 | GET / PUT | `/clients/access` | 对外地址、端口、协议、TLS |
 
 配置格式：sing-box JSON、Mihomo YAML、WireGuard `.conf`、SOCKS5 参数；订阅地址 `<public_url>/sub/<credential>`。
+
+---
+
+## v2.7.1 新增 / 变更端点
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/gateway/datapath/apply` | body 可带 `{master}`：先持久化再执行接管计划（一步完成「启用并接管」） |
+| GET | `/cores/{id}/diagnostics` | 内核诊断：二进制 / 版本输出 / 配置校验 / 端口占用 / 日志尾部 / 五项检查 / hint |
+| GET / POST | `/hosts/{id}/provision` | 读取 / 生成 VPS 部署脚本（VLESS / Trojan / Shadowsocks），返回 endpoint 与诚实 notes |
+| GET | `/users/{id}/subscription` | 用户订阅：token、绑定信息、五条链接（首次调用自动签发 token） |
+| PUT | `/users/{id}/subscription` | 绑定节点、协议、规则集、DNS |
+| POST | `/users/{id}/subscription/rotate` | 轮换 token（旧链接立即失效） |
+
+公网监听新增（不经会话鉴权）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/sub/u/{token}?target=clash\|surge\|singbox\|v2ray\|socks` | 用户订阅正文；未知 / 禁用 / 过期统一 404 |
+
+事件变更：内核崩溃恢复不再发 `system.alert`，改为 `core.state`（`payload.state=failed`、`payload.reason`），前端据此去重提示。
+
+启动行为变更：`POST /cores/{id}/start` 先执行 `<binary> version` 预检，并在启动后观察 3 秒；进程立刻退出时返回 409 风格错误并携带真实 stderr，不进入崩溃重启循环。端口与配置不一致且存在冲突时，启动前会按分配器端口改写配置（走备份 + 原生校验）。

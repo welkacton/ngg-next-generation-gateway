@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -156,12 +157,42 @@ func (s *Server) handleGatewayDatapath(w http.ResponseWriter, r *http.Request) {
 // handleGatewayDatapathApply tries to take the data path over. It only really
 // executes on Windows with an elevated token and a present adapter; every
 // other case returns the plan with executed=false / applied=false.
+//
+// The body is optional. When it carries a master config the handler persists
+// it first, so "toggle the switch and hit apply" works in one step instead of
+// failing with "master.enabled=false" because the form was never saved.
 func (s *Server) handleGatewayDatapathApply(w http.ResponseWriter, r *http.Request) {
 	st := s.gatewayOrFail(w)
 	if st == nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, st.ApplyDatapath())
+	var body struct {
+		Master *gateway.Master `json:"master"`
+	}
+	if r.Body != nil {
+		// An empty body is the normal case; only malformed JSON is an error.
+		if err := decodeJSON(r, &body); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	payload := map[string]any{}
+	if body.Master != nil {
+		saved, _, _, err := st.SaveMaster(*body.Master)
+		if err != nil {
+			writeErr(w, http.StatusUnprocessableEntity, "CONFIG_INVALID: "+err.Error())
+			return
+		}
+		// SaveMaster returns the whole gateway config; the caller wants master.
+		payload["master"] = saved.Master
+	}
+	res := st.ApplyDatapath()
+	payload["applied"] = res.Applied
+	payload["executed"] = res.Executed
+	payload["commands"] = res.Commands
+	payload["reason"] = res.Reason
+	payload["status"] = res.Status
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // handleGatewayDatapathRevert undoes a takeover under the same conditions.

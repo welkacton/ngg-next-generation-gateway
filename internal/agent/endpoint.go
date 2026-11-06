@@ -29,15 +29,22 @@ const tokenHeader = "X-NGG-Agent-Token"
 // expired" and is reported as 404 without distinguishing the reason.
 type SubscriptionFunc func(ctx context.Context, token string) (body string, headers map[string]string, ok bool)
 
+// UserSubscriptionFunc renders a per-user subscription body (节点 + 协议 +
+// 规则集 + DNS) for the token minted by internal/users. target is one of
+// clash / surge / singbox / v2ray / socks. ok=false covers every rejection
+// reason so the public route cannot be used to enumerate tokens.
+type UserSubscriptionFunc func(ctx context.Context, token, target string) (body string, headers map[string]string, ok bool)
+
 // Endpoint is the public listener agents report to.
 type Endpoint struct {
 	store *Store
 	cfg   *ServerStore
 	mux   *http.ServeMux
 
-	mu     sync.RWMutex
-	sub    SubscriptionFunc
-	logger func(format string, args ...any)
+	mu      sync.RWMutex
+	sub     SubscriptionFunc
+	userSub UserSubscriptionFunc
+	logger  func(format string, args ...any)
 
 	httpSrv *http.Server
 }
@@ -49,6 +56,7 @@ func NewEndpoint(store *Store, cfg *ServerStore) *Endpoint {
 	mux.HandleFunc("POST /v1/agent/report", e.handleReport)
 	mux.HandleFunc("GET /v1/agent/ping", e.handlePing)
 	mux.HandleFunc("GET /sub/{token}", e.handleSubscription)
+	mux.HandleFunc("GET /sub/u/{token}", e.handleUserSubscription)
 	e.mux = mux
 	return e
 }
@@ -58,6 +66,15 @@ func NewEndpoint(store *Store, cfg *ServerStore) *Endpoint {
 func (e *Endpoint) SetSubscription(fn SubscriptionFunc) {
 	e.mu.Lock()
 	e.sub = fn
+	e.mu.Unlock()
+}
+
+// SetUserSubscription installs the per-user renderer behind /sub/u/{token}.
+// While unset that route answers 404, exactly like /sub/{token} without a
+// renderer.
+func (e *Endpoint) SetUserSubscription(fn UserSubscriptionFunc) {
+	e.mu.Lock()
+	e.userSub = fn
 	e.mu.Unlock()
 }
 
@@ -187,6 +204,47 @@ func (e *Endpoint) handleSubscription(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(k, v)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, body)
+}
+
+// handleUserSubscription serves GET /sub/u/{token}?target=<format>. It is a
+// separate route from /sub/{token} so the device-token behaviour stays exactly
+// as it was; the path shapes differ in depth, so ServeMux never confuses them.
+func (e *Endpoint) handleUserSubscription(w http.ResponseWriter, r *http.Request) {
+	token := filepath.Base(strings.TrimSpace(r.PathValue("token")))
+	e.mu.RLock()
+	fn := e.userSub
+	e.mu.RUnlock()
+	if fn == nil || token == "" || token == "." || token == "/" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	target := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("target")))
+	if target == "" {
+		target = "clash"
+	}
+	body, headers, ok := fn(r.Context(), token, target)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	ct := ""
+	for k, v := range headers {
+		switch {
+		case strings.EqualFold(k, "Content-Length"):
+			continue
+		case strings.EqualFold(k, "Content-Type"):
+			ct = v
+			continue
+		}
+		w.Header().Set(k, v)
+	}
+	if ct == "" {
+		ct = "text/plain; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, body)

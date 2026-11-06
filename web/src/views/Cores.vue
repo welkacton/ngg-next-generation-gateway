@@ -12,10 +12,35 @@ import {
 } from 'naive-ui'
 import { useCoresStore } from '../stores/cores'
 import { stateTagType, STATE_LABELS } from '../utils/format'
-import type { CoreStatus } from '../api/ngg'
+import type { CoreDiagnostics, CoreStatus } from '../api/ngg'
+import { getCoreDiagnostics } from '../api/ngg'
 
 const store = useCoresStore()
 const selectedKeys = ref<Array<string | number>>([])
+
+const showDiag = ref(false)
+const diagLoading = ref(false)
+const diagTarget = ref('')
+const diag = ref<CoreDiagnostics | null>(null)
+
+async function openDiagnostics(id: string): Promise<void> {
+  diagTarget.value = id
+  diag.value = null
+  showDiag.value = true
+  await loadDiagnostics(id)
+}
+
+async function loadDiagnostics(id = diagTarget.value): Promise<void> {
+  if (!id) return
+  diagLoading.value = true
+  try {
+    diag.value = await getCoreDiagnostics(id)
+  } catch {
+    // axios 拦截器已统一提示错误
+  } finally {
+    diagLoading.value = false
+  }
+}
 
 const showInstall = ref(false)
 const installTarget = ref('')
@@ -246,17 +271,41 @@ const columns = computed<any[]>(() => [
   {
     title: '状态',
     key: 'state',
-    width: 110,
+    width: 150,
     render: (row: CoreStatus) => {
       const phase = phaseOf(row)
-      return h('div', { class: 'state-cell' }, [
-        h('span', { class: `state-dot state-dot--${phase}` }),
-        h(
-          NTag,
-          { size: 'small', type: stateTagType(row.state), bordered: false },
-          { default: () => STATE_LABELS[row.state] || row.state },
-        ),
-      ])
+      const message = (row.message || '').trim()
+      const short = message.length > 60 ? `${message.slice(0, 60)}…` : message
+      const body: any[] = [
+        h('div', { style: 'display: flex; align-items: center; gap: 7px; min-width: 0' }, [
+          h('span', { class: `state-dot state-dot--${phase}` }),
+          h(
+            NTag,
+            { size: 'small', type: stateTagType(row.state), bordered: false },
+            { default: () => STATE_LABELS[row.state] || row.state },
+          ),
+        ]),
+      ]
+      // 失败原因不点开诊断也要看得见：单行小字 + 完整 tooltip。
+      if (row.state === 'failed' && short) {
+        body.push(
+          h(
+            'div',
+            {
+              title: message,
+              style:
+                'max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;' +
+                'font-size: 11px; line-height: 1.5; color: #d03050; opacity: .9',
+            },
+            short,
+          ),
+        )
+      }
+      return h(
+        'div',
+        { class: 'state-cell', style: 'flex-direction: column; align-items: flex-start; gap: 2px' },
+        body,
+      )
     },
   },
   {
@@ -334,6 +383,12 @@ const columns = computed<any[]>(() => [
             disabled: !running || anyTransition,
             ghost: true,
             title: '仅运行中的内核可重启',
+          }),
+          opButton('诊断', {
+            onClick: () => openDiagnostics(row.id),
+            type: 'info',
+            ghost: true,
+            title: '查看真实运行环境与崩溃原因',
           }),
         ]),
         h('div', { class: 'core-ops-row' }, [
@@ -485,7 +540,7 @@ onUnmounted(stopPolling)
       :row-key="rowKey"
       :loading="store.baseLoading"
       :bordered="false"
-      :scroll-x="1110"
+      :scroll-x="1150"
       size="small"
       :pagination="false"
     />
@@ -536,5 +591,178 @@ onUnmounted(stopPolling)
         </NSpace>
       </template>
     </NModal>
+
+    <NModal
+      v-model:show="showDiag"
+      preset="card"
+      :title="`内核诊断 · ${diagTarget}`"
+      style="width: 720px"
+      :bordered="false"
+    >
+      <div v-if="diagLoading" class="hint">正在采集诊断信息…</div>
+      <NSpace v-else-if="diag" vertical :size="12">
+        <NAlert type="warning" :bordered="false">{{ diag.hint }}</NAlert>
+
+        <div class="diag-row">
+          <NTag size="small" :bordered="false">{{ STATE_LABELS[diag.state] || diag.state }}</NTag>
+          <span class="hint mono">PID {{ diag.pid || '—' }}</span>
+          <span class="hint">{{ diag.running ? '进程在运行' : '进程未运行' }}</span>
+          <span class="hint mono">检测时间 {{ diag.checked_at }}</span>
+        </div>
+
+        <div class="diag-checks">
+          <div v-for="c in diag.checks" :key="c.name" class="diag-check">
+            <NTag size="small" :bordered="false" :type="c.ok ? 'success' : 'error'">
+              {{ c.ok ? '通过' : '失败' }}
+            </NTag>
+            <span class="diag-check__name">{{ c.name }}</span>
+            <span class="diag-check__detail mono">{{ c.detail }}</span>
+          </div>
+        </div>
+
+        <div>
+          <div class="hint">二进制</div>
+          <div class="mono diag-path">{{ diag.binary.path || '—' }}</div>
+          <div class="hint">
+            {{
+              diag.binary.exists
+                ? `${diag.binary.size} 字节 · ${diag.binary.modified}`
+                : '文件不存在'
+            }}
+          </div>
+        </div>
+
+        <div>
+          <div class="hint">版本输出</div>
+          <pre v-if="diag.version_output" class="diag-pre">{{ diag.version_output }}</pre>
+          <div v-else class="hint">无输出</div>
+          <div v-if="diag.version_error" class="diag-error">{{ diag.version_error }}</div>
+        </div>
+
+        <div>
+          <div class="hint">配置文件</div>
+          <div class="mono diag-path">{{ diag.config.path || '—' }}</div>
+          <div class="hint">
+            {{ diag.config.exists ? `${diag.config.size} 字节` : '文件不存在' }}
+          </div>
+          <pre v-if="diag.config.validation_error" class="diag-pre diag-pre--error">{{
+            diag.config.validation_error
+          }}</pre>
+        </div>
+
+        <div v-if="diag.ports.length">
+          <div class="hint">端口</div>
+          <div class="diag-ports">
+            <div v-for="p in diag.ports" :key="p.port" class="diag-port">
+              <span class="mono diag-port__num">{{ p.port }}</span>
+              <NTag size="small" :bordered="false" :type="p.in_use ? 'error' : 'success'">
+                {{ p.in_use ? '占用' : '空闲' }}
+              </NTag>
+              <span class="mono diag-port__pid">{{ p.owner_pid ? `PID ${p.owner_pid}` : '—' }}</span>
+              <span class="hint diag-port__note">{{ p.note || '' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="hint">日志尾部（最近 {{ diag.log_tail.length }} 行）</div>
+          <pre v-if="diag.log_tail.length" class="diag-pre diag-pre--log">{{
+            diag.log_tail.join('\n')
+          }}</pre>
+          <div v-else class="hint">无日志</div>
+        </div>
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton :loading="diagLoading" @click="loadDiagnostics()">重新检测</NButton>
+          <NButton type="primary" @click="showDiag = false">关闭</NButton>
+        </NSpace>
+      </template>
+    </NModal>
   </div>
 </template>
+
+<style scoped>
+.diag-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.diag-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.diag-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.diag-check__name {
+  flex: 0 0 78px;
+  font-size: 12px;
+}
+.diag-check__detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  opacity: 0.8;
+  word-break: break-all;
+}
+.diag-path {
+  font-size: 12px;
+  word-break: break-all;
+}
+.diag-error {
+  font-size: 12px;
+  color: #d03050;
+  word-break: break-all;
+}
+.diag-pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  background: rgba(125, 125, 125, 0.08);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diag-pre--error {
+  color: #d03050;
+}
+.diag-pre--log {
+  max-height: 220px;
+  white-space: pre;
+}
+.diag-ports {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.diag-port {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.diag-port__num {
+  flex: 0 0 56px;
+}
+.diag-port__pid {
+  flex: 0 0 76px;
+  opacity: 0.8;
+}
+.diag-port__note {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

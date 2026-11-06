@@ -13,7 +13,7 @@
 | Generation | **2** |
 | Label | **Gen 2** |
 | 名称 | **第二代 · 本地部署与统一控制台** |
-| Release | **v2.7.0** |
+| Release | **v2.7.1** |
 | 仓库 | `welkacton/ngg-next-generation-gateway` |
 
 ---
@@ -31,7 +31,7 @@
 | Gen 2 增补 | v2.2.1 | 内核安装修复与交互整理 | 内核安装改为**异步后台任务**（`internal/api/installs.go`：POST 立即 202、`/cores/install/status` 轮询、进度走 `core.install` WebSocket），修掉前端 30 秒超时导致三个内核装不上；`GET /protocols/catalog` 不再触发 GitHub 请求（避免页面轮询耗尽匿名 60/h 配额），安装器支持 `NGG_GITHUB_TOKEN`/`GITHUB_TOKEN` 与限流提示；配置引擎二级重排为 协议配置/规则配置/DNS配置/入口节点/出口节点；配置文件分区改为 协议→入站→出站→路由规则→DNS→其他→重建模板、页面留白、卡片支持单条与批量启停（`POST /profiles/toggle`）；GitHub 规则集可「全选全部」并自动按 50 一批加载；侧栏改 flex 三段式，修复展开后底部文字覆盖 |
 | Gen 2 增补 | v2.2.2 | 完整配置双向编辑 | `internal/profiles/split.go` 实现 `Render` 的逆运算：YAML 按顶层键保留原文与注释，JSON 用 `json.Decoder.Token` 保序拆分并把 `outbounds` 按节点/策略重新分组；`POST /profiles/split` 纯计算不落盘，语法错误返回 422；前端 Protocols.vue 把只读 `<pre>` 换成可编辑 textarea + 650ms 防抖自动同步、`silentError` 静默请求、分区行数高亮与保存并关闭 |
 | Gen 2 增补 | v2.6.4 | 规则集 / 接管全局 / DNS / 节点 / 链路编排 / 极简风 | v2.3.0~v2.6.3 并行演进已交付登录门禁、链路编排、Windows 真 TUN、主机控制台、网络概览与用户管理；本版补齐 `POST/DELETE /rulesets/github/presets`、`POST /network/rules/delete`、`GET /rulesets/syntax`、`GET /profiles/dns-schema`、`POST /network/components/toggle`、节点密钥/探测/采集端点，并把全站说明层收敛为 `main.css` 一处开关 |
-| **Gen 2（当前）** | **v2.7.0** | 远程出口节点 + 网关总控 + 客户端接入 | `internal/agent` 提供远程节点注册、一次性 token、指标上报与公网监听（`POST /v1/agent/report`、`GET /sub/{token}`），`cmd/ngg-agent` 基于 gopsutil 采集系统指标并带 Windows / Linux / Docker 安装脚本；`internal/gateway` 增加 `master`（虚拟网卡接管 + 分流 + 上行绑定）与 `datapath` 真实命令规划与状态检测；`internal/clients` 提供逐设备凭据、四种配置渲染与订阅；`internal/hosts` 增加链式代理，mihomo 渲染 `dialer-proxy` 串联。
+| **Gen 2（当前）** | **v2.7.1** | 总控启用 / 内核可靠性 / VPS 节点 / 用户订阅 | `POST /gateway/datapath/apply` 接受可选 `master` 并先持久化；`internal/engine/reconcile.go` 用配置里声明的端口做冲突检测与改写（mihomo/sing-box/xray 三种格式）；`Engine.Start` 增加二进制预检与 3 秒存活窗口，崩溃事件改 `core.state`；`GET /cores/{id}/diagnostics` 提供五项检查与日志尾部；`internal/hosts/provision.go` 生成 VLESS/Trojan/SS 部署脚本并持久化 endpoint；`internal/subscription` 渲染五种客户端配置，`/sub/u/{token}` 由公网监听提供。
 
 ### 代际判定标准
 
@@ -47,12 +47,12 @@
 
 | 位置 | 显示内容 |
 | --- | --- |
-| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.7.0` 徽章 + 代际表 |
-| GitHub Releases | tag `v2.7.0`，Release 名称含代际 |
-| Web UI 顶栏 | `Gen 2 · v2.7.0` 徽章 + 代际名称 |
+| GitHub 仓库首页 | README 顶部 `Generation 2 / 第二代 · Release v2.7.1` 徽章 + 代际表 |
+| GitHub Releases | tag `v2.7.1`，Release 名称含代际 |
+| Web UI 顶栏 | `Gen 2 · v2.7.1` 徽章 + 代际名称 |
 | `GET /api/v1/update/status` | `generation` / `generation_label` / `generation_name` / `release` |
-| `nggd -version` | `NGG 2.7.0`（来自 `internal/engine.NGGVersion = version.Release`） |
-| `GET /api/v1/system` | `ngg_version: "2.7.0"` |
+| `nggd -version` | `NGG 2.7.1`（来自 `internal/engine.NGGVersion = version.Release`） |
+| `GET /api/v1/system` | `ngg_version: "2.7.1"` |
 
 ---
 

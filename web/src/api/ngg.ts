@@ -2271,7 +2271,11 @@ export const getGatewayMaster = () => get<GatewayMasterResult>('/gateway/master'
 export const saveGatewayMaster = (master: GatewayMaster) =>
   put<GatewayMasterSaveResult>('/gateway/master', master)
 export const getDatapathStatus = () => get<DatapathStatus>('/gateway/datapath')
-export const applyDatapath = () => post<DatapathResult>('/gateway/datapath/apply')
+export const applyDatapath = (master?: GatewayMaster) =>
+  post<DatapathResult & { master?: GatewayMaster }>(
+    '/gateway/datapath/apply',
+    master ? { master } : undefined,
+  )
 export const revertDatapath = () => post<DatapathResult>('/gateway/datapath/revert')
 export const applySplitRules = () => post<SplitRulesResult>('/gateway/master/split-rules')
 
@@ -2347,3 +2351,99 @@ export const getClientConfig = (
 export const getAccessConfig = () => get<AccessConfig>('/clients/access')
 export const saveAccessConfig = (access: AccessConfig) =>
   put<{ access: AccessConfig; changed: string[] }>('/clients/access', access)
+
+/* ------------------------------------------------------------------ *
+ * v2.7.1 · 内核诊断 / VPS 节点部署 / 用户订阅
+ * ------------------------------------------------------------------ */
+
+export interface CorePortCheck {
+  port: number
+  in_use: boolean
+  owner_pid?: number
+  note?: string
+}
+
+export interface CoreCheck {
+  name: string
+  ok: boolean
+  detail: string
+}
+
+export interface CoreDiagnostics {
+  id: string
+  state: CoreState
+  pid: number
+  running: boolean
+  binary: { path: string; exists: boolean; size: number; modified: string }
+  version_output: string
+  version_error: string
+  config: { path: string; exists: boolean; size: number; validation_error: string }
+  ports: CorePortCheck[]
+  log_tail: string[]
+  checks: CoreCheck[]
+  hint: string
+  checked_at: string
+}
+
+export const getCoreDiagnostics = (id: string) =>
+  get<CoreDiagnostics>(`/cores/${encodeURIComponent(id)}/diagnostics`)
+
+export type ProvisionProtocol = 'vless' | 'trojan' | 'shadowsocks'
+
+export interface HostProvisionEndpoint {
+  address: string
+  port: number
+  protocol: ProvisionProtocol
+  credential: string
+  transport: string
+  tls: boolean
+  sni: string
+}
+
+export interface HostProvision {
+  host_id: string
+  protocol: ProvisionProtocol
+  port: number
+  credential: string
+  script: string
+  endpoint: HostProvisionEndpoint
+  notes: string[]
+  generated_at: string
+}
+
+export const getHostProvision = (id: string) =>
+  get<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`)
+export const provisionHost = (
+  id: string,
+  payload: { protocol: ProvisionProtocol; port?: number; sni?: string },
+) => post<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`, payload)
+
+export type SubscriptionTarget = 'clash' | 'surge' | 'singbox' | 'v2ray' | 'socks'
+
+export interface UserSubscription {
+  user_id: string
+  token: string
+  node_id: string
+  node_name: string
+  protocol: string
+  rule_set_ids: string[]
+  dns_profile: string
+  base_url: string
+  links: Record<SubscriptionTarget, string>
+  generated_at: string
+  warnings: string[]
+}
+
+export const getUserSubscription = (id: string) =>
+  get<UserSubscription>(`/users/${encodeURIComponent(id)}/subscription`)
+export const saveUserSubscription = (
+  id: string,
+  payload: {
+    node_id: string
+    protocol: string
+    rule_set_ids: string[]
+    dns_profile: string
+  },
+) => put<UserSubscription>(`/users/${encodeURIComponent(id)}/subscription`, payload)
+export const rotateUserSubscription = (id: string) =>
+  post<UserSubscription>(`/users/${encodeURIComponent(id)}/subscription/rotate`)

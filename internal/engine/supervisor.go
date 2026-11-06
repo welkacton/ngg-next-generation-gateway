@@ -1,18 +1,23 @@
 package engine
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ngg-project/ngg/internal/core"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
+
+// stderrTailLimit is how many recent stderr lines are kept per kernel so the
+// crash notification and the diagnostics endpoint can quote the REAL reason
+// instead of just "exit status 1".
+const stderrTailLimit = 30
 
 // unit is one supervised kernel process family (the initial process plus any
 // automatic crash restarts). Done() closes only when the whole unit is final.
@@ -30,6 +35,35 @@ type unit struct {
 	firstErr   chan error
 	finishOnce sync.Once
 	stopOnce   sync.Once
+
+	tailMu     sync.Mutex
+	stderrTail []string
+}
+
+// pushStderr records one stderr line in the bounded diagnostic ring.
+func (u *unit) pushStderr(line string) {
+	line = strings.TrimRight(line, "\r")
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	u.tailMu.Lock()
+	defer u.tailMu.Unlock()
+	u.stderrTail = append(u.stderrTail, line)
+	if len(u.stderrTail) > stderrTailLimit {
+		u.stderrTail = append([]string(nil), u.stderrTail[len(u.stderrTail)-stderrTailLimit:]...)
+	}
+}
+
+// recentStderr returns the last n stderr lines, oldest first.
+func (u *unit) recentStderr(n int) []string {
+	u.tailMu.Lock()
+	defer u.tailMu.Unlock()
+	if n <= 0 || n > len(u.stderrTail) {
+		n = len(u.stderrTail)
+	}
+	out := make([]string, n)
+	copy(out, u.stderrTail[len(u.stderrTail)-n:])
+	return out
 }
 
 var _ core.ProcessHandle = (*unit)(nil)
@@ -160,24 +194,13 @@ func (s *supervisor) runUnit(u *unit) {
 		cmd := exec.Command(u.opts.Binary, u.opts.Args...)
 		cmd.Dir = u.opts.WorkDir
 		cmd.Env = append(os.Environ(), u.opts.Env...)
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			lastErr = err
-			if first {
-				u.firstErr <- err
-				close(u.firstErr)
-			}
-			break
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			lastErr = err
-			if first {
-				u.firstErr <- err
-				close(u.firstErr)
-			}
-			break
-		}
+		// Writers instead of StdoutPipe/StderrPipe: with pipes cmd.Wait closes
+		// the read end as soon as the process exits, which silently drops the
+		// final — and diagnostically decisive — crash lines.
+		stdout := &lineWriter{stream: "stdout", onLine: u.opts.OnLine}
+		stderr := &lineWriter{stream: "stderr", onLine: u.opts.OnLine, onStderr: u.pushStderr}
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
 		if err := cmd.Start(); err != nil {
 			lastErr = err
 			if first {
@@ -192,12 +215,9 @@ func (s *supervisor) runUnit(u *unit) {
 		if first {
 			close(u.firstErr) // a nil value signals successful launch
 		}
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() { defer wg.Done(); streamLogs(stdout, "stdout", u.opts.OnLine) }()
-		go func() { defer wg.Done(); streamLogs(stderr, "stderr", u.opts.OnLine) }()
 		lastErr = cmd.Wait()
-		wg.Wait()
+		stdout.Flush()
+		stderr.Flush()
 		first = false
 		if u.opts.OnLine != nil {
 			u.opts.OnLine("ngg", fmt.Sprintf("process exited: %v", lastErr))
@@ -232,13 +252,57 @@ func (s *supervisor) runUnit(u *unit) {
 	u.finish(lastErr)
 }
 
-func streamLogs(r io.Reader, stream string, onLine func(string, string)) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		if onLine != nil {
-			onLine(stream, sc.Text())
+// lineWriter turns a kernel output stream into complete lines. Writes never
+// fail: the kernel must not be affected by NGG's log handling.
+type lineWriter struct {
+	stream   string
+	onLine   func(stream, line string)
+	onStderr func(line string)
+
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
 		}
+		line := string(w.buf[:i])
+		w.buf = w.buf[i+1:]
+		w.emit(line)
+	}
+	// A single unterminated line must not grow without bound.
+	if len(w.buf) > 1<<20 {
+		w.emit(string(w.buf))
+		w.buf = nil
+	}
+	return len(p), nil
+}
+
+// Flush emits a trailing line that had no newline before the process exited.
+func (w *lineWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buf) == 0 {
+		return
+	}
+	line := string(w.buf)
+	w.buf = nil
+	w.emit(line)
+}
+
+func (w *lineWriter) emit(line string) {
+	line = strings.TrimRight(line, "\r")
+	if w.onStderr != nil {
+		w.onStderr(line)
+	}
+	if w.onLine != nil {
+		w.onLine(w.stream, line)
 	}
 }
 
@@ -298,6 +362,33 @@ func (s *supervisor) PID(id contracts.CoreID) int {
 		return 0
 	}
 	return u.PID()
+}
+
+// RecentStderr returns up to n of the most recent stderr lines the supervised
+// process wrote. It is diagnostic only and never affects lifecycle decisions.
+func (s *supervisor) RecentStderr(id contracts.CoreID, n int) []string {
+	s.mu.Lock()
+	u := s.procs[id]
+	s.mu.Unlock()
+	if u == nil {
+		return []string{}
+	}
+	return u.recentStderr(n)
+}
+
+// RestartCount reports how many independent crash restarts the current unit
+// has performed. It is used to avoid reporting a crash-looping kernel as
+// freshly "running" during the startup handshake.
+func (s *supervisor) RestartCount(id contracts.CoreID) int {
+	s.mu.Lock()
+	u := s.procs[id]
+	s.mu.Unlock()
+	if u == nil {
+		return 0
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.attempt
 }
 
 func (s *supervisor) SetRestartPolicy(id contracts.CoreID, p core.RestartPolicy) {

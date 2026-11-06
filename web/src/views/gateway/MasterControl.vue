@@ -20,6 +20,7 @@ import type {
   GatewayUplinkPolicy,
   GatewayWAN,
   DatapathStatus,
+  DatapathResult,
 } from '../../api/ngg'
 import { useApiAction } from '../../composables/useApi'
 
@@ -317,8 +318,35 @@ async function datapath(kind: 'apply' | 'revert'): Promise<void> {
   )
   if (!ok) return
 
-  const res = await run(kind, () => (kind === 'apply' ? api.applyDatapath() : api.revertDatapath()))
+  let payload: GatewayMaster | undefined
+  if (kind === 'apply') {
+    // Applying with enabled=false is the #1 confusion: the backend refuses to
+    // run the plan. Persist the current form (with enabled forced on) in the
+    // same request so "apply" always means "save + take over".
+    const err = validate()
+    if (err) {
+      window.$message?.warning(err)
+      return
+    }
+    const latest = await api.getGatewayMaster().catch(() => null)
+    const base = latest?.master ?? master.value
+    if (!base) {
+      window.$message?.warning('未获取到总控配置')
+      return
+    }
+    if (!draft.enabled) draft.enabled = true
+    payload = { ...buildMaster(base), enabled: true }
+  }
+
+  const res = await run(kind, () =>
+    kind === 'apply' ? api.applyDatapath(payload) : api.revertDatapath(),
+  )
   if (!res) return
+  const withMaster = res as DatapathResult & { master?: GatewayMaster }
+  if (withMaster.master) {
+    master.value = withMaster.master
+    syncFrom(withMaster.master)
+  }
 
   status.value = res.status
   pendingCommands.value = Array.isArray(res.commands) ? res.commands : []
