@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.7.2
+### 🏷️ Generation 2 / 第二代 · Release v2.7.3
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -33,7 +33,7 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | **Gen 2（当前）** | **v2.7.2** | 控制中心：网卡 → 全量接管 → WAN 出口 | 把配置引擎的「接管全局」与网关中心的「总控设置」合并为 **网关中心 → 控制中心**（`/gateway/master`），按固定顺序编排：① 启动 NGG 虚拟网卡（TUN 默认名由 `ngg0` 改为 **NGG**，网卡名下拉**自动识别**本机已创建的虚拟网卡并可手输，旧网卡会在启动时清理其默认路由）② 强制接管全部网卡的全部流量（接口优先级 + 默认路由，`metric=0` 自动映射为 1，避免被 netsh 当作 automatic 而接管失败）③ WAN 出口选择物理网卡走本地运营商（`network.egress.interface` **即时生效**，无需重启引擎，同时回写 WAN 接口）；新增 `GET /gateway/control`、`POST /gateway/control/start|stop`、`GET /network/adapters`（含虚拟网卡识别与默认出口标记）；接管失败时 `master.enabled` 保持 false，不谎报已接管；原「接管全局」页面收敛为「高级诊断」（运行状态 / 会话 / 自检 / 原始配置） |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.2`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.3`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
