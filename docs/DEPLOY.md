@@ -79,7 +79,7 @@ docker run -d --name ngg --network host \
 
 ```bash
 export GITHUB_TOKEN='ghp_xxx'     # 私有仓库下载 Release 需要 PAT
-sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.7.3
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.7.4
 sudo ./scripts/deploy-vps.sh status
 # 完整参数与手工等价步骤见 docs/DEPLOY-VPS.md
 ```
@@ -112,7 +112,7 @@ git clone https://github.com/welkacton/ngg-next-generation-gateway.git
 cd ngg-next-generation-gateway
 bash scripts/quickstart.sh                 # 源码构建（需 Go 1.26+、Node 20+）
 # 或
-bash scripts/quickstart.sh --release v2.7.3    # 下载官方 Release 预编译包
+bash scripts/quickstart.sh --release v2.7.4    # 下载官方 Release 预编译包
 ```
 
 脚本会：构建/下载 → 复制 `configs/ngg.example.yaml` 为 `configs/ngg.yaml` → 启动。
@@ -125,18 +125,29 @@ bash scripts/quickstart.sh --release v2.7.3    # 下载官方 Release 预编译�
 
 ---
 
-## 5. 从 GitHub Release 获取预编译包
+## 5. Linux / VPS：从源码构建（Release 只有 Windows `.exe`）
 
-发布 tag（`v*`）时 CI 会为 linux amd64/arm64/386/arm、windows amd64、darwin amd64/arm64、freebsd amd64
-构建包含 `nggd` + `web-dist` + 配置模板 + 文档 + `scripts/` + `deploy/` + `installer/` 的 tar.gz，
-并额外产出 **`NGG-<tag>-windows-amd64.zip`（便携包）** 与 **`NGG-Setup-<tag>.exe`（Inno Setup 安装程序）**，
-全部附 `SHA256SUMS` 与逐包 `.sha256`。`deploy-vps.sh` / `install.ps1` 下载时都会校验摘要。
+从 v2.7.4 起，GitHub Release **只面向 Windows PC，只发布 `.exe`**（`NGG-Setup` / `NGG-Core` / `NGG-Agent`），
+不再为 Linux / macOS / FreeBSD 出包。VPS 请在服务器上自行构建：
 
 ```bash
-# 校验（示例）
-curl -LO https://github.com/welkacton/ngg-next-generation-gateway/releases/download/v2.7.3/ngg-v2.7.3-linux-amd64.tar.gz
-sha256sum -c ngg-v2.7.3-linux-amd64.tar.gz.sha256
-tar -xzf ngg-v2.7.3-linux-amd64.tar.gz && cd ngg
+git clone https://github.com/welkacton/ngg-next-generation-gateway.git /root/ngg-src
+cd /root/ngg-src
+(cd web && npm ci --no-audit --no-fund && npm run build)
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o nggd ./cmd/nggd
+
+# 目录结构：nggd + web-dist + configs
+mkdir -p /root/bundle/ngg
+cp nggd /root/bundle/ngg/
+cp -r web/dist /root/bundle/ngg/web-dist
+cp -r configs /root/bundle/ngg/configs
+tar -czf /root/ngg-custom-linux-amd64.tar.gz -C /root/bundle ngg
+
+sudo ./scripts/deploy-vps.sh install --file /root/ngg-custom-linux-amd64.tar.gz --public
+```
+
+```bash
+# 手工方式（无 deploy 脚本）
 cp configs/ngg.example.yaml configs/ngg.yaml
 ./nggd -config configs/ngg.yaml
 ```

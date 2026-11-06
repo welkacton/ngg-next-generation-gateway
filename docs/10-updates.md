@@ -36,10 +36,10 @@
 
 > **首次升级引导**：v2.1.0 及更早的二进制里更新模块只认服务端环境变量，
 > **没有**「界面填 Token」和「立即更新」按钮。已装 v2.1.0 的机器请任选其一完成一次引导：
-> 1. 直接双击 `NGG-Setup-v2.7.3.exe` 覆盖安装（推荐，配置、API Token、数据都会保留；安装程序会先停服务再替换 `nggd.exe`）；
+> 1. 直接双击 `NGG-Setup-v2.7.4.exe` 覆盖安装（推荐，配置、API Token、数据都会保留；安装程序会先停服务再替换 `nggd.exe`）；
 > 2. 或临时给 NGG 服务配置 `NGG_GITHUB_TOKEN` 并重启服务，用旧版的三步按钮更新一次。
 >
-> **已经装了 v2.1.1 及以上版本的机器可以直接在 Web 界面点「立即更新」升到 v2.7.3** ——
+> **已经装了 v2.1.1 及以上版本的机器可以直接在 Web 界面点「立即更新」升到 v2.7.4** ——
 > 这是首次真正可用的端到端一键更新：填 Token → 检查 → SHA256 校验下载 → 替换重启 → 自动刷新。
 
 ---
@@ -52,7 +52,7 @@
 | --- | --- |
 | `GET /api/v1/update/status` | 代际、Release、仓库、OS/Arch、安装目录、更新暂存目录、更新脚本是否就绪、`token_configured`（服务端是否已配 PAT，**不返回 Token 值**） |
 | `POST /api/v1/update/check` | 真实请求 GitHub Releases API（`/releases/latest`，无 latest 时回退列表取最新非 draft），返回 tag、发布时间、说明、资产列表、是否有新版本、当前平台匹配的资产 |
-| `POST /api/v1/update/download` | body `{"tag":"v2.7.3","asset":"NGG-Setup-v2.7.3.exe"}`（省略则使用最近一次检查结果）；下载资产与 `SHA256SUMS`，**校验通过才落盘**到 `<data>/updates/<tag>/` |
+| `POST /api/v1/update/download` | body `{"tag":"v2.7.4","asset":"NGG-Setup-v2.7.4.exe"}`（省略则使用最近一次检查结果）；下载资产与 `SHA256SUMS`，**校验通过才落盘**到 `<data>/updates/<tag>/` |
 | `POST /api/v1/update/apply` | 校验暂存文件与 `SHA256SUMS` 存在后，启动平台更新脚本；无脚本 / 未下载 / 摘要缺失都会明确报错，不会伪装成功 |
 
 `check` 返回示例（真实字段，非模拟）：
@@ -60,12 +60,12 @@
 ```json
 {
   "current": "2.1.2",
-  "latest": "v2.7.3",
+  "latest": "v2.7.4",
   "update_available": true,
   "source": "github-api",
   "checked_at": "2026-11-05T03:00:00Z",
-  "release": { "tag_name": "v2.7.3", "published_at": "...", "body": "...", "assets": [] },
-  "asset": { "name": "NGG-Setup-v2.7.3.exe", "size": 15176447, "url": "..." },
+  "release": { "tag_name": "v2.7.4", "published_at": "...", "body": "...", "assets": [] },
+  "asset": { "name": "NGG-Setup-v2.7.4.exe", "size": 15176447, "url": "..." },
   "status": { "generation": 2, "generation_label": "Gen 2", "release": "2.1.2",
               "platform": "windows/amd64", "script_ready": true, "token_configured": false }
 }
@@ -110,10 +110,12 @@ Linux → `ngg-<tag>-linux-<arch>.tar.gz`。
 ## 4. 打包要求
 
 - Release 必须附带 `SHA256SUMS`，且每个资产名与校验文件中的名称一致；
-- Windows 资产命名 `NGG-Setup-<tag>.exe` / `NGG-<tag>-windows-amd64.zip`；
-- Linux 资产命名 `ngg-<tag>-linux-<arch>.tar.gz`；
-- tar.gz / ZIP 内必须含 `scripts/`，否则 `/update/status` 会显示 `script_ready=false`；
-- `release.yml` 在打 `v*` tag 时自动生成上述资产与合并后的 `SHA256SUMS`。
+- **从 v2.7.4 起只发布 Windows `.exe`**：`NGG-Setup-<tag>.exe`（安装包，唯一推荐格式）、
+  `NGG-Core-<tag>-windows-amd64.exe`（裸守护进程）、`NGG-Agent-<tag>-windows-amd64.exe`；
+- 不再产出 `.zip` / `.tar.gz`，也不再构建 Linux / macOS / FreeBSD（VPS 请从源码构建）；
+- 安装包内必须含 `scripts/`，否则 `/update/status` 会显示 `script_ready=false`；
+- `release.yml` 在 `windows-latest` 上打 `v*` tag 时自动生成上述资产与合并后的 `SHA256SUMS`，
+  并在发布前校验「出现任何非 `.exe` 资产即中止」。
 
 ---
 

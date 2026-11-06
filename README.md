@@ -62,12 +62,12 @@ GitHub 仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
-| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.7.3 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.7.4 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
 | VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
 | VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
 | **Windows 安装程序** | 双击 `NGG-Setup-vX.Y.Z.exe`（唯一发布格式） | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
-| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.7.3` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
+| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.7.4` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
 `scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →
