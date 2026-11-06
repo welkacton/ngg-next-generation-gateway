@@ -36,8 +36,8 @@
 
 ## 2. 方式 A：GUI 安装包（推荐给本机使用）
 
-1. 从 Release 下载 `NGG-Setup-v2.7.4.exe`：
-   <https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.7.4>
+1. 从 Release 下载 `NGG-Setup-v2.7.5.exe`：
+   <https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.7.5>
    （私有仓库需登录有权限的 GitHub 账号；同页有 `SHA256SUMS` 可校验；也可按第 4 节自行构建）。
 2. 双击 → UAC 确认 → 选择安装目录（默认 `C:\Program Files\NGG`）→ 完成。
 3. 安装器会自动执行 `install.ps1 -ConfigureOnly -Silent -OpenBrowser`：
@@ -117,7 +117,7 @@ NGG-Setup-vX.Y.Z.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 
 ```powershell
 # 仓库根目录，普通 PowerShell 即可（不需要管理员，只是产包）
-powershell -ExecutionPolicy Bypass -File .\installer\windows\build-installer.ps1 -Version v2.7.4
+powershell -ExecutionPolicy Bypass -File .\installer\windows\build-installer.ps1 -Version v2.7.5
 ```
 
 产物在 `out\`：
@@ -232,7 +232,7 @@ powershell -ExecutionPolicy Bypass -File .\installer\windows\set-system-proxy.ps
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| `cd : 找不到路径 "C:\path\to\..."` | 复制了文档占位符。换成解压后的真实目录，例如 `Set-Location "$env:USERPROFILE\Downloads\NGG-v2.7.4-windows-amd64"`；或直接用 `install.bat` / `NGG-Setup-v2.7.4.exe` |
+| `cd : 找不到路径 "C:\path\to\..."` | 复制了文档占位符。换成解压后的真实目录，例如 `Set-Location "$env:USERPROFILE\Downloads\NGG-v2.7.5-windows-amd64"`；或直接用 `install.bat` / `NGG-Setup-v2.7.5.exe` |
 | `-File 形式参数的实际参数 ".\install.ps1" 不存在` | 当前目录里没有 `install.ps1`。先 `Set-Location` 到解压目录并 `Get-ChildItem` 确认；`-File` 是相对**当前目录**解析的 |
 | 安装脚本报 `Administrator privileges are required` | 用「以管理员身份运行」打开 PowerShell；更简单是双击 `install.bat`（会自动提权） |
 | 服务启动失败 / 错误 1053 | 看 `<安装目录>\logs\ngg-service.log`；最常见是 `-config` 路径不对、配置文件 ACL 不允许 SYSTEM 读取、或 YAML 语法错误 |

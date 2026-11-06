@@ -79,7 +79,7 @@ docker run -d --name ngg --network host \
 
 ```bash
 export GITHUB_TOKEN='ghp_xxx'     # 私有仓库下载 Release 需要 PAT
-sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.7.4
+sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.7.5
 sudo ./scripts/deploy-vps.sh status
 # 完整参数与手工等价步骤见 docs/DEPLOY-VPS.md
 ```
@@ -112,7 +112,7 @@ git clone https://github.com/welkacton/ngg-next-generation-gateway.git
 cd ngg-next-generation-gateway
 bash scripts/quickstart.sh                 # 源码构建（需 Go 1.26+、Node 20+）
 # 或
-bash scripts/quickstart.sh --release v2.7.4    # 下载官方 Release 预编译包
+bash scripts/quickstart.sh --release v2.7.5    # 下载官方 Release 预编译包
 ```
 
 脚本会：构建/下载 → 复制 `configs/ngg.example.yaml` 为 `configs/ngg.yaml` → 启动。
