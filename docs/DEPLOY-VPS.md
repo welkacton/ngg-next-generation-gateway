@@ -1,7 +1,13 @@
 # NGG 部署到 VPS / 云服务器（完整步骤）
 
+> ⚠️ **从 v2.7.4 起，GitHub Release 只面向 Windows PC，只发布 `.exe`。**
+> 因此 `--version vX.Y.Z`（从 Release 下载 Linux tar.gz）这条路已不可用；
+> 部署到 VPS 请**在服务器上从源码构建**：`git clone` → `cd web && npm ci && npm run build`
+> → `go build -trimpath -o nggd ./cmd/nggd`，再把 `nggd`、`web/dist`、`configs` 放到安装目录，
+> 其余 systemd / 防火墙 / HTTPS / 备份章节仍然适用。
+
 > 本文是**从一台空白 VPS 到可访问管理界面**的完整本地部署手册，覆盖 Ubuntu / Debian / Rocky / AlmaLinux
-> 的 systemd 原生安装、Docker Compose、私有仓库 Release 下载、防火墙、HTTPS 反向代理、备份与回滚。
+> 的 systemd 原生安装、Docker Compose、源码构建、防火墙、HTTPS 反向代理、备份与回滚。
 > Windows 安装请见 [`INSTALL-WINDOWS.md`](INSTALL-WINDOWS.md)；其它场景速查见 [`DEPLOY.md`](DEPLOY.md)。
 
 ---

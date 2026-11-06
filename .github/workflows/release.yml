@@ -1,127 +1,142 @@
 name: Release
+
+# NGG targets Windows PC ONLY. Every release publishes one package format: an
+# Inno Setup .exe (plus the standalone daemon/agent .exe and checksums).
+# No Linux/macOS/FreeBSD builds, no tar.gz/zip packaging.
+
 on:
   push:
     tags: ['v*']
+
 permissions:
   contents: write
+
 jobs:
   build:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: linux, goarch: 386 }
-          - { goos: linux, goarch: arm }
-          - { goos: windows, goarch: amd64 }
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
-          - { goos: freebsd, goarch: amd64 }
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
           cache: true
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Build Web UI
-        run: |
-          cd web && npm ci --no-audit --no-fund && npm run build
-      - name: Cross-compile control plane
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
-        run: |
-          mkdir -p dist/ngg
-          BIN=nggd
-          AGENT=ngg-agent
-          EXT=""
-          [ "${{ matrix.goos }}" = "windows" ] && BIN=nggd.exe && AGENT=ngg-agent.exe && EXT=".exe"
-          go build -trimpath -ldflags="-s -w" -o "dist/ngg/$BIN" ./cmd/nggd
-          # Ship the remote-node agent next to the daemon AND as a standalone
-          # download named exactly the way the generated install scripts expect.
-          go build -trimpath -ldflags="-s -w" -o "dist/ngg/$AGENT" ./cmd/ngg-agent
-          cp "dist/ngg/$AGENT" "ngg-agent-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
-          cp -r web/dist dist/ngg/web-dist
-          cp -r configs dist/ngg/configs
-          cp -r docs dist/ngg/docs
-          # Keep every deployment path self-contained inside the release bundle.
-          cp -r scripts dist/ngg/scripts
-          cp -r deploy dist/ngg/deploy
-          cp -r installer dist/ngg/installer
-          cp README.md LICENSE docker-compose.yml Dockerfile .env.example dist/ngg/
-          cp configs/ngg.example.yaml dist/ngg/configs/ngg.yaml.example
-      - name: Package
-        run: |
-          NAME="ngg-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          tar -czf "${NAME}.tar.gz" -C dist ngg
-          sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ngg-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: |
-            *.tar.gz
-            *.sha256
-            ngg-agent-*
 
-  windows-installer:
-    needs: build
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: ngg-windows-amd64
-          path: artifacts
-      - name: Unpack Windows bundle
+      - name: Build Web UI
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $tarball = (Get-ChildItem artifacts -Filter '*.tar.gz' | Select-Object -First 1).FullName
-          tar -xzf $tarball -C dist
+          cd web
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Build Windows executables
+        shell: pwsh
+        run: |
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          $env:CGO_ENABLED = '0'
+          New-Item -ItemType Directory -Force -Path dist/ngg | Out-Null
+          go build -trimpath -ldflags="-s -w" -o dist/ngg/nggd.exe ./cmd/nggd
+          if ($LASTEXITCODE -ne 0) { throw 'go build nggd failed' }
+          go build -trimpath -ldflags="-s -w" -o dist/ngg/ngg-agent.exe ./cmd/ngg-agent
+          if ($LASTEXITCODE -ne 0) { throw 'go build ngg-agent failed' }
+
+      - name: Stage the bundle
+        shell: pwsh
+        run: |
+          $stage = 'dist/ngg'
+          Copy-Item -Recurse -Force web/dist        "$stage/web-dist"
+          Copy-Item -Recurse -Force configs         "$stage/configs"
+          Copy-Item -Recurse -Force docs            "$stage/docs"
+          Copy-Item -Recurse -Force scripts         "$stage/scripts"
+          Copy-Item -Recurse -Force deploy          "$stage/deploy"
+          Copy-Item -Recurse -Force installer       "$stage/installer"
+          Copy-Item -Force README.md, LICENSE       $stage
+          Copy-Item -Force configs/ngg.example.yaml "$stage/configs/ngg.yaml.example"
+
       - name: Ensure Inno Setup
         shell: pwsh
         run: |
           $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
             Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $iscc) { choco install innosetup -y --no-progress }
-      - name: Build Windows ZIP + installer EXE
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+              Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'Inno Setup 6 (ISCC.exe) is required: releases are .exe only.' }
+
+      - name: Build installer .exe
         shell: pwsh
         run: |
-          .\installer\windows\build-installer.ps1 `
+          # -WithZip is deliberately NOT passed: releases ship .exe only.
+          ./installer/windows/build-installer.ps1 `
             -Version "${{ github.ref_name }}" -StageDir "dist/ngg" -SkipBuild -OutputDir "out"
+          if (-not (Test-Path "out/NGG-Setup-${{ github.ref_name }}.exe")) {
+            throw 'installer .exe was not produced'
+          }
+
+      - name: Add standalone Windows executables
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Copy-Item -Force "dist/ngg/nggd.exe"      "out/NGG-Core-$tag-windows-amd64.exe"
+          Copy-Item -Force "dist/ngg/ngg-agent.exe" "out/NGG-Agent-$tag-windows-amd64.exe"
+          Get-ChildItem out -File | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Checksums (.exe only)
+        shell: pwsh
+        run: |
+          $exes = Get-ChildItem out -Filter *.exe -File | Sort-Object Name
+          foreach ($f in $exes) {
+            $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            [IO.File]::WriteAllText("$($f.FullName).sha256", "$hash  $($f.Name)`r`n")
+          }
+          $lines = foreach ($f in $exes) {
+            $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($f.Name)"
+          }
+          [IO.File]::WriteAllText("out/SHA256SUMS", (($lines -join "`r`n") + "`r`n"))
+          Get-ChildItem out -File | Select-Object Name, Length | Format-Table -AutoSize
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ngg-windows-installer
+          name: ngg-windows-exe
           path: |
-            out/*.zip
             out/*.exe
             out/*.sha256
+            out/SHA256SUMS
 
   publish:
-    needs: [build, windows-installer]
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: ngg-*
+          name: ngg-windows-exe
           path: artifacts
-          merge-multiple: true
-      - name: Combined checksums
+
+      - name: Refuse anything that is not an .exe
         run: |
           cd artifacts
-          rm -f SHA256SUMS
-          find . -maxdepth 1 -type f ! -name 'SHA256SUMS' ! -name '*.sha256' \
-            -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS
+          bad=$(find . -maxdepth 1 -type f ! -name '*.exe' ! -name '*.sha256' ! -name 'SHA256SUMS')
+          if [ -n "$bad" ]; then
+            echo "unexpected non-exe assets: $bad" >&2
+            exit 1
+          fi
+          ls -lh
           cat SHA256SUMS
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: |
+            artifacts/*.exe
+            artifacts/SHA256SUMS
+            artifacts/*.sha256
           generate_release_notes: true

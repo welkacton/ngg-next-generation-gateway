@@ -49,3 +49,44 @@ func TestWindowsPlanSkipsRouteWithoutNexthop(t *testing.T) {
 		t.Fatalf("expected only the interface metric command, got %v", displayCommands(cmds))
 	}
 }
+
+// Field bug: "一键启动" reported 第 2 条命令执行失败：exit status 1；输出：对象已存在。
+// Windows returns exit code 1 for `netsh ... add route` when the route is
+// already installed — which is the desired state, not a failure.
+func TestRouteCommandsTolerateAlreadyAppliedState(t *testing.T) {
+	m := DefaultMaster()
+	m.AdapterName = "NGG"
+	m.CaptureAll = true
+
+	cmds := planCaptureFor("windows", m, "10.89.0.1")
+	add := cmds[len(cmds)-1]
+	if !strings.Contains(add.String(), "add route") {
+		t.Fatalf("last capture command should be the route add: %s", add.String())
+	}
+	for _, out := range []string{
+		"对象已存在。",
+		"对象已存在",
+		"The object already exists.",
+		"Object already exists.",
+	} {
+		if !add.tolerated(out) {
+			t.Fatalf("route add must tolerate %q (already applied)", out)
+		}
+	}
+	if add.tolerated("参数错误。") {
+		t.Fatal("a genuine failure must never be swallowed")
+	}
+
+	revert := planRevertFor("windows", m, "10.89.0.1")
+	if len(revert) == 0 || !strings.Contains(revert[0].String(), "delete route") {
+		t.Fatalf("revert should start by deleting the route: %v", displayCommands(revert))
+	}
+	for _, out := range []string{"找不到元素。", "The system cannot find the file specified.", "元素不存在"} {
+		if !revert[0].tolerated(out) {
+			t.Fatalf("route delete must tolerate %q (already gone)", out)
+		}
+	}
+	if revert[0].tolerated("拒绝访问。") {
+		t.Fatal("access denied must still be a failure")
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ngg-project/ngg/internal/netengine"
 )
 
 type fakeClock struct{ ms int64 }
@@ -138,5 +140,81 @@ func TestMetricsHistoryHandlerHonestNote(t *testing.T) {
 	}
 	if len(body.Samples) != 1 || body.Samples[0].RateIn != 0 {
 		t.Fatalf("samples must be real, got %+v", body.Samples)
+	}
+}
+
+// While the virtual adapter is up it is the source of truth: the chart must show
+// what actually crossed the NIC, not just the sessions the dispatcher managed to
+// proxy. A tunnel that receives but cannot send (the field bug this release
+// fixes) is visible precisely because these counters are independent.
+func TestSamplerPrefersVirtualAdapterCounters(t *testing.T) {
+	clock := &fakeClock{ms: 1_700_000_000_000}
+	var tunIn, tunOut uint64
+	tunOpen := true
+
+	metrics := map[string]any{"bytes_in": uint64(10), "bytes_out": uint64(5)}
+	s := newMetricsSampler(
+		func() map[string]any { return map[string]any{"running": true, "metrics": metrics} },
+		func() (netengine.TunStats, bool) {
+			return netengine.TunStats{BytesIn: tunIn, BytesOut: tunOut}, tunOpen
+		},
+	)
+	s.now = clock.now
+
+	s.takeSample()
+	clock.add(2 * time.Second)
+	tunIn, tunOut = 2_000_000, 1_000_000
+	s.takeSample()
+
+	last := s.List(5)[1]
+	if last.Source != "tun" {
+		t.Fatalf("source = %q, want tun", last.Source)
+	}
+	if last.BytesIn != 2_000_000 || last.BytesOut != 1_000_000 {
+		t.Fatalf("effective counters must come from the adapter: %+v", last)
+	}
+	if last.RateIn != 1_000_000 || last.RateOut != 500_000 {
+		t.Fatalf("adapter rates wrong: in=%v out=%v", last.RateIn, last.RateOut)
+	}
+	if last.EngineBytesIn != 10 || last.EngineBytesOut != 5 {
+		t.Fatalf("engine counters must stay visible: %+v", last)
+	}
+
+	// Closing the adapter falls back to the engine counters without inventing a
+	// spike from the reset.
+	clock.add(2 * time.Second)
+	tunOpen = false
+	s.takeSample()
+	last = s.List(5)[2]
+	if last.Source != "engine" {
+		t.Fatalf("source after detach = %q, want engine", last.Source)
+	}
+	if last.RateIn != 0 || last.RateOut != 0 {
+		t.Fatalf("detaching must not produce a rate spike: in=%v out=%v", last.RateIn, last.RateOut)
+	}
+	if last.TunBytesIn != 0 || last.TunBytesOut != 0 {
+		t.Fatalf("a closed adapter must report zero, got %+v", last)
+	}
+}
+
+// Recreating the adapter restarts its counters; the sampler must not turn the
+// negative delta into a huge fake peak.
+func TestSamplerHandlesAdapterCounterReset(t *testing.T) {
+	clock := &fakeClock{ms: 1_700_000_000_000}
+	var tunIn uint64
+	s := newMetricsSampler(
+		func() map[string]any { return map[string]any{"running": true} },
+		func() (netengine.TunStats, bool) { return netengine.TunStats{BytesIn: tunIn}, true },
+	)
+	s.now = clock.now
+
+	tunIn = 5_000_000
+	s.takeSample()
+	clock.add(2 * time.Second)
+	tunIn = 0 // adapter recreated
+	s.takeSample()
+
+	if got := s.List(5)[1]; got.RateIn != 0 {
+		t.Fatalf("counter reset produced a fake rate: %v", got.RateIn)
 	}
 }

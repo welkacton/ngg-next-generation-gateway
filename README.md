@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.7.3
+### 🏷️ Generation 2 / 第二代 · Release v2.7.4
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -24,16 +24,18 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.2.1 | 内核安装修复与交互整理 | 内核安装改为**异步后台任务**（修掉 30 秒超时导致的三个内核装不上）+ GitHub API 配额治理与 PAT 支持；配置引擎二级重排为 协议配置/规则配置/DNS配置/入口节点/出口节点；配置文件分区改为 协议→入站→出站→路由规则→DNS→其他→重建模板、页面留白、卡片支持单条与批量启停；GitHub 规则集可全选全部并自动分批加载；修复侧栏展开后底部文字覆盖 |
 | Gen 2 增补 | v2.2.2 | 完整配置双向编辑 | 「编辑完整配置」从只读预览改为**可编辑窗口**：停止输入约 0.6 秒即调用 `POST /profiles/split` 按内核顶层键自动拆分回 6 个分区（`Render`/`Split` 互逆，三内核往返测试保证语义一致）；语法错误不覆盖分区、状态栏与分区行数实时反馈、可关闭自动同步 / 立即同步 / 保存并关闭；未识别顶层键归入「其他」，`outbounds` 按节点与策略重新分组后合并回同一数组 |
 | Gen 2 增补 | v2.3.0 | 远程主机节点控制台 + 发布流程 | **入口节点 / 出口节点两页全部清空重建**：以「任意 VPS / 电脑 / 软路由」为主体的节点库，统计卡条 + 节点卡片 + 两栏详情抽屉，节点可随时改判为入站 / 出站 / 双向；在线状态来自后端真实 TCP 探测，未采集的 CPU / 内存 / 单节点流量一律显示「未采集」；新增 `/api/v1/hosts` 系列端点与 `internal/hosts` 注册表；内核管理按钮改为状态驱动（点启动后蓝色熄灭、红色跳到停止）；新增 `scripts/release.mjs` + `scripts/sync-client.ps1`，**每次修改强制同步客户端并递增版本号** |
-
 | Gen 2 增补 | v2.4.0 | 网络概览 + GitHub Release 上架 | 「概览」改名**系统概览**，新增 **网络概览**（Apple HIG 风格）：实时速率 Hero、下载/上传 KPI、纯 SVG 双系列流量面积图（速率 / 累计 / 连接三种视图、5/15/30 分钟窗口）、连接与策略、统一网络引擎状态；后端新增 `/network/metrics/history` 真实 2 秒采样（速率 = 真实计数差 ÷ 真实时间差，未运行不伪造曲线），并修复 `relay()` 把双向字节都记到 `BytesOut` 导致下载流量恒为 0 的缺陷；版本由 `scripts/release.mjs` 同步到仓库并打包上架 GitHub Release |
 | Gen 2 增补 | v2.5.0 | 接管全局 + 用户管理 | 系统更新去掉 GitHub Token，公开仓库自动检查/下载/应用；「网络引擎」改名**接管全局**并移入配置引擎（DNS 配置下方），新增 Windows 系统代理一键接管与解除（真实写 HKCU/Internet Settings 并广播，解除恢复原代理）、TUN 真实能力检测（管理员 / wintun.dll / 已装虚拟网卡，无能力时如实说明不伪造网卡）；**删除多租户**，在出口节点下新增**用户管理**（统计条 + 用户表 + 详情抽屉，Active/Expired/Limited/Disabled 由 enabled/到期/配额实时推导，用量只由数据面累加）；修复规则集与版本列表的长文本覆盖「操作」列，并加全局单元格裁切防御 |
 | Gen 2 增补 | v2.6.0 | 登录门禁 + 链路编排 + 真 TUN | 新增单管理员登录：首次打开必须手动创建账号（Argon2id / HttpOnly 会话 / 失败锁定），之后只有登录窗口，浏览器不再保存任何 API Token；配置引擎新增**链路编排**（协议 → 入口 → 规则 → DNS → 出口 → 用户 六段串联，真实校验、渲染 mihomo 配置、原生校验后热替换、SOCKS5 端到端真连测试），各二级页加入链路导航条；Windows **TUN 虚拟网卡彻底跑通**：自动下载并 SHA-256 + Authenticode 双重校验官方签名 wintun.dll，由 NGG 独占创建网卡并用 gVisor 用户态协议栈把 TCP 流量接入统一调度器，可选接管默认路由 |
 | Gen 2 增补 | v2.6.4 | 规则集 / 接管全局 / DNS / 节点 / 链路编排 / 极简风 | 在 v2.6.3（登录门禁、链路编排、真 TUN、主机控制台、网络概览）之上：规则配置支持 GitHub 来源自定义增删、执行内核下拉、规则单条/多选/全选/全部删除、按三内核官方语法可视化新增规则集；接管全局状态可读化 + 八项组件逐项开关 + 默认内核可选；DNS 按三内核官方语法重布局；节点新增配置文件、采集数据、密钥配对、连通探测；链路承载内核显示全部内核；全站统一关闭说明文字层；网络概览增加组件状态、引擎启停、配置计数与快捷跳转 |
 | Gen 2 增补 | v2.7.1 | 总控启用 / 内核可靠性 / VPS 节点 / 用户订阅 | 总控「应用接管」改为一步「保存并接管」，不再因 master.enabled=false 空转；内核启动增加预检（`<binary> version`）与 3 秒快速失败，崩溃提示改为 `core.state` 且去重，端口与配置漂移时自动校准（备份 + 原生校验），内核管理新增诊断面板（二进制 / 版本 / 配置 / 端口占用 / 日志）；节点新增「部署到 VPS」一键脚本（VLESS / Trojan / Shadowsocks）；用户管理可绑定节点 + 协议 + 规则集 + DNS，生成 Clash / Surge / sing-box / v2ray / SOCKS5 五种订阅链接。
-| **Gen 2（当前）** | **v2.7.2** | 控制中心：网卡 → 全量接管 → WAN 出口 | 把配置引擎的「接管全局」与网关中心的「总控设置」合并为 **网关中心 → 控制中心**（`/gateway/master`），按固定顺序编排：① 启动 NGG 虚拟网卡（TUN 默认名由 `ngg0` 改为 **NGG**，网卡名下拉**自动识别**本机已创建的虚拟网卡并可手输，旧网卡会在启动时清理其默认路由）② 强制接管全部网卡的全部流量（接口优先级 + 默认路由，`metric=0` 自动映射为 1，避免被 netsh 当作 automatic 而接管失败）③ WAN 出口选择物理网卡走本地运营商（`network.egress.interface` **即时生效**，无需重启引擎，同时回写 WAN 接口）；新增 `GET /gateway/control`、`POST /gateway/control/start|stop`、`GET /network/adapters`（含虚拟网卡识别与默认出口标记）；接管失败时 `master.enabled` 保持 false，不谎报已接管；原「接管全局」页面收敛为「高级诊断」（运行状态 / 会话 / 自检 / 原始配置） |
+| Gen 2 增补 | v2.7.2 | 控制中心：网卡 → 全量接管 → WAN 出口 | 把配置引擎的「接管全局」与网关中心的「总控设置」合并为 **网关中心 → 控制中心**（`/gateway/master`），按固定顺序编排：① 启动 NGG 虚拟网卡（TUN 默认名由 `ngg0` 改为 **NGG**，网卡名下拉**自动识别**本机已创建的虚拟网卡并可手输，旧网卡会在启动时清理其默认路由）② 强制接管全部网卡的全部流量（接口优先级 + 默认路由，`metric=0` 自动映射为 1，避免被 netsh 当作 automatic 而接管失败）③ WAN 出口选择物理网卡走本地运营商（`network.egress.interface` **即时生效**，无需重启引擎，同时回写 WAN 接口）；新增 `GET /gateway/control`、`POST /gateway/control/start|stop`、`GET /network/adapters`（含虚拟网卡识别与默认出口标记）；接管失败时 `master.enabled` 保持 false，不谎报已接管；原「接管全局」页面收敛为「高级诊断」（运行状态 / 会话 / 自检 / 原始配置） |
+| **Gen 2（当前）** | **v2.7.4** | 修复 TUN 只收不发 + 紧凑流量面板 | **根因修复**：Windows TUN 的写回协程用 `channel.Endpoint.Read()`（非阻塞，空队列立即返回 nil），启动瞬间就退出，导致网卡只收不发（「已发送 16 MB / 已接收 0」、浏览器超时）。改为 `ReadContext` 后 TCP/UDP 回包真实写回网卡，并新增注入真实 IP 包的数据面回归测试（旧代码必失败）；TUN 内 DNS 改走引擎固定网卡的出口拨号器，避免接管默认路由后 DNS 查询绕回自身形成环路；**接管幂等**：`netsh add route` 返回「对象已存在」不再判定为失败（撤销时「找不到元素」同样按成功处理），「一键启动」不会因路由已存在而中断；**流量面板**按需求收紧（速率区 18px、迷你图 20px、趋势图固定 148px），坐标轴整轴统一单位并支持小数，不再出现「1 B/s / 1 B/s / 1 B/s」重复刻度；`/network/metrics/history` 新增 `source/tun_open/tun_bytes_*/tun_rate_*`，虚拟网卡在线时图表与速率直接读取**网卡级真实收发字节**（整机流量），未创建时回落到会话计数，界面明确标注数据源；**速率与趋势改为 1:1 两等分短卡**（各 50%、高 208px、画布 118px）；**发布收敛为 Windows 独占**：工作流改为 `windows-latest` 单作业，只产出 `NGG-Setup-*.exe` / `NGG-Core-*.exe` / `NGG-Agent-*.exe` 与 `SHA256SUMS`，不再构建 Linux/macOS/FreeBSD，也不再产出 zip/tar.gz，发布前一旦发现非 `.exe` 资产即中止 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.3`。
+
+代际沿革与判定
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.4`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -46,13 +48,16 @@ GitHub 仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · 
 仓库可见性由所有者在仓库设置中控制（public / private），部署到自己的服务器、电脑、NAS 或软路由时，
 请按当前可见性使用有权限的账号克隆或下载 Release 产物。
 
-> **当前 Release `v2.7.1`**：由 `git tag v2.7.1 && git push origin v2.7.1`
-> 触发 Release 工作流，自动交叉编译多平台、打包 Windows 安装包与 `SHA256SUMS` 并发布。
-> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.7.3>
-> → `NGG-Setup-v2.7.3.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.7.3-windows-amd64.zip`
-> （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
-> 本次资产：多平台 `ngg-v2.7.1-<os>-<arch>.tar.gz`、`NGG-v2.7.3-windows-amd64.zip`、
-> `NGG-Setup-v2.7.3.exe` 及各自的 `.sha256` 与汇总 `SHA256SUMS`；运行前请校验摘要。
+> **发布范围：仅 Windows PC（x64），只产出 `.exe`。**
+> 不再构建 Linux / macOS / FreeBSD，也不再提供 `.zip` / `.tar.gz` 等压缩包格式。
+> `git tag vX.Y.Z && git push origin vX.Y.Z` 触发 Release 工作流，在 `windows-latest` 上
+> 构建 Web 客户端与 `nggd.exe`，再用 Inno Setup 编译安装包并生成 `SHA256SUMS`。
+>
+> **直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/latest>
+> - `NGG-Setup-vX.Y.Z.exe` —— 双击安装（UAC 确认即可），**推荐**
+> - `NGG-Core-vX.Y.Z-windows-amd64.exe` —— 裸守护进程，手动部署时使用（需同目录 `configs/` 与 `web-dist/`）
+> - `NGG-Agent-vX.Y.Z-windows-amd64.exe` —— 远程节点 agent
+> - 每个 `.exe` 附 `.sha256`，另有汇总 `SHA256SUMS`；运行前请校验。
 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
@@ -60,7 +65,7 @@ GitHub 仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · 
 | **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.7.3 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
 | VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
 | VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
-| **Windows 安装程序** | 双击 `NGG-Setup-v2.7.3.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
+| **Windows 安装程序** | 双击 `NGG-Setup-vX.Y.Z.exe`（唯一发布格式） | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
 | 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.7.3` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |

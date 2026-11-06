@@ -49,6 +49,9 @@ type DatapathResult struct {
 	Commands []string       `json:"commands"`
 	Reason   string         `json:"reason"`
 	Status   DatapathStatus `json:"status"`
+	// Idempotent lists commands that exited non-zero because the desired state
+	// already existed (e.g. "对象已存在。"). They are not failures.
+	Idempotent []string `json:"idempotent,omitempty"`
 }
 
 // command is one platform command in argv form. The display string is derived
@@ -57,6 +60,26 @@ type DatapathResult struct {
 type command struct {
 	bin  string
 	args []string
+	// alreadyOK lists output fragments that mean "the machine is already in the
+	// requested state". netsh still exits 1 in that case ("对象已存在。" for an
+	// existing route, "找不到元素。" when deleting one that is gone), so a
+	// repeated takeover must not be reported as a failure.
+	alreadyOK []string
+}
+
+// tolerated reports whether a failed command actually left the desired state in
+// place.
+func (c command) tolerated(output string) bool {
+	if len(c.alreadyOK) == 0 {
+		return false
+	}
+	low := strings.ToLower(output)
+	for _, marker := range c.alreadyOK {
+		if strings.Contains(low, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c command) String() string {
@@ -135,6 +158,10 @@ func planCaptureFor(goos string, m Master, nexthop string) []command {
 					fmt.Sprintf("metric=%d", metric),
 					"store=active",
 				},
+				// A route that is already there IS the desired state: Windows
+				// returns exit code 1 with "对象已存在。" and the previous
+				// "一键启动" died on this step even though takeover worked.
+				alreadyOK: []string{"已存在", "已经存在", "已加入", "already exists", "already present", "object already exists"},
 			})
 		}
 		return cmds
@@ -172,6 +199,8 @@ func planRevertFor(goos string, m Master, nexthop string) []command {
 					"interface=" + name,
 					"nexthop=" + nexthop,
 				},
+				// Removing a route that does not exist is a no-op, not a fault.
+				alreadyOK: []string{"找不到", "不存在", "无法找到", "not find", "cannot find", "does not exist", "not exist", "element not found"},
 			})
 		}
 		cmds = append(cmds, command{
@@ -305,6 +334,10 @@ func (s *Store) runDatapath(apply bool) DatapathResult {
 	for i, c := range cmds {
 		out, err := exec.Command(c.bin, c.args...).CombinedOutput()
 		if err != nil {
+			if c.tolerated(string(out) + " " + err.Error()) {
+				res.Idempotent = append(res.Idempotent, c.String())
+				continue
+			}
 			res.Executed = true
 			res.Reason = fmt.Sprintf("第 %d 条命令执行失败：%v；输出：%s", i+1, err, summarizeOutput(string(out)))
 			res.Status = s.Datapath()
@@ -330,6 +363,9 @@ func (s *Store) runDatapath(apply bool) DatapathResult {
 		res.Reason = fmt.Sprintf("命令已全部执行，但默认路由仍不经过 %q，可能适配器尚未就绪；applied 保持 false", m.AdapterName)
 	default:
 		res.Reason = fmt.Sprintf("命令已全部执行，但默认路由仍经过 %q，撤销未完全生效；applied 保持 false", m.AdapterName)
+	}
+	if len(res.Idempotent) > 0 {
+		res.Reason += fmt.Sprintf("（%d 条命令因目标状态已存在而按幂等成功处理）", len(res.Idempotent))
 	}
 	return res
 }

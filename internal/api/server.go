@@ -20,6 +20,7 @@ import (
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
 	"github.com/ngg-project/ngg/internal/gateway"
+	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/pipeline"
 	"github.com/ngg-project/ngg/internal/profiles"
 	"github.com/ngg-project/ngg/internal/protocols"
@@ -120,8 +121,13 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 	s.pipeline = pipeStore
 	s.hub = newWSHub(eng)
 	// Real traffic history for the Network Overview console. Started only once
-	// per daemon and stopped together with the HTTP server.
-	s.sampler = newMetricsSampler(eng.NetworkStatus)
+	// per daemon and stopped together with the HTTP server. The adapter hook
+	// feeds the chart with the virtual NIC's own counters while it is up.
+	var tunTraffic func() (netengine.TunStats, bool)
+	if ne := eng.Network(); ne != nil {
+		tunTraffic = ne.TunTraffic
+	}
+	s.sampler = newMetricsSampler(eng.NetworkStatus, tunTraffic)
 	s.sampler.Start()
 	s.routes()
 	s.http = &http.Server{

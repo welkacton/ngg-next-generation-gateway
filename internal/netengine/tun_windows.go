@@ -146,7 +146,7 @@ func (t *TunDevice) Open(ctx context.Context, cfg TunConfig) error {
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
 	t.installHandlers(runCtx)
-	t.pump(runCtx, mtu)
+	t.pump(runCtx, dev, ep, mtu)
 	return nil
 }
 
@@ -250,14 +250,35 @@ func (t *TunDevice) handleUDP(conn *gonet.UDPConn, id stack.TransportEndpointID)
 		if !strings.Contains(upstream, ":") {
 			upstream += ":53"
 		}
-		if resp, err := dnsExchange(upstream, buf[:n]); err == nil {
+		if resp, err := dnsExchange(t.dialer(), upstream, buf[:n]); err == nil {
 			_, _ = conn.Write(resp)
 		}
 	}
 }
 
-func dnsExchange(upstream string, query []byte) ([]byte, error) {
-	c, err := net.DialTimeout("udp", upstream, 4*time.Second)
+// dialer returns the engine's pinned egress dialer. Using a plain net.Dial
+// here would be a trap: once the default route points at the TUN, an unpinned
+// socket sends the DNS query straight back into the tunnel, whose only handler
+// dials again — an endless loop and no name resolution at all.
+func (t *TunDevice) dialer() *net.Dialer {
+	const fallback = 4 * time.Second
+	if t.engine == nil {
+		return &net.Dialer{Timeout: fallback}
+	}
+	d := t.engine.egress.Dialer("ngg-direct")
+	if d.LocalAddr == nil {
+		return d
+	}
+	// The bound source is stored as a TCP address; it cannot be reused for a
+	// UDP socket, but the Control hook (IP_UNICAST_IF) must be kept.
+	return &net.Dialer{Timeout: fallback, Control: d.Control}
+}
+
+func dnsExchange(d *net.Dialer, upstream string, query []byte) ([]byte, error) {
+	if d == nil {
+		d = &net.Dialer{Timeout: 4 * time.Second}
+	}
+	c, err := d.Dial("udp", upstream)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +295,17 @@ func dnsExchange(upstream string, query []byte) ([]byte, error) {
 	return buf[:n], nil
 }
 
-func (t *TunDevice) pump(ctx context.Context, mtu int) {
+// pump moves packets in both directions between the adapter and the userspace
+// stack: Read() takes what the OS sent into the tunnel, Write() returns the
+// stack's replies.
+//
+// The outbound direction must use ReadContext. channel.Endpoint.Read() is
+// NON-BLOCKING: it returns nil the moment the queue is empty, so the writer
+// goroutine used to exit on its very first iteration (taken before the stack
+// had queued anything). The adapter then received traffic and could never send
+// a single packet back — the machine showed "已发送 16 MB / 已接收 0" and every
+// browser request died with ERR_CONNECTION_TIMED_OUT.
+func (t *TunDevice) pump(ctx context.Context, dev tun.Device, ep *channel.Endpoint, mtu int) {
 	t.wg.Add(2)
 	go func() {
 		defer t.wg.Done()
@@ -284,17 +315,19 @@ func (t *TunDevice) pump(ctx context.Context, mtu int) {
 			if ctx.Err() != nil {
 				return
 			}
-			n, err := t.dev.Read([][]byte{buf}, sizes, 0)
+			n, err := dev.Read([][]byte{buf}, sizes, 0)
 			if err != nil {
 				return
 			}
 			if n == 0 || sizes[0] <= 0 {
 				continue
 			}
+			// The wintun ring buffer is reused by the next Read, so the bytes
+			// must be copied before they are handed to the stack.
 			pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Payload: buffer.MakeWithData(append([]byte(nil), buf[:sizes[0]]...)),
 			})
-			t.ep.InjectInbound(header.IPv4ProtocolNumber, pkt)
+			ep.InjectInbound(header.IPv4ProtocolNumber, pkt)
 			pkt.DecRef()
 			t.pktIn.Add(1)
 			t.bytesIn.Add(uint64(sizes[0]))
@@ -303,20 +336,20 @@ func (t *TunDevice) pump(ctx context.Context, mtu int) {
 	go func() {
 		defer t.wg.Done()
 		for {
-			if ctx.Err() != nil {
-				return
-			}
-			pkt := t.ep.Read()
+			pkt := ep.ReadContext(ctx) // blocks until the stack emits a packet
 			if pkt == nil {
-				return
+				return // context cancelled or endpoint closed
 			}
+			// Flatten() allocates and copies, so the bytes stay valid after the
+			// packet buffer is released.
 			buf := pkt.ToBuffer()
 			payload := buf.Flatten()
+			buf.Release()
 			pkt.DecRef()
 			if len(payload) == 0 {
 				continue
 			}
-			if _, err := t.dev.Write([][]byte{payload}, 0); err != nil {
+			if _, err := dev.Write([][]byte{payload}, 0); err != nil {
 				return
 			}
 			t.pktOut.Add(1)
@@ -438,11 +471,28 @@ func (t *TunDevice) SetDefaultRoute(enable bool) error {
 		return err
 	}
 	if _, err := runNetsh("interface", "ipv4", "add", "route", "0.0.0.0/0", "interface="+name,
-		"nexthop="+ip.String(), "metric=1", "store=active"); err != nil {
+		"nexthop="+ip.String(), "metric=1", "store=active"); err != nil && !netshAlreadyExists(err.Error()) {
 		return err
 	}
 	t.routeAll.Store(true)
 	return nil
+}
+
+// netshAlreadyExists reports whether netsh refused an operation because the
+// object is already in the requested state. Windows returns exit code 1 with
+// "对象已存在。" (or "The object already exists.") for a route that is present,
+// which is exactly what a repeated takeover wants — not a failure.
+func netshAlreadyExists(text string) bool {
+	low := strings.ToLower(text)
+	for _, marker := range []string{
+		"对象已存在", "已存在", "已经存在",
+		"already exists", "already present", "object already exists",
+	} {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 var (

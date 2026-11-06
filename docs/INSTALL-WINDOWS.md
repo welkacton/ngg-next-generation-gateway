@@ -1,8 +1,8 @@
 # NGG 在 Windows 上安装（安装程序 / 服务 / 卸载）
 
-> 本文对应仓库新增的 `installer/windows/`：一个**真正的 Windows 安装程序**（Inno Setup `.exe`）、
-> 一个**便携 ZIP + PowerShell 安装脚本**，以及 `nggd.exe` 内置的 **Windows 服务支持**。
-> VPS / Linux 部署见 [`DEPLOY-VPS.md`](DEPLOY-VPS.md)；全场景速查见 [`DEPLOY.md`](DEPLOY.md)。
+> 本文对应仓库的 `installer/windows/`：一个**真正的 Windows 安装程序**（Inno Setup `.exe`）。
+> **Release 只发布 `.exe`**（Windows PC 独占），没有便携 ZIP、没有 Linux/macOS 包。
+> VPS 部署见 [`DEPLOY-VPS.md`](DEPLOY-VPS.md)（从源码构建）；全场景速查见 [`DEPLOY.md`](DEPLOY.md)。
 
 ---
 
@@ -62,65 +62,19 @@ Get-Content "$env:ProgramFiles\NGG\NGG-ACCESS.txt"
 
 ---
 
-## 3. 方式 B：便携 ZIP（推荐给自动化 / 无 GUI 场景）
+## 3. 方式 B：静默安装（自动化 / 无 GUI 场景）
 
-> ⚠️ **文档里出现 `C:\path\to\...` 时那是占位符，必须换成你解压后的真实目录。**
-> 直接复制占位符会得到 `cd : 找不到路径`；在 `C:\Users\Admin>` 下直接执行 `.\install.ps1`
-> 会得到「-File 形式参数的实际参数不存在」——因为当前目录里根本没有这个文件。
+> **从 v2.7.4 起，Release 只发布 `.exe`**：不再提供 `NGG-*-windows-amd64.zip` 便携包，
+> 也不再为 Linux / macOS 出包。所有安装都通过安装包 `NGG-Setup-vX.Y.Z.exe` 完成。
 
-### 3.1 最省事：双击 `install.bat`
-
-1. 下载 `NGG-v2.7.3-windows-amd64.zip` → **右键 → 全部解压**（不要直接在压缩包里双击）；
-2. 进入解压出来的文件夹，确认里面有 `nggd.exe`、`install.ps1`、`install.bat`、`web-dist\`；
-3. **双击 `install.bat`** → UAC 点「是」→ 自动以管理员身份安装并打开浏览器。
-
-这一步不需要手敲任何命令，也不需要自己开管理员 PowerShell。
-
-### 3.2 手工命令（把路径换成你自己的）
-
-假设解压到 `C:\Users\Admin\Downloads\NGG-v2.7.3-windows-amd64`：
-
-```powershell
-# 1) 先进入真实目录（按需改盘符/路径）
-Set-Location "$env:USERPROFILE\Downloads\NGG-v2.7.3-windows-amd64"
-
-# 2) 确认文件在眼前（这一步能避免 90% 的路径错误）
-Get-ChildItem | Select-Object Name
-
-# 3) 以管理员身份运行的 PowerShell 里执行
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -OpenBrowser
+```bat
+:: 全自动安装（无向导、无提示），安装完成后打开浏览器
+NGG-Setup-vX.Y.Z.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
-如果不知道解压到哪了，用资源管理器地址栏复制路径，或：
-
-```powershell
-Get-ChildItem -Path "$env:USERPROFILE\Downloads" -Filter "install.ps1" -Recurse -ErrorAction SilentlyContinue |
-  Select-Object -ExpandProperty DirectoryName
-```
-
-> `-File .\install.ps1` 用的是**当前目录**；`cd` 失败时后面的命令仍在 `C:\Users\Admin` 执行，
-> 所以务必先 `Set-Location` 成功并看到 `install.ps1` 存在。
-
-静默安装（不弹等待提示）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -Silent
-```
-
-在线下载并安装（**必须在一个含 `install.ps1` 的目录里执行**，私有仓库需 PAT）：
-
-```powershell
-$env:GITHUB_TOKEN = 'ghp_xxx'
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v2.7.3 -Silent -OpenBrowser
-```
-
-脚本会用 `SHA256SUMS` 校验下载包；若 Release 没有该文件会给出明确警告。
-
-### 3.3 直接双击 EXE（方式 A）其实更简单
-
-如果你只想要「下载 → 双击 → 完成」，用 `NGG-Setup-v2.7.3.exe`（Inno Setup 安装包），
-它会自己放好文件、注册服务、启动、打开浏览器，**完全不需要 PowerShell 命令**。
-便携 ZIP 是给自动化/静默部署用的。
+- 静默安装不会自动开浏览器；安装完成后访问 `%ProgramFiles%\NGG\NGG-ACCESS.txt` 里的地址。
+- 需要改端口/目录时，用安装包之外的 `installer\install.ps1`（服务已装好时可用 `-ConfigureOnly`）。
+- 卸载：`"%ProgramFiles%\NGG\uninstall.exe" /VERYSILENT`。
 
 ### install.ps1 参数
 
@@ -128,7 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v2.7.3 -Silent -
 | --- | --- | --- |
 | `-InstallDir` | `%ProgramFiles%\NGG` | 安装目录 |
 | `-Source PATH` | 自动探测 | 已解压的 Release 包 / 仓库根目录（含 `nggd.exe`） |
-| `-Version vX.Y.Z` | — | 在线下载 `windows-amd64.zip` 并安装 |
+| `-Version vX.Y.Z` | — | 由安装包调用，读取同目录的 `nggd.exe`（不再在线下载 ZIP） |
 | `-Token TOKEN` | `$env:GITHUB_TOKEN` | GitHub PAT（私有仓库） |
 | `-ConfigureOnly` | 关 | 文件已由安装器放好，只做配置 + 服务（Inno Setup 内部使用） |
 | `-NoService` | 关 | 改用「任务计划程序」开机启动（**无控制台日志**，不推荐） |
@@ -170,14 +124,14 @@ powershell -ExecutionPolicy Bypass -File .\installer\windows\build-installer.ps1
 
 | 文件 | 说明 |
 | --- | --- |
-| `NGG-v2.7.3-windows-amd64.zip` | 便携包（内含 `install.ps1`，解压即用） |
-| `NGG-Setup-v2.7.3.exe` | Inno Setup GUI 安装包（仅当找到 `ISCC.exe`） |
+| `NGG-Setup-vX.Y.Z.exe` | Inno Setup GUI 安装包 —— **唯一的发布格式** |
 | `*.sha256` | 校验文件 |
 
-找不到 Inno Setup 时脚本会明确提示并**仍然产出可用的 ZIP**；安装方式：
-从 <https://jrsoftware.org/isdl.php> 安装，或 `choco install innosetup -y`。
+Inno Setup 现在是**必需**依赖（不再有 ZIP 兜底）：从 <https://jrsoftware.org/isdl.php> 安装，
+或 `choco install innosetup -y`。缺少 `ISCC.exe` 时脚本会直接失败并说明原因。
 
-CI（`.github/workflows/release.yml`）在打 `v*` tag 时会自动完成这一步，把 ZIP 与 EXE 附到 Release。
+CI（`.github/workflows/release.yml`）在打 `v*` tag 时自动完成这一步，只把 `.exe` 与 `SHA256SUMS`
+附到 Release，并有一道校验：出现任何非 `.exe` 资产即中止发布。
 
 ---
 
@@ -196,7 +150,7 @@ Get-Content "$env:ProgramFiles\NGG\logs\ngg-service.log" -Tail 30
 或直接重跑 `install.ps1 -Source <新包目录>`：它会保留已有配置与 Token、重建服务并做健康检查。
 **不要**用 `-Force`，除非你明确想轮换 Token。
 
-**卸载**（GUI 安装包：设置 → 应用 → NGG → 卸载；便携包：脚本）：
+**卸载**（GUI 安装包：设置 → 应用 → NGG → 卸载；也可用静默卸载 `/VERYSILENT`）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\NGG\installer\uninstall.ps1"

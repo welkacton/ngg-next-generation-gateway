@@ -16,7 +16,7 @@ import * as api from '../api/ngg'
 import type { MetricsHistoryResult, MetricsSample, NetworkComponent, NetworkStatus } from '../api/ngg'
 import TrafficAreaChart from '../components/TrafficAreaChart.vue'
 import { useApiAction } from '../composables/useApi'
-import { formatBytes, formatTime } from '../utils/format'
+import { formatBytes, formatRate, formatTime } from '../utils/format'
 
 const history = ref<MetricsHistoryResult | null>(null)
 const status = ref<NetworkStatus | null>(null)
@@ -99,9 +99,15 @@ const running = computed(() => history.value?.running === true)
 const latest = computed<MetricsSample | null>(() =>
   samples.value.length ? samples.value[samples.value.length - 1] : null,
 )
+/** 数据源：虚拟网卡在线时，图表读取网卡级真实收发字节（整机流量）。 */
+const tunSource = computed(() => history.value?.source === 'tun' && history.value?.tun_open === true)
+const sourceLabel = computed(() => (tunSource.value ? 'NGG 虚拟网卡' : '统一网络引擎'))
+const counterHint = computed(() =>
+  tunSource.value ? '虚拟网卡真实收发字节（整机流量）' : '网络引擎真实会话字节',
+)
 
 function rateText(v?: number): string {
-  return v === undefined ? '—' : `${formatBytes(v)}/s`
+  return v === undefined ? '—' : formatRate(v)
 }
 function byteText(v?: number): string {
   return v === undefined ? '—' : formatBytes(v)
@@ -259,48 +265,92 @@ onUnmounted(() => {
       可在「后端管理 → 网络引擎」启动后查看实时曲线。
     </NAlert>
 
-    <!-- Hero -->
-    <section class="netov-hero">
-      <div class="netov-hero__left">
-        <div class="netov-hero__label">当前总速率</div>
-        <div class="netov-hero__value">
-          {{ rateText((latest?.rate_in ?? 0) + (latest?.rate_out ?? 0)) }}
+    <!-- 速率 + 趋势：1:1 两等分（规格：每张卡高 208px，间距 10px，各占 50%） -->
+    <section class="netov-split">
+      <div class="netov-card netov-rate-card">
+        <div class="netov-card__head">
+          <div>
+            <h3 class="netov-card__title">当前总速率</h3>
+            <p class="netov-card__sub">数据源 {{ sourceLabel }}</p>
+          </div>
+          <NTag size="small" :bordered="false" :type="running ? 'success' : 'default'">
+            {{ running ? '实时' : '停止' }}
+          </NTag>
         </div>
-        <div class="netov-hero__meta">
-          <span><i class="netov-dot netov-dot--in" />下载 {{ rateText(latest?.rate_in) }}</span>
-          <span><i class="netov-dot netov-dot--out" />上传 {{ rateText(latest?.rate_out) }}</span>
-        </div>
-        <div class="netov-hero__hint">
-          峰值 {{ rateText(totalPeak) }} · 采样 {{ samples.length }} 点 / {{ windowMin }} 分钟 ·
-          后端每 {{ history?.interval_sec ?? 2 }} 秒真实采集一次
+
+        <div class="netov-rate">
+          <div class="netov-rate__main">
+            <div class="netov-rate__value">
+              {{ rateText((latest?.rate_in ?? 0) + (latest?.rate_out ?? 0)) }}
+            </div>
+            <div class="netov-rate__meta">
+              <span><i class="netov-dot netov-dot--in" />下载 {{ rateText(latest?.rate_in) }}</span>
+              <span><i class="netov-dot netov-dot--out" />上传 {{ rateText(latest?.rate_out) }}</span>
+            </div>
+          </div>
+
+          <div class="netov-rate__sparks">
+            <div class="netov-spark">
+              <div class="netov-spark__head">
+                <span><i class="netov-dot netov-dot--in" />下载速率</span>
+                <b>{{ rateText(latest?.rate_in) }}</b>
+              </div>
+              <svg viewBox="0 0 180 44" preserveAspectRatio="none" aria-label="下载速率迷你趋势图">
+                <defs>
+                  <linearGradient id="spark-in" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#0071E3" stop-opacity="0.3" />
+                    <stop offset="100%" stop-color="#0071E3" stop-opacity="0" />
+                  </linearGradient>
+                </defs>
+                <path v-if="inSparkArea" :d="inSparkArea" fill="url(#spark-in)" />
+                <polyline v-if="inSpark" :points="inSpark" class="netov-spark__line netov-spark__line--in" />
+              </svg>
+            </div>
+            <div class="netov-spark">
+              <div class="netov-spark__head">
+                <span><i class="netov-dot netov-dot--out" />上传速率</span>
+                <b>{{ rateText(latest?.rate_out) }}</b>
+              </div>
+              <svg viewBox="0 0 180 44" preserveAspectRatio="none" aria-label="上传速率迷你趋势图">
+                <defs>
+                  <linearGradient id="spark-out" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#FF9F0A" stop-opacity="0.28" />
+                    <stop offset="100%" stop-color="#FF9F0A" stop-opacity="0" />
+                  </linearGradient>
+                </defs>
+                <path v-if="outSparkArea" :d="outSparkArea" fill="url(#spark-out)" />
+                <polyline v-if="outSpark" :points="outSpark" class="netov-spark__line netov-spark__line--out" />
+              </svg>
+            </div>
+          </div>
+
+          <div class="netov-rate__hint">
+            峰值 {{ rateText(totalPeak) }} · {{ samples.length }} 点 / {{ windowMin }} 分钟 ·
+            数据源 <b class="netov-source">{{ sourceLabel }}</b>
+          </div>
         </div>
       </div>
-      <div class="netov-hero__right">
-        <div class="netov-spark">
-          <div class="netov-spark__head"><i class="netov-dot netov-dot--in" />下载速率</div>
-          <svg viewBox="0 0 160 40" preserveAspectRatio="none" aria-label="下载速率迷你趋势图">
-            <defs>
-              <linearGradient id="spark-in" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#0071E3" stop-opacity="0.3" />
-                <stop offset="100%" stop-color="#0071E3" stop-opacity="0" />
-              </linearGradient>
-            </defs>
-            <path v-if="inSparkArea" :d="inSparkArea" fill="url(#spark-in)" />
-            <polyline v-if="inSpark" :points="inSpark" class="netov-spark__line netov-spark__line--in" />
-          </svg>
+
+      <div class="netov-card netov-chart-card">
+        <div class="netov-card__head">
+          <div>
+            <h3 class="netov-card__title">流量趋势</h3>
+            <p class="netov-card__sub">共享纵轴 · 数据源 {{ sourceLabel }}</p>
+          </div>
+          <div class="netov-seg" role="group" aria-label="图表指标">
+            <button
+              v-for="m in MODES"
+              :key="m.id"
+              type="button"
+              :class="{ 'is-active': chartMode === m.id }"
+              @click="chartMode = m.id"
+            >{{ m.label }}</button>
+          </div>
         </div>
-        <div class="netov-spark">
-          <div class="netov-spark__head"><i class="netov-dot netov-dot--out" />上传速率</div>
-          <svg viewBox="0 0 160 40" preserveAspectRatio="none" aria-label="上传速率迷你趋势图">
-            <defs>
-              <linearGradient id="spark-out" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#FF9F0A" stop-opacity="0.28" />
-                <stop offset="100%" stop-color="#FF9F0A" stop-opacity="0" />
-              </linearGradient>
-            </defs>
-            <path v-if="outSparkArea" :d="outSparkArea" fill="url(#spark-out)" />
-            <polyline v-if="outSpark" :points="outSpark" class="netov-spark__line netov-spark__line--out" />
-          </svg>
+        <TrafficAreaChart :samples="samples" :mode="chartMode" />
+        <div class="netov-chart-foot">
+          <span>最后更新 {{ lastUpdated || '—' }}</span>
+          <span>每 2 秒刷新</span>
         </div>
       </div>
     </section>
@@ -310,12 +360,12 @@ onUnmounted(() => {
       <div class="netov-kpi">
         <div class="netov-kpi__label"><i class="netov-dot netov-dot--in" />累计下载</div>
         <div class="netov-kpi__value">{{ byteText(latest?.bytes_in) }}</div>
-        <div class="netov-kpi__sub">自网络引擎启动以来的真实字节数</div>
+        <div class="netov-kpi__sub">{{ counterHint }}</div>
       </div>
       <div class="netov-kpi">
         <div class="netov-kpi__label"><i class="netov-dot netov-dot--out" />累计上传</div>
         <div class="netov-kpi__value">{{ byteText(latest?.bytes_out) }}</div>
-        <div class="netov-kpi__sub">自网络引擎启动以来的真实字节数</div>
+        <div class="netov-kpi__sub">{{ counterHint }}</div>
       </div>
       <div class="netov-kpi">
         <div class="netov-kpi__label">峰值下载 / 上传</div>
@@ -329,30 +379,6 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- Main chart -->
-    <section class="netov-card netov-chart-card">
-      <div class="netov-card__head">
-        <div>
-          <h3 class="netov-card__title">流量趋势</h3>
-          <p class="netov-card__sub">下载与上传共享纵轴，数据点来自真实计数器差分</p>
-        </div>
-        <div class="netov-seg" role="group" aria-label="图表指标">
-          <button
-            v-for="m in MODES"
-            :key="m.id"
-            type="button"
-            :class="{ 'is-active': chartMode === m.id }"
-            @click="chartMode = m.id"
-          >{{ m.label }}</button>
-        </div>
-      </div>
-      <TrafficAreaChart :samples="samples" :mode="chartMode" />
-      <div class="netov-chart-foot">
-        <span>最后更新 {{ lastUpdated || '—' }}</span>
-        <span>每 2 秒自动刷新 · 未运行时不绘制模拟曲线</span>
-      </div>
-    </section>
-
     <!-- Detail row -->
     <section class="netov-grid netov-grid--2">
       <div class="netov-card">
@@ -361,7 +387,9 @@ onUnmounted(() => {
             <h3 class="netov-card__title">连接与策略</h3>
             <p class="netov-card__sub">最新一次真实采样的累计计数</p>
           </div>
-          <NTag size="small" :bordered="false">{{ running ? '实时' : '停止' }}</NTag>
+          <NTag size="small" :bordered="false" :type="tunSource ? 'success' : 'default'">
+            {{ running ? sourceLabel : '停止' }}
+          </NTag>
         </div>
         <div class="netov-flow">
           <div v-for="row in flowRows" :key="row.label" class="netov-flow__row">
@@ -578,55 +606,118 @@ onUnmounted(() => {
 .netov-refresh:disabled { opacity: .55; cursor: default; }
 .netov-alert { margin-bottom: 8px; border-radius: 14px !important; }
 
-.netov-hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 28px;
-  flex-wrap: wrap;
-  background: linear-gradient(135deg, #ffffff 0%, #f2f7ff 100%);
-  border: 1px solid #e8e8ed;
-  border-radius: 10px;
-  padding: 10px 12px;
-  box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 12px 32px rgba(0,0,0,.04);
-  margin-bottom: 12px;
+/* 布局规格（v2.7.4）：速率卡与趋势卡 1:1 等分（各占 50%），间距 10px，
+   桌面端统一高度 208px；≤1100px 自动堆叠为单列。卡内高度分配：
+   标题行 34px + 主体 150px + 底部说明 24px。 */
+.netov-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: stretch;
+  margin-bottom: 10px;
 }
-.netov-hero__label { font-size: 12.5px; color: #6e6e73; font-weight: 500; }
-.netov-hero__value {
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.035em;
-  line-height: 1.15;
-  margin: 4px 0 6px;
-  font-variant-numeric: tabular-nums;
-}
-.netov-hero__meta { display: flex; gap: 22px; flex-wrap: wrap; font-size: 13px; color: #1d1d1f; }
-.netov-hero__meta span { display: inline-flex; align-items: center; gap: 7px; }
-.netov-hero__hint { margin-top: 14px; font-size: 11.5px; color: #8e8e93; }
-.netov-hero__right {
+.netov-rate-card {
+  min-height: 208px;
   display: flex;
+  flex-direction: column;
+}
+.netov-rate__main {
+  display: flex;
+  align-items: baseline;
   gap: 14px;
   flex-wrap: wrap;
+}
+.netov-rate__main {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.netov-rate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.netov-rate__main {
+  min-width: 0;
+}
+.netov-rate__value {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin: 2px 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+.netov-rate__meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: #1d1d1f;
+}
+.netov-rate__meta span {
+  display: inline-flex;
   align-items: center;
+  gap: 5px;
+}
+.netov-rate__hint {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: #8e8e93;
+}
+.netov-rate__sparks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 62px;
 }
 .netov-spark {
-  width: 118px;
-  background: rgba(255,255,255,.8);
-  border: 1px solid #e8e8ed;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  background: #fbfbfd;
+  border: 1px solid #eeeef2;
   border-radius: 8px;
-  padding: 6px 8px 4px;
+  padding: 5px 8px 4px;
 }
 .netov-spark__head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
+  justify-content: space-between;
+  gap: 5px;
+  font-size: 10.5px;
   color: #6e6e73;
-  margin-bottom: 6px;
 }
-.netov-spark svg { width: 100%; height: 26px; display: block; }
-.netov-spark__line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.netov-spark__head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.netov-spark__head b {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1d1d1f;
+  font-variant-numeric: tabular-nums;
+}
+.netov-spark svg {
+  width: 100%;
+  height: 32px;
+  display: block;
+  margin-top: 4px;
+}
+.netov-spark__line {
+  fill: none;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
 .netov-spark__line--in { stroke: #0071e3; }
 .netov-spark__line--out { stroke: #ff9f0a; }
+.netov-source { color: #0071e3; font-weight: 600; }
 
 .netov-dot {
   display: inline-block;
@@ -649,27 +740,27 @@ onUnmounted(() => {
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 8px 24px rgba(0,0,0,.035);
 }
-.netov-kpi { padding: 8px 10px 10px; }
+.netov-kpi { padding: 6px 9px 7px; }
 .netov-kpi__label {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
+  gap: 6px;
+  font-size: 11.5px;
   color: #6e6e73;
   font-weight: 500;
 }
 .netov-kpi__value {
-  font-size: 16px;
+  font-size: 14.5px;
   font-weight: 650;
   letter-spacing: -0.025em;
-  margin: 4px 0 3px;
+  margin: 2px 0 2px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.netov-kpi__value--sm { font-size: 15px; }
-.netov-kpi__sub { font-size: 11.5px; color: #8e8e93; line-height: 1.5; }
+.netov-kpi__value--sm { font-size: 13.5px; }
+.netov-kpi__sub { font-size: 10.5px; color: #8e8e93; line-height: 1.45; }
 
-.netov-card { padding: 10px 12px; }
+.netov-card { padding: 8px 10px; }
 .netov-card__head {
   display: flex;
   align-items: flex-start;
@@ -678,18 +769,27 @@ onUnmounted(() => {
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
-.netov-card__title { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
-.netov-card__sub { margin: 5px 0 0; font-size: 11.5px; color: #8e8e93; }
-.netov-chart-card { margin-bottom: 8px; }
+.netov-card__title { margin: 0; font-size: 12.5px; font-weight: 600; letter-spacing: -.01em; }
+.netov-card__sub { margin: 3px 0 0; font-size: 10.5px; color: #8e8e93; }
+.netov-chart-card {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 208px;
+}
+/* 图表画布在等分卡里固定 118px（原为整行 148px） */
+.netov-chart-card :deep(.tac-canvas) {
+  height: 118px;
+}
 .netov-chart-foot {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: auto;
+  padding-top: 6px;
   border-top: 1px solid #f0f0f2;
-  font-size: 11.5px;
+  font-size: 10.5px;
   color: #8e8e93;
 }
 
@@ -780,9 +880,9 @@ onUnmounted(() => {
   .netov { padding: 16px; border-radius: 20px; }
   .netov-grid--4,
   .netov-grid--2 { grid-template-columns: 1fr; }
-  .netov-hero__value { font-size: 36px; }
-  .netov-hero__right { width: 100%; }
-  .netov-spark { flex: 1 1 140px; width: auto; }
+  .netov-split { grid-template-columns: 1fr; }
+  .netov-rate__value { font-size: 20px; }
+  .netov-rate__sparks { width: 100%; }
   .netov-config { grid-template-columns: 1fr; }
 }
 </style>

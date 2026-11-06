@@ -118,9 +118,9 @@ bash scripts/quickstart.sh --release v2.7.3    # 下载官方 Release 预编译�
 脚本会：构建/下载 → 复制 `configs/ngg.example.yaml` 为 `configs/ngg.yaml` → 启动。
 首次启动自动生成 Token 并写入本地配置（0600）。
 
-**Windows 用户请用安装程序而不是手跑 exe**：双击 `NGG-Setup-vX.Y.Z.exe`，或解压
-`NGG-vX.Y.Z-windows-amd64.zip` 后以管理员运行 `install.ps1`。它会写好绝对路径配置、随机 Token、
-注册 Windows 服务、启动并做健康检查。完整步骤见 [`INSTALL-WINDOWS.md`](INSTALL-WINDOWS.md)。
+**Windows 用户请用安装程序而不是手跑 exe**：双击 `NGG-Setup-vX.Y.Z.exe`（Release 唯一发布格式，
+不再提供便携 ZIP）。它会写好绝对路径配置、随机 Token、注册 Windows 服务、启动并做健康检查。
+完整步骤见 [`INSTALL-WINDOWS.md`](INSTALL-WINDOWS.md)。
 仅在开发调试时才需要 `bin\nggd.exe -config configs\ngg.yaml`。
 
 ---

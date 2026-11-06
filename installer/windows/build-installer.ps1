@@ -1,8 +1,12 @@
 <#
 .SYNOPSIS
-  Build the Windows deliverables: portable ZIP + optional Inno Setup EXE.
+  Build the Windows deliverables: Inno Setup EXE (default) or EXE + portable ZIP.
 
 .DESCRIPTION
+  Releases ship .exe ONLY (NGG targets Windows PC exclusively): the installer
+  EXE is the only package format produced by default. -SkipZip is accepted for
+  backwards compatibility and is already the default behaviour.
+
   Two modes:
    1) From source (default): cross-compiles nggd.exe, builds the Vue Web UI,
       stages everything, then packs it.
@@ -11,9 +15,10 @@
         powershell -ExecutionPolicy Bypass -File build-installer.ps1 -Version v1.0.0 -StageDir dist/ngg -SkipBuild
 
   Output (default <repo>/out):
-   NGG-<version>-windows-amd64.zip         portable bundle (contains install.ps1)
-   NGG-Setup-<version>.exe                 GUI installer (only when ISCC is available)
+   NGG-Setup-<version>.exe                 GUI installer — the ONLY release artifact
    *.sha256                                checksums
+
+  NGG ships Windows PC only: no Linux/macOS builds, no ZIP/tar.gz release assets.
 #>
 [CmdletBinding()]
 param(
@@ -22,7 +27,9 @@ param(
   [string]$RepoRoot  = '',
   [string]$OutputDir = '',
   [switch]$SkipBuild,
-  [switch]$SkipInno
+  [switch]$SkipInno,
+  # Releases are .exe only; pass -WithZip locally if you want a portable ZIP.
+  [switch]$WithZip
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,12 +127,16 @@ try {
     }
   }
 
-  Write-Step 'Creating portable ZIP ...'
-  $zip = Join-Path $OutputDir "NGG-$Version-windows-amd64.zip"
-  if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
-  Compress-Archive -Path (Join-Path $StageDir '*') -DestinationPath $zip -CompressionLevel Optimal
-  $zipHash = Write-Sha256File -FilePath $zip
-  Write-Ok "ZIP : $zip  sha256=$zipHash"
+  if ($WithZip) {
+    Write-Step 'Creating portable ZIP ...'
+    $zip = Join-Path $OutputDir "NGG-$Version-windows-amd64.zip"
+    if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
+    Compress-Archive -Path (Join-Path $StageDir '*') -DestinationPath $zip -CompressionLevel Optimal
+    $zipHash = Write-Sha256File -FilePath $zip
+    Write-Ok "ZIP : $zip  sha256=$zipHash"
+  } else {
+    Write-Step 'Skipping portable ZIP (releases are .exe only)'
+  }
 
   if (-not $SkipInno) {
     $iscc = Find-ISCC
@@ -153,21 +164,21 @@ try {
       }
       [IO.File]::WriteAllText($issBuild, $issText, (New-Object System.Text.UTF8Encoding($false)))
       & $iscc "/O$OutputDir" $issBuild
-      if ($LASTEXITCODE -ne 0) { Fail 'ISCC failed; portable ZIP is still valid.' }
+      if ($LASTEXITCODE -ne 0) { Fail 'ISCC failed; no .exe was produced (releases are .exe only).' }
       $exe = Join-Path $OutputDir "NGG-Setup-$Version.exe"
       if (-not (Test-Path $exe)) { Fail "Expected installer not found: $exe" }
       $exeHash = Write-Sha256File -FilePath $exe
       Write-Ok "EXE : $exe  sha256=$exeHash"
     } else {
       Write-Warn 'Inno Setup 6 (ISCC.exe) not found - skipped EXE. Install it from https://jrsoftware.org/isdl.php or choco install innosetup.'
-      Write-Warn 'Portable ZIP is fully functional: extract it and run install.ps1 as administrator.'
+      Fail 'Inno Setup 6 (ISCC.exe) is required: releases are .exe only and there is no ZIP fallback.'
     }
   }
 
   Write-Host ''
   Write-Host '===== Windows deliverables =====' -ForegroundColor Green
   Get-ChildItem -LiteralPath $OutputDir -File |
-    Where-Object { $_.Name -like "NGG-$Version*" -or $_.Name -like "NGG-Setup-$Version*" } |
+    Where-Object { $_.Name -like "NGG-Setup-$Version*" -or $_.Name -like "NGG-Agent-$Version*" } |
     Select-Object Name, Length | Format-Table -AutoSize | Out-Host
   Write-Host "Verify with: Get-FileHash <file> -Algorithm SHA256; compare with <file>.sha256"
   exit 0

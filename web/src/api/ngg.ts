@@ -457,6 +457,8 @@ export const getNetworkEndpoints = () =>
 export interface MetricsSample {
   ts: number
   running: boolean
+  /** "tun" = 虚拟网卡真实收发字节，是整机流量的权威来源；"engine" = 会话计数。 */
+  source: 'tun' | 'engine'
   bytes_in: number
   bytes_out: number
   rate_in: number
@@ -469,10 +471,19 @@ export interface MetricsSample {
   dns_queries: number
   rule_matches: number
   failovers: number
+  tun_open: boolean
+  tun_bytes_in: number
+  tun_bytes_out: number
+  tun_rate_in: number
+  tun_rate_out: number
+  engine_bytes_in: number
+  engine_bytes_out: number
 }
 
 export interface MetricsHistoryResult {
   running: boolean
+  source: 'tun' | 'engine'
+  tun_open: boolean
   interval_sec: number
   window_minutes: number
   count: number

@@ -5,9 +5,12 @@ package netengine
 import (
 	"context"
 	"net"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -109,6 +112,108 @@ func TestTunTCPForwarderAnswersSYN(t *testing.T) {
 
 // ---------------------------------------------------------------- helpers ---
 
+// fakeTunDevice is a tun.Device backed by channels, so the packet pump can be
+// exercised without an elevated wintun adapter.
+type fakeTunDevice struct {
+	in     chan []byte
+	writes chan []byte
+	events chan tun.Event
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newFakeTunDevice() *fakeTunDevice {
+	return &fakeTunDevice{
+		in:     make(chan []byte, 8),
+		writes: make(chan []byte, 8),
+		events: make(chan tun.Event, 1),
+		closed: make(chan struct{}),
+	}
+}
+
+func (f *fakeTunDevice) File() *os.File { return nil }
+
+func (f *fakeTunDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	select {
+	case p := <-f.in:
+		sizes[0] = copy(bufs[0][offset:], p)
+		return 1, nil
+	case <-f.closed:
+		return 0, os.ErrClosed
+	}
+}
+
+func (f *fakeTunDevice) Write(bufs [][]byte, offset int) (int, error) {
+	for _, b := range bufs {
+		out := append([]byte(nil), b[offset:]...)
+		select {
+		case f.writes <- out:
+		default:
+		}
+	}
+	return len(bufs), nil
+}
+
+func (f *fakeTunDevice) MTU() (int, error)        { return 1500, nil }
+func (f *fakeTunDevice) Name() (string, error)    { return "NGG", nil }
+func (f *fakeTunDevice) Events() <-chan tun.Event { return f.events }
+func (f *fakeTunDevice) BatchSize() int           { return 1 }
+func (f *fakeTunDevice) Close() error {
+	f.once.Do(func() { close(f.closed) })
+	return nil
+}
+
+// Regression for the field failure "adapter receives traffic but sends nothing"
+// (Windows showed 已发送 16 MB / 已接收 0, browsers timed out).
+//
+// channel.Endpoint.Read() is NON-BLOCKING and returns nil for an empty queue, so
+// the original drain loop exited on its first iteration and no stack packet ever
+// reached the adapter. The pump must block on ReadContext instead.
+func TestTunPumpSendsStackRepliesToDevice(t *testing.T) {
+	s, ep := newTestStack(t)
+	installForwarders(s,
+		func(conn *gonet.TCPConn, _ stack.TransportEndpointID) { _ = conn.Close() },
+		func(_ *gonet.UDPConn, _ stack.TransportEndpointID) {})
+
+	dev := newFakeTunDevice()
+	td := &TunDevice{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	td.pump(ctx, dev, ep, 1500)
+	defer dev.Close()
+
+	// The OS sends a SYN into the tunnel.
+	src := net.ParseIP("10.99.0.1").To4()
+	dst := net.ParseIP("192.0.2.10").To4()
+	dev.in <- buildTCP(src, dst, 41234, 80, 1000, header.TCPFlagSyn, 0)
+
+	select {
+	case out := <-dev.writes:
+		if len(out) < header.IPv4MinimumSize+header.TCPMinimumSize {
+			t.Fatalf("short packet written to the adapter: %d bytes", len(out))
+		}
+		tcpHdr := header.TCP(out[header.IPv4MinimumSize:])
+		if tcpHdr.Flags()&header.TCPFlagSyn == 0 || tcpHdr.Flags()&header.TCPFlagAck == 0 {
+			t.Fatalf("expected a SYN-ACK written back, got flags=%b", tcpHdr.Flags())
+		}
+		if tcpHdr.SourcePort() != 80 || tcpHdr.DestinationPort() != 41234 {
+			t.Fatalf("SYN-ACK ports = %d->%d, want 80->41234", tcpHdr.SourcePort(), tcpHdr.DestinationPort())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stack reply never reached the adapter: the TUN send path is dead")
+	}
+
+	if got := td.pktOut.Load(); got == 0 {
+		t.Fatal("packets_out stayed 0 although a packet was written")
+	}
+	if got := td.bytesOut.Load(); got == 0 {
+		t.Fatal("bytes_out stayed 0 although a packet was written")
+	}
+	if got := td.pktIn.Load(); got == 0 {
+		t.Fatal("packets_in stayed 0 although the OS sent a packet")
+	}
+}
+
 func injectUDP(t *testing.T, ep *channel.Endpoint, src, dst net.IP, srcPort, dstPort uint16, payload []byte) {
 	t.Helper()
 	const ipLen = header.IPv4MinimumSize
@@ -146,6 +251,16 @@ func injectUDP(t *testing.T, ep *channel.Endpoint, src, dst net.IP, srcPort, dst
 
 func injectTCP(t *testing.T, ep *channel.Endpoint, src, dst net.IP, srcPort, dstPort uint16, seq uint32, flags header.TCPFlags, ack uint32) {
 	t.Helper()
+	buf := buildTCP(src, dst, srcPort, dstPort, seq, flags, ack)
+
+	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(buf)})
+	pkt.RXChecksumValidated = true
+	ep.InjectInbound(ipv4.ProtocolNumber, pkt)
+	pkt.DecRef()
+}
+
+// buildTCP returns a complete IPv4+TCP packet with valid checksums.
+func buildTCP(src, dst net.IP, srcPort, dstPort uint16, seq uint32, flags header.TCPFlags, ack uint32) []byte {
 	const ipLen = header.IPv4MinimumSize
 	const tcpLen = header.TCPMinimumSize
 	buf := make([]byte, ipLen+tcpLen)
@@ -175,9 +290,5 @@ func injectTCP(t *testing.T, ep *channel.Endpoint, src, dst net.IP, srcPort, dst
 	tcpHdr.SetChecksum(0)
 	xsum := header.PseudoHeaderChecksum(header.TCPProtocolNumber, ip.SourceAddress(), ip.DestinationAddress(), uint16(tcpLen))
 	tcpHdr.SetChecksum(^tcpHdr.CalculateChecksum(xsum))
-
-	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(buf)})
-	pkt.RXChecksumValidated = true
-	ep.InjectInbound(ipv4.ProtocolNumber, pkt)
-	pkt.DecRef()
+	return buf
 }

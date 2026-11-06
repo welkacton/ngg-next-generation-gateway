@@ -205,11 +205,14 @@ func (e *Engine) AttachTUN(ctx context.Context, routeAll bool) error {
 	if !e.IsRunning() {
 		return ErrNotRunning
 	}
+	// The engine must never dial through its own tunnel. Flip this BEFORE the
+	// adapter exists so every dial made while it is coming up is already pinned
+	// to the physical NIC.
+	e.egress.SetBypassTUN(true)
 	if err := e.tun.Open(ctx, e.cfg.TUN); err != nil {
+		e.egress.SetBypassTUN(false)
 		return err
 	}
-	// The engine must never dial through its own tunnel.
-	e.egress.SetBypassTUN(true)
 	if routeAll {
 		if err := e.tun.SetDefaultRoute(true); err != nil {
 			e.egress.SetBypassTUN(false)
@@ -265,6 +268,23 @@ func (e *Engine) ApplyEgress() error {
 
 // TUNStatus exposes the real adapter state (never a fabricated one).
 func (e *Engine) TUNStatus() map[string]any { return e.tun.Status() }
+
+// TunTraffic returns the virtual adapter's own counters (bytes the OS sent into
+// the tunnel and bytes the stack wrote back) plus whether the adapter is open.
+//
+// These are adapter-level numbers: when the TUN is up they describe ALL machine
+// traffic, which is exactly what the traffic chart must show. They are read
+// separately from the session counters because a tunnel can receive traffic
+// that never turns into a proxied session (DNS, dropped UDP, half-open TCP).
+func (e *Engine) TunTraffic() (TunStats, bool) {
+	st := e.tun.Status()
+	open, _ := st["open"].(bool)
+	if !open {
+		return TunStats{}, false
+	}
+	stats, _ := st["stats"].(TunStats)
+	return stats, true
+}
 
 func (e *Engine) rollback() {
 	_ = e.resources.Release("tun", e.cfg.TUN.Name)

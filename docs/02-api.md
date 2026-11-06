@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.7.3", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.7.4", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.7.3），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.7.4），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -520,9 +520,13 @@ curl -X POST -H "$H" "$BASE/hosts/probe"
 | --- | --- |
 | `running` | 最新采样时网络引擎是否运行；`false` 时 `note` 明确说明没有真实流量 |
 | `interval_sec` / `window_minutes` / `count` | 采样间隔、请求窗口、返回点数 |
+| `source` / `samples[].source` | `tun` = 图表数据来自虚拟网卡的网卡级收发字节；`engine` = 来自会话计数 |
+| `tun_open` | 采样时虚拟网卡是否已创建（关闭时 `tun_*` 一律为 0，不残留上次的数值） |
 | `samples[].ts` | Unix 毫秒时间戳 |
-| `samples[].bytes_in` / `bytes_out` | 真实累计字节（下载 / 上传） |
+| `samples[].bytes_in` / `bytes_out` | **有效**累计字节：虚拟网卡在线时取网卡计数，否则取引擎会话计数 |
 | `samples[].rate_in` / `rate_out` | 相邻真实计数差 ÷ 真实时间差，单位 B/s |
+| `samples[].tun_bytes_in/out`、`tun_rate_in/out` | 虚拟网卡的原始收发字节与速率（独立计数，不与会话计数相加，避免重复统计） |
+| `samples[].engine_bytes_in/out` | 统一引擎会话计数的原始值，便于对照 |
 | `samples[].active` / `connections` / `direct` / `proxied` / `dropped` / `dns_queries` / `rule_matches` / `failovers` | 统一网络引擎的真实计数 |
 
 - **不伪造**：引擎未运行时速率为 0 并标记 `running=false`；计数器归零（引擎重启）时速率按 0 处理，
@@ -530,14 +534,20 @@ curl -X POST -H "$H" "$BASE/hosts/probe"
 - **v2.4.0 计量修复**：`internal/netengine/netengine.go` 的 `relay()` 原先把两个方向的字节都累加到
   `BytesOut`，导致 `bytes_in`（下载）恒为 0。现在 `upstream → client` 计入 `BytesIn`、
   `client → upstream` 计入 `BytesOut`，并有 `TestRelayCountsDirectionsSeparately` 回归测试。
+- **v2.7.4 起以虚拟网卡为权威数据源**：网卡在线时 `bytes_in/out` 就是「整机流量」，
+  因为它统计的是真正跨过 NGG 适配器的 IP 包；网卡未创建时才回落到会话计数。两者**从不相加**，
+  否则同一份流量会被统计两次。界面在速率区与趋势图标题明确标注当前数据源。
 - 前端 `web/src/views/NetworkOverview.vue` 每 2 秒轮询该端点，用纯 SVG 双系列面积图绘制
   速率 / 累计流量 / 连接数三种视图；无采样点时显示空状态，不绘制模拟曲线。
 
 ```bash
 curl -H "$H" "$BASE/network/metrics/history?minutes=5"
-# {"running":true,"interval_sec":2,"window_minutes":5,"count":19,
-#  "samples":[{"ts":...,"bytes_in":39849802,"bytes_out":1653,
-#              "rate_in":8388608,"rate_out":350,...}],"note":""}
+# {"running":true,"source":"tun","tun_open":true,"interval_sec":2,
+#  "window_minutes":5,"count":19,
+#  "samples":[{"ts":...,"source":"tun","bytes_in":39849802,"bytes_out":1653,
+#              "rate_in":8388608,"rate_out":350,
+#              "tun_bytes_in":39849802,"tun_bytes_out":1653,...}],
+#  "note":"数据源：NGG 虚拟网卡（网卡级真实收发字节）"}
 ```
 
 ## 13. 认证 `/api/v1/auth`（v2.6.0，登录门禁）
@@ -619,6 +629,16 @@ SHA-256 `07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51`，
 验收脚本：以管理员运行 `scripts/verify-tun.ps1`（`-ExecutionPolicy Bypass`）。它会用临时实例
 真实创建网卡、只对 `1.1.1.1/32` 加一条临时路由并发出一次真实 HTTP 请求、读回收发计数，
 随后删除路由并销毁网卡，结果写入 `data/tun-verify/report.json`。
+
+收发路径（v2.7.4 修复）：`channel.Endpoint.Read()` 是**非阻塞**的，队列为空时立即返回 nil。
+旧实现用它做主机的写回循环，协程在启动瞬间（队列必然为空）就退出了，于是网卡「只收不发」：
+Windows 状态里显示「已发送 16 MB / 已接收 0」，浏览器全部 `ERR_CONNECTION_TIMED_OUT`。
+现在写回循环阻塞在 `ReadContext(ctx)` 上，stack 产出的每个包都会真实写入适配器，
+并且有注入真实 IP 包的回归测试（`TestTunPumpSendsStackRepliesToDevice`，旧代码必失败）。
+
+DNS 解析也走引擎的出口拨号器：接管默认路由后，未绑定网卡的 UDP socket 会把 DNS 查询送回 TUN 自己，
+形成「查询 → 进隧道 → 再查询」的死循环。`TunDevice.dialer()` 复用 `egress.Dialer()` 的
+`IP_UNICAST_IF` 绑定，确保查询从物理网卡发出。
 
 UDP 处理策略：`53/tcp` 之外的 UDP 默认丢弃（TCP-only 调度器无法代理，直发又会绕过隧道），
 DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可用。
@@ -777,6 +797,10 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 - 若检测到上次接管遗留的、仍在同一 TUN 网段上的网卡（`stale_adapters`），
   `start` 会先删除其默认路由并禁用；未提权时给出可直接复制执行的命令。
 - 接口优先级 `0` 会被规范为 `1`：`netsh ... metric=0` 的含义是「自动」，会让物理网卡赢回默认路由。
+- **路由命令幂等**（v2.7.4）：「已经存在」不是错误。Windows 对已存在的路由仍返回退出码 1
+  （`对象已存在。` / `The object already exists.`），以前会让「一键启动」在第 2 步失败并回滚 `enabled`；
+  现在 `add route` 遇到该输出按成功处理，`delete route` 遇到「找不到元素」同样视为已完成，
+  结果里通过 `idempotent[]` 如实列出被幂等处理的命令。
 - 任一步骤失败时 `ok=false`，且 `master.enabled` 会回退为 `false`——开关不谎报未生效的接管。
 - `wan_id` 与 `egress_interface` 同时给出时，会把该接口回写到对应 WAN 配置，WAN 设置页与
   控制中心描述同一个上行。

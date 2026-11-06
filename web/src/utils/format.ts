@@ -66,6 +66,42 @@ export function formatBytes(value?: number): string {
   return `${size.toFixed(1)} ${units[index]}`
 }
 
+/**
+ * 速率格式化：小于 10 的值保留小数，避免 0.4 KB/s 被四舍五入成 “0 B/s”，
+ * 也避免坐标轴上出现 “1 B/s / 1 B/s / 1 B/s” 这种重复刻度。
+ */
+export function formatRate(value?: number): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—'
+  if (value <= 0) return '0 B/s'
+  if (value < 1024) {
+    const n = value < 10 ? Number(value.toFixed(2)) : Math.round(value)
+    return `${n} B/s`
+  }
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let size = value / 1024
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2
+  return `${Number(size.toFixed(digits))} ${units[index]}/s`
+}
+
+/** 把数值拆成 {数值, 单位}，用于整条坐标轴共用同一单位。 */
+export function rateParts(value: number): { n: number; unit: string } {
+  const v = Math.max(0, value)
+  if (v < 1024) return { n: v, unit: 'B' }
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let n = v / 1024
+  let i = 0
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024
+    i += 1
+  }
+  return { n, unit: units[i] }
+}
+
 export function shortSha(sha?: string): string {
   if (!sha) return '—'
   return sha.length > 18 ? `${sha.slice(0, 18)}…` : sha

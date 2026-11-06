@@ -110,8 +110,10 @@ const LINK_PATTERNS = [
   [/releases\/tag\/v\d+\.\d+\.\d+/g, `releases/tag/v${next}`],
   [/releases\/download\/v\d+\.\d+\.\d+/g, `releases/download/v${next}`],
   [/NGG-Setup-v\d+\.\d+\.\d+/g, `NGG-Setup-v${next}`],
+  // Windows-only releases: installer + standalone exe names.
+  [/NGG-Core-v\d+\.\d+\.\d+-windows-amd64/g, `NGG-Core-v${next}-windows-amd64`],
+  [/NGG-Agent-v\d+\.\d+\.\d+-windows-amd64/g, `NGG-Agent-v${next}-windows-amd64`],
   [/NGG-v\d+\.\d+\.\d+-windows-amd64/g, `NGG-v${next}-windows-amd64`],
-  [/ngg-v\d+\.\d+\.\d+-(linux|darwin|windows|freebsd)/g, `ngg-v${next}-$1`],
   [/VERSION=v\d+\.\d+\.\d+/g, `VERSION=v${next}`],
   [/-Version v\d+\.\d+\.\d+/g, `-Version v${next}`],
   [/"tag":"v\d+\.\d+\.\d+"/g, `"tag":"v${next}"`],

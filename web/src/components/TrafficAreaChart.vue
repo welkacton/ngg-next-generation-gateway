@@ -7,9 +7,9 @@
  * padding with zeroes, or synthetic baseline. Both series share one Y axis so
  * download and upload are visually comparable.
  */
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import type { MetricsSample } from '../api/ngg'
-import { formatBytes } from '../utils/format'
+import { formatBytes, formatRate, rateParts } from '../utils/format'
 
 const props = withDefaults(
   defineProps<{
@@ -19,15 +19,48 @@ const props = withDefaults(
   { mode: 'rate' },
 )
 
-const W = 1000
+/**
+ * The viewBox width follows the rendered aspect ratio (see ResizeObserver
+ * below) so the chart fills its box exactly at a fixed, compact height — no
+ * stretching, no letterboxing, and the axis text keeps its real size.
+ */
 const H = 170
 const PAD_L = 54
 const PAD_R = 14
 const PAD_T = 12
 const PAD_B = 24
-const PLOT_W = W - PAD_L - PAD_R
 const PLOT_H = H - PAD_T - PAD_B
 const BOTTOM = PAD_T + PLOT_H
+
+const canvasEl = ref<HTMLElement | null>(null)
+const canvasW = ref(1000)
+const plotW = computed(() => Math.max(200, canvasW.value - PAD_L - PAD_R))
+
+let observer: ResizeObserver | null = null
+
+function syncWidth(el: HTMLElement): void {
+  const rect = el.getBoundingClientRect()
+  if (rect.width < 1 || rect.height < 1) return
+  canvasW.value = Math.max(360, Math.round((rect.width * H) / rect.height))
+}
+
+// The canvas only exists once there is at least one sample, so the observer has
+// to follow the element instead of being attached once in onMounted. Without
+// this the viewBox kept its 1000-unit default and the drawing was letterboxed
+// inside the card (a wide empty gutter on both sides).
+watch(canvasEl, (el) => {
+  observer?.disconnect()
+  observer = null
+  if (!el || typeof ResizeObserver === 'undefined') return
+  observer = new ResizeObserver(() => syncWidth(el))
+  observer.observe(el)
+  syncWidth(el)
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
+  observer = null
+})
 
 const hoverIndex = ref<number | null>(null)
 
@@ -71,8 +104,8 @@ const yMax = computed(() => {
 })
 
 function xAt(i: number, n: number): number {
-  if (n <= 1) return PAD_L + PLOT_W / 2
-  return PAD_L + (i / (n - 1)) * PLOT_W
+  if (n <= 1) return PAD_L + plotW.value / 2
+  return PAD_L + (i / (n - 1)) * plotW.value
 }
 function yAt(v: number): number {
   return PAD_T + PLOT_H - (Math.max(0, v) / yMax.value) * PLOT_H
@@ -99,15 +132,29 @@ const yTicks = computed(() => [0, 0.25, 0.5, 0.75, 1].map((f) => ({
   label: formatAxis(yMax.value * f),
 })))
 
+// The whole axis shares ONE unit. Mixing units per tick used to print
+// "1 B/s / 1 B/s / 1 B/s" for a tiny range, because every value was rounded to
+// whole bytes.
+const axisUnit = computed(() => (props.mode === 'connections' ? null : rateParts(yMax.value)))
+
+function axisDivisor(unit: string): number {
+  if (unit === 'B') return 1
+  const idx = ['KB', 'MB', 'GB', 'TB'].indexOf(unit)
+  return idx < 0 ? 1 : Math.pow(1024, idx + 1)
+}
+
 function formatAxis(v: number): string {
   if (props.mode === 'connections') return Math.round(v).toLocaleString('zh-CN')
-  const b = formatBytes(v)
-  return props.mode === 'rate' ? `${b}/s` : b
+  const unit = axisUnit.value?.unit ?? 'B'
+  const n = v / axisDivisor(unit)
+  const digits = n === 0 ? 0 : n >= 100 ? 0 : n >= 10 ? 1 : 2
+  const text = String(Number(n.toFixed(digits)))
+  return props.mode === 'rate' ? `${text} ${unit}/s` : `${text} ${unit}`
 }
+
 function formatValue(v: number): string {
   if (props.mode === 'connections') return Math.round(v).toLocaleString('zh-CN')
-  const b = formatBytes(v)
-  return props.mode === 'rate' ? `${b}/s` : b
+  return props.mode === 'rate' ? formatRate(v) : formatBytes(v)
 }
 function timeLabel(ts: number): string {
   const d = new Date(ts)
@@ -135,7 +182,7 @@ const hovered = computed(() => {
     time: timeLabel(list[i].ts),
     inVal: series.value.in[i],
     outVal: series.value.out[i],
-    leftPct: (xAt(i, list.length) / W) * 100,
+    leftPct: (xAt(i, list.length) / canvasW.value) * 100,
   }
 })
 
@@ -144,8 +191,8 @@ function onMove(e: MouseEvent) {
   if (n < 2) return
   const svg = e.currentTarget as SVGSVGElement
   const rect = svg.getBoundingClientRect()
-  const vx = ((e.clientX - rect.left) / rect.width) * W
-  const ratio = (vx - PAD_L) / PLOT_W
+  const vx = ((e.clientX - rect.left) / rect.width) * canvasW.value
+  const ratio = (vx - PAD_L) / plotW.value
   hoverIndex.value = Math.max(0, Math.min(n - 1, Math.round(ratio * (n - 1))))
 }
 function onLeave() {
@@ -177,9 +224,9 @@ const outPeak = computed(() => peak('out'))
       暂无真实采样数据。启动统一网络引擎后，后端会每 2 秒采集一次计数器。
     </div>
 
-    <div v-else class="tac-canvas">
+    <div v-else ref="canvasEl" class="tac-canvas">
       <svg
-        :viewBox="`0 0 ${W} ${H}`"
+        :viewBox="`0 0 ${canvasW} ${H}`"
         preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label="下载与上传流量趋势图"
@@ -202,7 +249,7 @@ const outPeak = computed(() => peak('out'))
             v-for="t in yTicks"
             :key="t.y"
             :x1="PAD_L"
-            :x2="W - PAD_R"
+            :x2="canvasW - PAD_R"
             :y1="t.y"
             :y2="t.y"
           />
@@ -311,8 +358,14 @@ const outPeak = computed(() => peak('out'))
 .tac-canvas {
   position: relative;
   width: 100%;
-  /* Keep the viewBox aspect ratio so axis labels are never stretched. */
-  aspect-ratio: 1000 / 170;
+  /* Compact fixed height: the viewBox width is derived from the measured
+     aspect ratio, so the drawing fills the box without distortion. */
+  height: 148px;
+}
+@media (max-width: 900px) {
+  .tac-canvas {
+    height: 126px;
+  }
 }
 .tac-canvas svg {
   width: 100%;
