@@ -23,8 +23,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/gateway/master',
     name: 'gateway-master',
-    component: () => import('../views/gateway/MasterControl.vue'),
-    meta: { title: '总控设置' },
+    component: () => import('../views/gateway/ControlCenter.vue'),
+    meta: { title: '控制中心' },
   },
   {
     path: '/clients',
@@ -91,7 +91,7 @@ const routes: RouteRecordRaw[] = [
     path: '/network',
     name: 'network',
     component: () => import('../views/Network.vue'),
-    meta: { title: '接管全局' },
+    meta: { title: '高级诊断' },
   },
   {
     path: '/rules',

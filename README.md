@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.7.1
+### 🏷️ Generation 2 / 第二代 · Release v2.7.2
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -29,10 +29,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.5.0 | 接管全局 + 用户管理 | 系统更新去掉 GitHub Token，公开仓库自动检查/下载/应用；「网络引擎」改名**接管全局**并移入配置引擎（DNS 配置下方），新增 Windows 系统代理一键接管与解除（真实写 HKCU/Internet Settings 并广播，解除恢复原代理）、TUN 真实能力检测（管理员 / wintun.dll / 已装虚拟网卡，无能力时如实说明不伪造网卡）；**删除多租户**，在出口节点下新增**用户管理**（统计条 + 用户表 + 详情抽屉，Active/Expired/Limited/Disabled 由 enabled/到期/配额实时推导，用量只由数据面累加）；修复规则集与版本列表的长文本覆盖「操作」列，并加全局单元格裁切防御 |
 | Gen 2 增补 | v2.6.0 | 登录门禁 + 链路编排 + 真 TUN | 新增单管理员登录：首次打开必须手动创建账号（Argon2id / HttpOnly 会话 / 失败锁定），之后只有登录窗口，浏览器不再保存任何 API Token；配置引擎新增**链路编排**（协议 → 入口 → 规则 → DNS → 出口 → 用户 六段串联，真实校验、渲染 mihomo 配置、原生校验后热替换、SOCKS5 端到端真连测试），各二级页加入链路导航条；Windows **TUN 虚拟网卡彻底跑通**：自动下载并 SHA-256 + Authenticode 双重校验官方签名 wintun.dll，由 NGG 独占创建网卡并用 gVisor 用户态协议栈把 TCP 流量接入统一调度器，可选接管默认路由 |
 | Gen 2 增补 | v2.6.4 | 规则集 / 接管全局 / DNS / 节点 / 链路编排 / 极简风 | 在 v2.6.3（登录门禁、链路编排、真 TUN、主机控制台、网络概览）之上：规则配置支持 GitHub 来源自定义增删、执行内核下拉、规则单条/多选/全选/全部删除、按三内核官方语法可视化新增规则集；接管全局状态可读化 + 八项组件逐项开关 + 默认内核可选；DNS 按三内核官方语法重布局；节点新增配置文件、采集数据、密钥配对、连通探测；链路承载内核显示全部内核；全站统一关闭说明文字层；网络概览增加组件状态、引擎启停、配置计数与快捷跳转 |
-| **Gen 2（当前）** | **v2.7.1** | 总控启用 / 内核可靠性 / VPS 节点 / 用户订阅 | 总控「应用接管」改为一步「保存并接管」，不再因 master.enabled=false 空转；内核启动增加预检（`<binary> version`）与 3 秒快速失败，崩溃提示改为 `core.state` 且去重，端口与配置漂移时自动校准（备份 + 原生校验），内核管理新增诊断面板（二进制 / 版本 / 配置 / 端口占用 / 日志）；节点新增「部署到 VPS」一键脚本（VLESS / Trojan / Shadowsocks）；用户管理可绑定节点 + 协议 + 规则集 + DNS，生成 Clash / Surge / sing-box / v2ray / SOCKS5 五种订阅链接。
+| Gen 2 增补 | v2.7.1 | 总控启用 / 内核可靠性 / VPS 节点 / 用户订阅 | 总控「应用接管」改为一步「保存并接管」，不再因 master.enabled=false 空转；内核启动增加预检（`<binary> version`）与 3 秒快速失败，崩溃提示改为 `core.state` 且去重，端口与配置漂移时自动校准（备份 + 原生校验），内核管理新增诊断面板（二进制 / 版本 / 配置 / 端口占用 / 日志）；节点新增「部署到 VPS」一键脚本（VLESS / Trojan / Shadowsocks）；用户管理可绑定节点 + 协议 + 规则集 + DNS，生成 Clash / Surge / sing-box / v2ray / SOCKS5 五种订阅链接。
+| **Gen 2（当前）** | **v2.7.2** | 控制中心：网卡 → 全量接管 → WAN 出口 | 把配置引擎的「接管全局」与网关中心的「总控设置」合并为 **网关中心 → 控制中心**（`/gateway/master`），按固定顺序编排：① 启动 NGG 虚拟网卡（TUN 默认名由 `ngg0` 改为 **NGG**，网卡名下拉**自动识别**本机已创建的虚拟网卡并可手输，旧网卡会在启动时清理其默认路由）② 强制接管全部网卡的全部流量（接口优先级 + 默认路由，`metric=0` 自动映射为 1，避免被 netsh 当作 automatic 而接管失败）③ WAN 出口选择物理网卡走本地运营商（`network.egress.interface` **即时生效**，无需重启引擎，同时回写 WAN 接口）；新增 `GET /gateway/control`、`POST /gateway/control/start|stop`、`GET /network/adapters`（含虚拟网卡识别与默认出口标记）；接管失败时 `master.enabled` 保持 false，不谎报已接管；原「接管全局」页面收敛为「高级诊断」（运行状态 / 会话 / 自检 / 原始配置） |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.1`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.2`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。

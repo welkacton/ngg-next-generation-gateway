@@ -112,7 +112,13 @@ func planCaptureFor(goos string, m Master, nexthop string) []command {
 	if name == "" {
 		return nil
 	}
+	// netsh interprets metric=0 on "set interface" as AUTOMATIC, which would
+	// hand the choice back to Windows and let the physical NIC win. Map 0 to 1
+	// so "highest priority" is a real, fixed number.
 	metric := m.AdapterMetric
+	if metric <= 0 {
+		metric = 1
+	}
 	switch goos {
 	case "windows":
 		cmds := []command{{
@@ -468,4 +474,39 @@ func interfaceForIP(ip net.IP) string {
 		}
 	}
 	return ""
+}
+
+// RevertStaleAdapter removes a captured default route and resets the interface
+// metric for an adapter that is NOT the currently configured one. It exists for
+// exactly one situation: the operator renames the TUN adapter (ngg0 -> NGG)
+// while an old capture route is still installed, which would otherwise keep
+// sending traffic into a dead adapter.
+//
+// It never panics and never claims success without verification: the returned
+// flag says "commands were executed", the text explains what happened.
+func (s *Store) RevertStaleAdapter(name string) (bool, string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, "适配器名为空"
+	}
+	if !interfaceExists(name) {
+		return false, fmt.Sprintf("适配器 %q 不存在，无需清理", name)
+	}
+	if runtime.GOOS != "windows" {
+		return false, fmt.Sprintf("本版只在 Windows 上自动清理接管；请手工执行 ip route del default dev %s", name)
+	}
+	if !isElevated() {
+		return false, fmt.Sprintf("未提权，无法清理旧接管：请以管理员执行 netsh interface ipv4 delete route 0.0.0.0/0 interface=%s", name)
+	}
+	nexthop := adapterIPv4(name)
+	cmds := planRevertFor(runtime.GOOS, Master{AdapterName: name, AdapterMetric: 0}, nexthop)
+	if len(cmds) == 0 {
+		return false, "没有可执行的清理命令"
+	}
+	for _, c := range cmds {
+		if out, err := exec.Command(c.bin, c.args...).CombinedOutput(); err != nil {
+			return false, fmt.Sprintf("%s 失败：%v（%s）", c.String(), err, summarizeOutput(string(out)))
+		}
+	}
+	return true, fmt.Sprintf("已清理旧网卡 %q 的默认路由并恢复接口优先级", name)
 }

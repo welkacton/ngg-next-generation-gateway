@@ -241,6 +241,28 @@ func (e *Engine) DetachTUN(ctx context.Context) error {
 	return nil
 }
 
+// ApplyEgress re-binds the physical uplink at runtime, so switching the WAN
+// interface in the Control Center takes effect without restarting the engine
+// (which would drop every live connection).
+func (e *Engine) ApplyEgress() error {
+	if !e.IsRunning() {
+		return ErrNotRunning
+	}
+	if err := e.egress.Bind("ngg-direct", e.cfg.Egress.Interface, e.cfg.Egress.Mark); err != nil {
+		return err
+	}
+	if e.cfg.Egress.BypassTUN {
+		for _, d := range e.registry.List() {
+			_ = e.egress.BypassTUN(d.ID)
+		}
+	}
+	e.emit("egress.applied", map[string]any{
+		"interface":  e.cfg.Egress.Interface,
+		"local_addr": e.cfg.Egress.LocalAddr,
+	})
+	return nil
+}
+
 // TUNStatus exposes the real adapter state (never a fabricated one).
 func (e *Engine) TUNStatus() map[string]any { return e.tun.Status() }
 

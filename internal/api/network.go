@@ -193,9 +193,27 @@ func (s *Server) handleNetworkConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		persisted = true
 	}
+	// Switching the physical uplink must take effect immediately: restarting
+	// the engine would drop every live session.
+	applied := false
+	if body.Egress != nil && ne.IsRunning() {
+		if err := ne.ApplyEgress(); err != nil {
+			warnings = append(warnings, "出口已保存，但运行时绑定失败："+err.Error())
+		} else {
+			applied = true
+			kept := needsRestart[:0]
+			for _, item := range needsRestart {
+				if item != "egress" && item != "egress.interface" && item != "egress.local_addr" {
+					kept = append(kept, item)
+				}
+			}
+			needsRestart = kept
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "changed": changed, "requires_restart": needsRestart,
-		"warnings": warnings, "persisted": persisted, "persist_path": persistPath, "config": cfg,
+		"warnings": warnings, "persisted": persisted, "persist_path": persistPath,
+		"egress_applied": applied, "config": cfg,
 	})
 }
 

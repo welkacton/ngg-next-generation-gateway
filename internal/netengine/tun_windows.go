@@ -81,7 +81,7 @@ func (t *TunDevice) Open(ctx context.Context, cfg TunConfig) error {
 
 	name := cfg.Name
 	if name == "" {
-		name = "ngg0"
+		name = "NGG"
 	}
 	mtu := cfg.MTU
 	if mtu <= 0 {

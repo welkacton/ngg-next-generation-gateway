@@ -381,6 +381,12 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/gateway/datapath/revert", s.handleGatewayDatapathRevert)
 	m.HandleFunc("POST /api/v1/gateway/master/split-rules", s.handleGatewaySplitRules)
 
+	// 控制中心：网卡 → 全量接管 → WAN 出口，按序真实执行
+	m.HandleFunc("GET /api/v1/network/adapters", s.handleAdapters)
+	m.HandleFunc("GET /api/v1/gateway/control", s.handleControlGet)
+	m.HandleFunc("POST /api/v1/gateway/control/start", s.handleControlStart)
+	m.HandleFunc("POST /api/v1/gateway/control/stop", s.handleControlStop)
+
 	// v2.7.0 · 远程代理节点与客户端接入（handler 自带注册表）。
 	if s.agents != nil {
 		s.agents.Register(m)

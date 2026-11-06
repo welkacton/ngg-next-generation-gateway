@@ -168,7 +168,7 @@ const menuOptions: MenuOption[] = [
     key: 'group-gateway',
     icon: menuIcon,
     children: [
-      { label: '总控设置', key: 'gateway-master', icon: menuIcon },
+      { label: '控制中心', key: 'gateway-master', icon: menuIcon },
       { label: 'WAN 设置', key: 'gateway-wan', icon: menuIcon },
       { label: 'LAN 设置', key: 'gateway-lan', icon: menuIcon },
       { label: 'DNS 设置', key: 'gateway-dns', icon: menuIcon },
@@ -199,7 +199,6 @@ const menuOptions: MenuOption[] = [
       { label: '协议配置', key: 'protocols', icon: menuIcon },
       { label: '规则配置', key: 'rules', icon: menuIcon },
       { label: 'DNS配置', key: 'dns', icon: menuIcon },
-      { label: '接管全局', key: 'network', icon: menuIcon },
       { label: '入口节点', key: 'inbound', icon: menuIcon },
       { label: '出口节点', key: 'outbound', icon: menuIcon },
       { label: '用户管理', key: 'users', icon: menuIcon },

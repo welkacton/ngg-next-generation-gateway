@@ -66,7 +66,7 @@ func DefaultConfig() Config {
 	return Config{
 		Enabled: true, FailClosed: true, Failover: true,
 		Ingress: IngressConfig{Enabled: true, Listen: "127.0.0.1", Port: 18080},
-		TUN:     TunConfig{Name: "ngg0", MTU: 1500, IPv4: "10.89.0.1/24", IPv6: "fd89::1/64", AutoRoute: runtime.GOOS == "linux", StrictRoute: true},
+		TUN:     TunConfig{Name: "NGG", MTU: 1500, IPv4: "10.89.0.1/24", IPv6: "fd89::1/64", AutoRoute: runtime.GOOS == "linux", StrictRoute: true},
 		DNS:     DNSConfig{Enabled: true, Listen: "127.0.0.1", Port: 18053, Upstreams: []string{"223.5.5.5:53", "119.29.29.29:53"}, CacheTTL: 60},
 		Egress:  EgressConfig{Enabled: true, BypassTUN: true, Mark: 0x4E47},
 	}

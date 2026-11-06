@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.6.3", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.7.2", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.6.3），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.7.2），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -738,3 +738,45 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 事件变更：内核崩溃恢复不再发 `system.alert`，改为 `core.state`（`payload.state=failed`、`payload.reason`），前端据此去重提示。
 
 启动行为变更：`POST /cores/{id}/start` 先执行 `<binary> version` 预检，并在启动后观察 3 秒；进程立刻退出时返回 409 风格错误并携带真实 stderr，不进入崩溃重启循环。端口与配置不一致且存在冲突时，启动前会按分配器端口改写配置（走备份 + 原生校验）。
+
+## 16. 控制中心 `/api/v1/gateway/control`（v2.7.2）
+
+「接管全局」与「总控设置」合并为一个按序编排的页面（网关中心 → 控制中心），
+接口也按同样的顺序返回三（或四）个步骤，状态全部来自真实探测：
+
+```
+① 启动 NGG 虚拟网卡  →  ② 强制接管全部流量  →  ③ WAN 出口（本地运营商）
+```
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/gateway/control` | 聚合状态：`master` / `datapath` / `tun` / `adapters` / `egress` / `wans` / `steps` / `stale_adapters` |
+| POST | `/gateway/control/start` | 按序执行：清理旧网卡 → 建卡 → 接管默认路由 → 绑定出口；逐步返回 `steps[]` |
+| POST | `/gateway/control/stop` | 反向执行：撤销默认路由 → 销毁网卡 → `master.enabled=false` |
+| GET | `/network/adapters` | 真实网卡列表：`virtual`（按系统描述识别 wintun/tap/tun/vpn…）、`is_ngg`、`default`（默认路由出口）、`ipv4` |
+| PUT | `/network/config` | `{egress:{interface}}` 现在**立即重绑定**（`egress_applied=true`），不再要求重启引擎 |
+
+`start` 的请求体（全部可选）：
+
+```json
+{
+  "adapter_name": "NGG",
+  "adapter_metric": 1,
+  "capture_all": true,
+  "bypass_private": true,
+  "auto_start": false,
+  "egress_interface": "以太网",
+  "wan_id": "wan1"
+}
+```
+
+行为约定（都已实现并有测试覆盖）：
+
+- TUN 网卡默认名是 **NGG**（旧版为 `ngg0`）；`adapter_name` 与 `network.tun.name` 会自动对齐，
+  改名时会先销毁旧网卡再重建。
+- 若检测到上次接管遗留的、仍在同一 TUN 网段上的网卡（`stale_adapters`），
+  `start` 会先删除其默认路由并禁用；未提权时给出可直接复制执行的命令。
+- 接口优先级 `0` 会被规范为 `1`：`netsh ... metric=0` 的含义是「自动」，会让物理网卡赢回默认路由。
+- 任一步骤失败时 `ok=false`，且 `master.enabled` 会回退为 `false`——开关不谎报未生效的接管。
+- `wan_id` 与 `egress_interface` 同时给出时，会把该接口回写到对应 WAN 配置，WAN 设置页与
+  控制中心描述同一个上行。

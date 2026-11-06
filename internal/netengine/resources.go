@@ -195,6 +195,9 @@ func (e *egressManager) Bind(coreID contracts.CoreID, iface string, mark int) er
 	e.mu.Lock()
 	e.binds[coreID] = Egress{Interface: iface, Mark: mark, Gateway: net.ParseIP(addr)}
 	e.mu.Unlock()
+	// Keep the OS-level pin in sync so a captured default route cannot loop
+	// the engine's own dials back into its tunnel.
+	bindEgressInterface(iface)
 	return nil
 }
 

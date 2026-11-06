@@ -2447,3 +2447,87 @@ export const saveUserSubscription = (
 ) => put<UserSubscription>(`/users/${encodeURIComponent(id)}/subscription`, payload)
 export const rotateUserSubscription = (id: string) =>
   post<UserSubscription>(`/users/${encodeURIComponent(id)}/subscription/rotate`)
+
+/* ------------------------------------------------------------------ *
+ * 控制中心 /gateway/control —— 网卡 → 全量接管 → WAN 出口
+ * ------------------------------------------------------------------ */
+
+export interface AdapterInfo {
+  name: string
+  index: number
+  mtu: number
+  up: boolean
+  loopback: boolean
+  ipv4: string[]
+  ipv6: string[]
+  virtual: boolean
+  is_ngg: boolean
+  default: boolean
+  detail: string
+}
+
+export interface AdapterListResult {
+  adapters: AdapterInfo[]
+  tun_name: string
+  default_source_ip: string
+}
+
+export interface ControlStep {
+  key: string
+  title: string
+  order: number
+  status: 'ok' | 'warn' | 'fail' | 'skip'
+  detail: string
+  hint?: string
+}
+
+export interface ControlCenterState {
+  stale_adapters: string[]
+  master: GatewayMaster
+  datapath: DatapathStatus
+  tun: {
+    adapter: TunAdapterStatus
+    capabilities: TunCapabilities
+    config_name: string
+  }
+  adapters: AdapterInfo[]
+  egress: { interface: string; local_addr: string; mark: number }
+  wans: GatewayWAN[]
+  steps: ControlStep[]
+  running: boolean
+}
+
+export interface ControlStartBody {
+  adapter_name?: string
+  adapter_metric?: number
+  capture_all?: boolean
+  bypass_private?: boolean
+  auto_start?: boolean
+  egress_interface?: string
+  wan_id?: string
+}
+
+export interface ControlRunResult {
+  ok: boolean
+  steps: ControlStep[]
+  master: GatewayMaster
+  datapath: DatapathResult
+  tun: TunAdapterStatus
+  adapters: AdapterInfo[]
+  warnings: string[]
+  egress: string
+  control: ControlCenterState | null
+}
+
+export const getControlCenter = () => get<ControlCenterState>('/gateway/control')
+export const listAdapters = () => get<AdapterListResult>('/network/adapters')
+export const startControl = (body: ControlStartBody) =>
+  post<ControlRunResult>('/gateway/control/start', body)
+export const stopControl = () =>
+  post<ControlRunResult & { master: GatewayMaster }>('/gateway/control/stop', {})
+
+/** 让 NGG 自身的出站走指定物理网卡（即时生效，无需重启网络引擎）。 */
+export const setEgressInterface = (iface: string) =>
+  put<{ ok: boolean; changed: string[]; config: NetworkConfig }>('/network/config', {
+    egress: { interface: iface },
+  })
