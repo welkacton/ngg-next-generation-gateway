@@ -250,7 +250,10 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	var active int
 	if ne := s.engine.Network(); ne != nil {
 		addr := strings.TrimSpace(node.Address)
-		for _, rec := range ne.Sessions().List(1000) {
+		// SessionRec embeds a sync.Mutex: iterate by index so we never copy it.
+		sessions := ne.Sessions().List(1000)
+		for i := range sessions {
+			rec := &sessions[i]
 			matched := false
 			if addr != "" {
 				if rec.Session.Src != nil && strings.Contains(rec.Session.Src.String(), addr) {
