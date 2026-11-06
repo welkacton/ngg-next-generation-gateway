@@ -156,6 +156,10 @@ async function save(): Promise<void> {
   if (saved) {
     config.value = saved.config
     syncFrom(saved.config)
+    // Declarative save: surface the honest limits instead of implying they took effect.
+    if (saved.warnings?.length) {
+      window.$message?.info(saved.warnings.slice(0, 2).join("；"), { duration: 6000 })
+    }
   }
 }
 

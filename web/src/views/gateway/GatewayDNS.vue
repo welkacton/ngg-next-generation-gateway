@@ -175,6 +175,10 @@ async function save(): Promise<void> {
   if (saved) {
     config.value = saved.config
     syncFrom(saved.config)
+    // Declarative save: surface the honest limits instead of implying they took effect.
+    if (saved.warnings?.length) {
+      window.$message?.info(saved.warnings.slice(0, 2).join("；"), { duration: 6000 })
+    }
   }
 }
 
@@ -186,7 +190,7 @@ onMounted(() => {
 <template>
   <div class="gw">
     <header class="gw-head">
-      <h2 class="gw-title">网关 DNS</h2>
+      <h2 class="gw-title">DNS 设置</h2>
       <div class="gw-head__ops">
         <NButton size="tiny" quaternary type="primary" :loading="loading" @click="load">刷新</NButton>
         <NButton size="tiny" type="primary" :loading="isBusy('save')" @click="save">保存</NButton>

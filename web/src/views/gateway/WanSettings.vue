@@ -127,11 +127,15 @@ function validate(): string | null {
     for (const dns of splitList(w.dnsText)) {
       if (!IPV4.test(dns)) return `${tag} DNS 地址无效：${dns}`
     }
+    const address = w.address.trim()
+    const gateway = w.gateway.trim()
+    if (address && !IPV4.test(address)) return `${tag} IP 地址格式无效`
+    if (gateway && !IPV4.test(gateway)) return `${tag} 默认网关格式无效`
     if (!w.enabled) continue
     if (!w.interface.trim()) return `${tag} 接口不能为空`
     if (w.mode === 'static') {
-      if (!IPV4.test(w.address.trim())) return `${tag} IP 地址格式无效`
-      if (!IPV4.test(w.gateway.trim())) return `${tag} 默认网关格式无效`
+      if (!address) return `${tag} 静态模式需填写 IP 地址`
+      if (!gateway) return `${tag} 静态模式需填写默认网关`
     }
     if (w.mode === 'pppoe') {
       if (!w.username.trim()) return `${tag} PPPoE 账号不能为空`
@@ -198,6 +202,10 @@ async function save(): Promise<void> {
   if (saved) {
     config.value = saved.config
     syncFrom(saved.config)
+    // Declarative save: surface the honest limits instead of implying they took effect.
+    if (saved.warnings?.length) {
+      window.$message?.info(saved.warnings.slice(0, 2).join("；"), { duration: 6000 })
+    }
   }
 }
 

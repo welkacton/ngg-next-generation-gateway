@@ -2025,6 +2025,14 @@ export interface GatewayInterfaceInfo {
   up: boolean
 }
 
+export interface GatewayWANLink {
+  id: string
+  interface: string
+  route: 'local' | 'proxy'
+  address: string
+  online: boolean
+}
+
 export interface GatewayStatus {
   interfaces: GatewayInterfaceInfo[]
   default_interface: string
@@ -2032,6 +2040,7 @@ export interface GatewayStatus {
   default_gateway: string
   dns: string[]
   firewall_active: boolean
+  wan_links?: GatewayWANLink[]
   checked_at: string
 }
 
