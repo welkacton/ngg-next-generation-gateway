@@ -32,6 +32,7 @@ const { isBusy, run } = useApiAction()
 
 /* 网络组件 / 配置概览：每个数据源独立抓取，单接口失败不影响其它卡片。 */
 const components = ref<NetworkComponent[]>([])
+const liveMetrics = ref<Record<string, unknown>>({})
 const engineRunning = ref<boolean | null>(null)
 const nodeCount = ref<number | null>(null)
 const ruleCount = ref<number | null>(null)
@@ -57,6 +58,7 @@ async function loadExtras(): Promise<void> {
     const s = results[0].value
     components.value = Array.isArray(s.components) ? s.components : []
     engineRunning.value = s.running === true
+    liveMetrics.value = (s.metrics ?? {}) as Record<string, unknown>
   }
   if (results[1].status === 'fulfilled') {
     const d = results[1].value
@@ -143,15 +145,6 @@ const inSparkArea = computed(() => sparkArea(rateInSeries.value))
 const outSparkArea = computed(() => sparkArea(rateOutSeries.value))
 
 const statusMap = computed<Record<string, any>>(() => (status.value ?? {}) as Record<string, any>)
-const ingressText = computed(() => {
-  const i = statusMap.value.ingress
-  return i && typeof i === 'object' ? String(i.address ?? '—') : '—'
-})
-const tunText = computed(() => {
-  const t = statusMap.value.tun
-  if (!t || typeof t !== 'object') return '未配置'
-  return t.active ? `已启用 · ${t.name ?? 'ngg0'}` : t.configured ? '已配置 · 未激活' : '未启用'
-})
 const endpointCount = computed(() => {
   const e = statusMap.value.endpoints
   return Array.isArray(e) ? e.length : 0
@@ -174,6 +167,26 @@ const flowRows = computed(() => {
     { label: '故障切换', value: intText(l?.failovers), tone: 'orange' },
   ]
 })
+
+const DROP_LABELS: Array<{ key: string; label: string; tone: string }> = [
+  { key: 'dial', label: '直连失败', tone: 'red' },
+  { key: 'no_kernel', label: '无可用内核', tone: 'orange' },
+  { key: 'blocked', label: '规则拦截', tone: 'red' },
+  { key: 'loop', label: '环路拒绝', tone: 'orange' },
+  { key: 'udp', label: 'UDP 不可代理', tone: 'blue' },
+  { key: 'session', label: '会话创建失败', tone: 'red' },
+  { key: 'rule', label: '规则错误', tone: 'red' },
+]
+
+/** 丢弃原因：只在有丢弃时展示，数值直接来自后端真实计数。 */
+const dropReasons = computed(() => {
+  const raw = (liveMetrics.value.drop_reasons ?? {}) as Record<string, number>
+  return DROP_LABELS
+    .map((r) => ({ ...r, value: Number(raw[r.key] ?? 0) }))
+    .filter((r) => r.value > 0)
+    .sort((a, b) => b.value - a.value)
+})
+const dropTotal = computed(() => dropReasons.value.reduce((sum, r) => sum + r.value, 0))
 
 const WINDOWS = [5, 15, 30]
 const MODES: Array<{ id: 'rate' | 'total' | 'connections'; label: string }> = [
@@ -397,6 +410,12 @@ onUnmounted(() => {
             <span class="netov-flow__value" :class="`tone-${row.tone}`">{{ row.value }}</span>
           </div>
         </div>
+        <div v-if="dropTotal > 0" class="netov-drop">
+          <span class="netov-drop__title">丢弃原因</span>
+          <span v-for="r in dropReasons" :key="r.key" class="netov-drop__item">
+            {{ r.label }}<b :class="`tone-${r.tone}`">{{ r.value.toLocaleString('zh-CN') }}</b>
+          </span>
+        </div>
       </div>
 
       <div class="netov-card">
@@ -411,8 +430,6 @@ onUnmounted(() => {
             <span>运行状态</span>
             <b :class="running ? 'is-on' : 'is-off'">{{ running ? '运行中' : '未运行' }}</b>
           </div>
-          <div class="netov-engine__row"><span>统一入口</span><b class="mono">{{ ingressText }}</b></div>
-          <div class="netov-engine__row"><span>TUN</span><b>{{ tunText }}</b></div>
           <div class="netov-engine__row"><span>会话数</span><b>{{ intText(sessionCount) }}</b></div>
           <div class="netov-engine__row"><span>内核端点</span><b>{{ intText(endpointCount) }}</b></div>
           <div class="netov-engine__row">
@@ -421,6 +438,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="netov-engine__note">
+          本卡只保留引擎级状态；统一入口与 TUN 的明细在下方「网络组件」。
           内核端点为 NGG Core Adapter Bridge 的真实连接目标；CPU / 内存等进程指标在「内核管理」查看。
         </div>
       </div>
@@ -432,28 +450,52 @@ onUnmounted(() => {
         <div class="netov-card__head">
           <div>
             <h3 class="netov-card__title">网络组件</h3>
-            <p class="netov-card__sub">GET /network/status · components</p>
+            <p class="netov-card__sub">可独立观测的 4 个数据面组件 · 点状态可刷新</p>
           </div>
-          <NSpace :size="6" align="center" :wrap="true">
-            <NTag size="small" :bordered="false" :type="engineRunning === true ? 'success' : 'default'">
+          <div class="netov-controls">
+            <button
+              type="button"
+              class="netov-state"
+              :class="{ 'is-on': engineRunning === true }"
+              title="点击刷新状态"
+              @click="refresh()"
+            >
+              <i class="netov-dot" />
               {{ engineRunning === null ? '状态未知' : (engineRunning ? '运行中' : '未运行') }}
-            </NTag>
-            <NButton size="tiny" :loading="isBusy('engine-start')" @click="toggleEngine('start')">启动引擎</NButton>
-            <NButton size="tiny" :loading="isBusy('engine-stop')" @click="toggleEngine('stop')">停止引擎</NButton>
+            </button>
+            <NButton
+              size="tiny"
+              type="primary"
+              :disabled="engineRunning !== false"
+              :loading="isBusy('engine-start')"
+              :title="engineRunning === true ? '引擎已在运行' : '启动统一网络引擎'"
+              @click="toggleEngine('start')"
+            >启动</NButton>
+            <NButton
+              size="tiny"
+              type="error"
+              secondary
+              :disabled="engineRunning !== true"
+              :loading="isBusy('engine-stop')"
+              :title="engineRunning === true ? '停止统一网络引擎' : '引擎未运行'"
+              @click="toggleEngine('stop')"
+            >停止</NButton>
             <NButton size="tiny" quaternary @click="go('network')">前往网络引擎 →</NButton>
-          </NSpace>
+          </div>
         </div>
         <div class="netov-components">
           <div v-for="c in components" :key="c.key" class="netov-component">
-            <span class="netov-component__label">{{ c.label }}</span>
-            <NSpace :size="6" align="center">
-              <NTag size="small" :bordered="false" :type="c.enabled ? 'info' : 'default'">
-                {{ c.enabled ? '已启用' : '未启用' }}
-              </NTag>
-              <NTag size="small" :bordered="false" :type="c.running ? 'success' : 'default'">
-                {{ c.running ? '运行中' : '未运行' }}
-              </NTag>
-            </NSpace>
+            <div class="netov-component__main">
+              <span class="netov-component__label">{{ c.label }}</span>
+              <span class="netov-component__desc">{{ c.description }}</span>
+            </div>
+            <NTag
+              size="small"
+              :bordered="false"
+              :type="c.running ? 'success' : (c.enabled ? 'info' : 'default')"
+            >
+              {{ c.running ? '运行中' : (c.enabled ? '已启用' : '未启用') }}
+            </NTag>
           </div>
           <div v-if="!components.length" class="netov-component__empty">—</div>
         </div>
@@ -843,8 +885,57 @@ onUnmounted(() => {
   font-size: 12.5px;
 }
 .netov-component:last-child { border-bottom: 0; }
+.netov-component__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .netov-component__label { color: #1d1d1f; font-weight: 500; }
+.netov-component__desc { color: #8e8e93; font-size: 10.5px; line-height: 1.35; }
 .netov-component__empty { padding: 9px 0; color: #8e8e93; font-size: 12.5px; }
+
+/* 组件卡右上角的可点击操作区：状态徽标可点刷新，启动/停止是真实按钮 */
+.netov-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.netov-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #e8e8ed;
+  background: #f5f5f7;
+  color: #6e6e73;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.netov-state:hover { background: #ededf0; border-color: #dcdce2; }
+.netov-state .netov-dot { width: 7px; height: 7px; background: #b0b0b8; }
+.netov-state.is-on {
+  background: #eaf7ef;
+  border-color: #cdebd8;
+  color: #1f7a3a;
+}
+.netov-state.is-on .netov-dot { background: #2fb457; }
+
+/* 丢弃原因：一句话把「丢包」拆开，数值全部来自后端真实计数 */
+.netov-drop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed #f0f0f2;
+  font-size: 10.5px;
+  color: #8e8e93;
+}
+.netov-drop__title { font-weight: 600; color: #6e6e73; }
+.netov-drop__item { display: inline-flex; align-items: center; gap: 4px; }
+.netov-drop__item b { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .netov-config { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .netov-config__item {

@@ -88,7 +88,39 @@ type Metrics struct {
 	Failovers     atomic.Int64
 	TUNPacketsIn  atomic.Uint64
 	TUNPacketsOut atomic.Uint64
-	StartedAt     time.Time
+	UDPFlows      atomic.Int64
+	// Why connections were dropped. Dropped stays the total, these break it
+	// down so "丢包 506" can be explained instead of guessed at.
+	DropBlocked  atomic.Int64
+	DropLoop     atomic.Int64
+	DropNoKernel atomic.Int64
+	DropDial     atomic.Int64
+	DropSession  atomic.Int64
+	DropRule     atomic.Int64
+	DropUDP      atomic.Int64
+	StartedAt    time.Time
+}
+
+// Drop records exactly one dropped connection, with its reason. Every reject
+// path goes through here so the total is never double counted.
+func (m *Metrics) Drop(reason string) {
+	m.Dropped.Add(1)
+	switch reason {
+	case "block":
+		m.DropBlocked.Add(1)
+	case "loop":
+		m.DropLoop.Add(1)
+	case "no_kernel":
+		m.DropNoKernel.Add(1)
+	case "session":
+		m.DropSession.Add(1)
+	case "rule":
+		m.DropRule.Add(1)
+	case "udp":
+		m.DropUDP.Add(1)
+	default: // "dial" and anything unexpected
+		m.DropDial.Add(1)
+	}
 }
 
 func (m *Metrics) Snapshot() map[string]any {
@@ -100,6 +132,13 @@ func (m *Metrics) Snapshot() map[string]any {
 		"dns_cache_hits": m.DNSCacheHits.Load(), "rule_matches": m.RuleMatches.Load(),
 		"kernel_errors": m.KernelErrors.Load(), "failovers": m.Failovers.Load(),
 		"tun_packets_in": m.TUNPacketsIn.Load(), "tun_packets_out": m.TUNPacketsOut.Load(),
+		"udp_flows": m.UDPFlows.Load(),
+		"drop_reasons": map[string]int64{
+			"blocked": m.DropBlocked.Load(), "loop": m.DropLoop.Load(),
+			"no_kernel": m.DropNoKernel.Load(), "dial": m.DropDial.Load(),
+			"session": m.DropSession.Load(), "rule": m.DropRule.Load(),
+			"udp": m.DropUDP.Load(),
+		},
 		"uptime_sec": int64(time.Since(m.StartedAt).Seconds()),
 	}
 }
@@ -185,4 +224,24 @@ func (s *StreamAdapterImpl) Stats() ConnectionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stats
+}
+
+// DropError carries the reason a connection was refused, so the caller can
+// count it once under the right bucket instead of guessing.
+type DropError struct {
+	Reason string
+	Err    error
+}
+
+func (e *DropError) Error() string { return e.Err.Error() }
+func (e *DropError) Unwrap() error { return e.Err }
+
+// DropReasonOf maps an error to a drop bucket. Anything unclassified is a dial
+// failure, which is what the majority of real-world rejects are.
+func DropReasonOf(err error) string {
+	var de *DropError
+	if errors.As(err, &de) {
+		return de.Reason
+	}
+	return "dial"
 }

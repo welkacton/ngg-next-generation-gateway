@@ -228,17 +228,30 @@ func installForwarders(
 
 // handleUDP relays DNS to the configured upstream and drops other UDP so a
 // tunnelled machine never silently leaks QUIC traffic around the proxy.
+// udpIdleTimeout closes a UDP flow that has been silent for this long. The old
+// code held every non-DNS flow for 30s doing nothing, which leaked one gVisor
+// endpoint per QUIC attempt until the stack ran out.
+const udpIdleTimeout = 90 * time.Second
+
 func (t *TunDevice) handleUDP(conn *gonet.UDPConn, id stack.TransportEndpointID) {
+	if id.LocalPort == 53 {
+		t.handleDNSUDP(conn, id)
+		return
+	}
+	t.relayUDP(conn, id)
+}
+
+// handleDNSUDP forwards a DNS query to the configured upstream. The upstream
+// dial goes through the engine's pinned egress dialer (see dialer()), otherwise
+// the query would be routed back into this very tunnel.
+func (t *TunDevice) handleDNSUDP(conn *gonet.UDPConn, id stack.TransportEndpointID) {
 	defer conn.Close()
 	buf := make([]byte, 4096)
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		n, err := conn.Read(buf)
 		if err != nil || n == 0 {
 			return
-		}
-		if id.LocalPort != 53 {
-			continue
 		}
 		upstream := "223.5.5.5:53"
 		if t.engine != nil {
@@ -256,9 +269,102 @@ func (t *TunDevice) handleUDP(conn *gonet.UDPConn, id stack.TransportEndpointID)
 	}
 }
 
+// relayUDP carries a real UDP flow (QUIC, HTTP/3, game traffic, …) instead of
+// silently swallowing it.
+//
+// Silently dropping was expensive: browsers open QUIC first, wait for their
+// handshake timeout, then fall back to TCP — seconds of perceived latency and
+// retransmissions that look exactly like packet loss. A single userspace UDP
+// relay costs one socket and keeps the flow working.
+//
+// The decision still comes from the dispatcher: only DIRECT flows are relayed.
+// Proxied UDP needs SOCKS5 UDP ASSOCIATE, which this build does not implement,
+// so those flows are closed immediately (a fast, explicit refusal makes the
+// client fall back to TCP at once rather than time out).
+func (t *TunDevice) relayUDP(conn *gonet.UDPConn, id stack.TransportEndpointID) {
+	defer conn.Close()
+	host := id.LocalAddress.String()
+	port := int(id.LocalPort)
+	dst := net.JoinHostPort(host, strconv.Itoa(port))
+
+	if t.engine != nil {
+		decision, err := t.engine.dispatcher.Decide(context.Background(), Session{
+			Network: "udp", Dst: &net.UDPAddr{IP: net.ParseIP(host), Port: port},
+			CreatedAt: time.Now().UTC(),
+		})
+		switch {
+		case err != nil:
+			t.engine.metrics.Drop("rule")
+			return
+		case decision.Block:
+			t.engine.metrics.Drop("block")
+			return
+		case !decision.Direct:
+			t.engine.metrics.Drop("udp")
+			return
+		}
+	}
+
+	upstream, err := t.dialer().Dial("udp", dst)
+	if err != nil {
+		if t.engine != nil {
+			t.engine.metrics.Drop("dial")
+		}
+		return
+	}
+	defer upstream.Close()
+	if t.engine != nil {
+		t.engine.metrics.UDPFlows.Add(1)
+	}
+
+	var once sync.Once
+	shut := func() {
+		once.Do(func() {
+			_ = conn.Close()
+			_ = upstream.Close()
+		})
+	}
+
+	go func() { // client -> upstream (upload)
+		buf := make([]byte, 65535)
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(udpIdleTimeout))
+			n, err := conn.Read(buf)
+			if err != nil {
+				shut()
+				return
+			}
+			if _, err := upstream.Write(buf[:n]); err != nil {
+				shut()
+				return
+			}
+			if t.engine != nil {
+				t.engine.metrics.BytesOut.Add(uint64(n))
+			}
+		}
+	}()
+
+	buf := make([]byte, 65535)
+	for { // upstream -> client (download)
+		_ = upstream.SetReadDeadline(time.Now().Add(udpIdleTimeout))
+		n, err := upstream.Read(buf)
+		if err != nil {
+			shut()
+			return
+		}
+		if _, err := conn.Write(buf[:n]); err != nil {
+			shut()
+			return
+		}
+		if t.engine != nil {
+			t.engine.metrics.BytesIn.Add(uint64(n))
+		}
+	}
+}
+
 // dialer returns the engine's pinned egress dialer. Using a plain net.Dial
 // here would be a trap: once the default route points at the TUN, an unpinned
-// socket sends the DNS query straight back into the tunnel, whose only handler
+// socket sends the packet straight back into the tunnel, whose only handler
 // dials again — an endless loop and no name resolution at all.
 func (t *TunDevice) dialer() *net.Dialer {
 	const fallback = 4 * time.Second

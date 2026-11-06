@@ -348,12 +348,12 @@ func (e *Engine) HandleTCP(ctx context.Context, client net.Conn, req ConnRequest
 	}
 	if e.tenants != nil && req.TenantID != "" {
 		if !e.tenants.Allowed(req.TenantID, RouteDecision{}) {
-			return e.reject(req, fmt.Errorf("tenant %q is not allowed", req.TenantID))
+			return e.reject(req, &DropError{Reason: "session", Err: fmt.Errorf("tenant %q is not allowed", req.TenantID)})
 		}
 	}
 	id, err := e.sessions.Create(ctx, sess)
 	if err != nil {
-		return e.reject(req, err)
+		return e.reject(req, &DropError{Reason: "session", Err: err})
 	}
 	defer e.sessions.Close(id)
 	rec, _ := e.sessions.Get(id)
@@ -364,7 +364,7 @@ func (e *Engine) HandleTCP(ctx context.Context, client net.Conn, req ConnRequest
 		err = e.pluginHook.OnSession(ctx, &sess, &decision)
 	}
 	if err != nil {
-		return e.reject(req, err)
+		return e.reject(req, &DropError{Reason: "rule", Err: err})
 	}
 	if e.pluginHook != nil {
 		_ = e.pluginHook.OnDNS(ctx, req.Domain)
@@ -408,8 +408,10 @@ func (e *Engine) openWithDecision(ctx context.Context, sess Session, d RouteDeci
 	return e.dispatcher.OpenWithDecision(ctx, sess, d, dst)
 }
 
+// reject is the single place a failed connection is counted, so Dropped can
+// never be incremented twice for the same session (it used to be).
 func (e *Engine) reject(req ConnRequest, err error) error {
-	e.metrics.Dropped.Add(1)
+	e.metrics.Drop(DropReasonOf(err))
 	e.emit("session.rejected", map[string]any{"dst": req.Dst, "error": err.Error()})
 	if req.OnEstablished != nil {
 		_ = req.OnEstablished(false, err)
@@ -467,6 +469,13 @@ func (e *Engine) relay(client, upstream net.Conn, rec *SessionRec) {
 
 // Component is one row of the "take over globally" capability matrix.
 // Enabled reflects configuration; Running reflects the REAL runtime state.
+// Component describes one independently observable part of the data path.
+//
+// Only things that actually exist as a resource are listed here: ingress, DNS,
+// TUN and the egress pin. The old list also contained four *policies*
+// (口 fail-closed / failover / direct-on-failure / bypass-TUN) which cannot be
+// started or stopped on their own and were already shown as 「安全策略」 in the
+// engine card — keeping them here duplicated the same state twice.
 type Component struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
@@ -475,36 +484,34 @@ type Component struct {
 	Description string `json:"description"`
 }
 
-// Components returns all eight capability keys in a stable order. The four
-// policy keys take effect immediately; the four component keys are owned by
-// resources that only (re)start with the engine, so a toggle can never claim
-// to have started or stopped them at runtime.
 func (e *Engine) Components() []Component {
 	e.mu.RLock()
 	running, tunStarted := e.running, e.tunStarted
 	e.mu.RUnlock()
 	cfg := e.cfg
+
+	egressEnabled := running
+	egressDetail := "跟随引擎运行；未指定 WAN 时使用系统默认路由"
+	if cfg.Egress.Interface != "" {
+		egressDetail = "已绑定物理网卡 " + cfg.Egress.Interface + "（NGG 自身拨号不走 TUN）"
+	}
+	tunEnabled := tunStarted || cfg.TUN.AutoRoute
+	tunDetail := "虚拟网卡未创建；在「控制中心」一键启动"
+	if tunStarted {
+		tunDetail = "网卡 " + cfg.TUN.Name + " 已创建，流量进入统一调度器"
+	}
 	return []Component{
 		{Key: "ingress", Label: "统一入口 Ingress", Enabled: cfg.Ingress.Enabled, Running: e.ingress.IsRunning(),
-			Description: "SOCKS5 / SOCKS4a / HTTP CONNECT 本地统一入口；启停需重启网络引擎"},
+			Description: "SOCKS5 / SOCKS4a / HTTP CONNECT 本地入口"},
 		{Key: "dns", Label: "DNS 引擎", Enabled: cfg.DNS.Enabled, Running: e.dnsEngine.IsRunning(),
-			Description: "NGG 自有 DNS 解析与 hosts/缓存；启停需重启网络引擎"},
-		{Key: "tun", Label: "TUN 全局接管", Enabled: cfg.TUN.AutoRoute, Running: tunStarted,
-			Description: "系统 TUN 与自动路由（Linux 需 /dev/net/tun 与 CAP_NET_ADMIN）；启停需重启"},
-		{Key: "egress", Label: "出口调度 Egress", Enabled: cfg.Egress.Enabled, Running: running,
-			Description: "统一出口绑定与链路调度；启停需重启网络引擎"},
-		{Key: "fail_closed", Label: "故障保护（断连不泄漏）", Enabled: cfg.FailClosed, Running: running,
-			Description: "无可用执行路径时丢弃连接、绝不泄漏；策略类，切换立即生效"},
-		{Key: "failover", Label: "内核故障自动切换", Enabled: cfg.Failover, Running: running,
-			Description: "内核异常时自动切换到健康内核；策略类，切换立即生效"},
-		{Key: "direct_on_failure", Label: "故障直连", Enabled: cfg.DirectOnFailure, Running: running,
-			Description: "内核全部不可用时降级为直连；策略类，切换立即生效"},
-		{Key: "bypass_tun", Label: "绕过 TUN", Enabled: cfg.Egress.BypassTUN, Running: running,
-			Description: "内核流量绕过 NGG TUN 直出以避免回环；策略类，切换立即生效"},
+			Description: "NGG 自有 DNS 解析、hosts 与缓存"},
+		{Key: "tun", Label: "TUN 虚拟网卡", Enabled: tunEnabled, Running: tunStarted,
+			Description: tunDetail},
+		{Key: "egress", Label: "出口调度 Egress", Enabled: egressEnabled, Running: running,
+			Description: egressDetail},
 	}
 }
 
-// Status is exposed by /api/v1/network/status.
 func (e *Engine) Status() map[string]any {
 	e.mu.RLock()
 	running, tunStarted := e.running, e.tunStarted

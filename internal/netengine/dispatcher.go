@@ -72,18 +72,13 @@ func (d *protocolDispatcher) Open(ctx context.Context, s Session, dst string) (n
 func (d *protocolDispatcher) OpenWithDecision(ctx context.Context, s Session, decision RouteDecision, dst string) (net.Conn, RouteDecision, error) {
 	var err error
 	if decision.Block {
-		if d.metrics != nil {
-			d.metrics.Dropped.Add(1)
-		}
-		return nil, decision, fmt.Errorf("%w: rule rejected the connection", ErrFailClosed)
+		// Counting happens once, in Engine.reject(), so the total is honest.
+		return nil, decision, &DropError{Reason: "block", Err: fmt.Errorf("%w: rule rejected the connection", ErrFailClosed)}
 	}
 	if d.resources != nil {
 		if addr, err := net.ResolveTCPAddr("tcp", dst); err == nil {
 			if err := d.resources.AssertNoLoop(decision.CoreID, addr); err != nil {
-				if d.metrics != nil {
-					d.metrics.Dropped.Add(1)
-				}
-				return nil, decision, err
+				return nil, decision, &DropError{Reason: "loop", Err: err}
 			}
 		}
 	}
@@ -100,10 +95,7 @@ func (d *protocolDispatcher) OpenWithDecision(ctx context.Context, s Session, de
 
 	candidates := d.candidates(decision)
 	if len(candidates) == 0 {
-		if d.metrics != nil {
-			d.metrics.Dropped.Add(1)
-		}
-		return nil, decision, fmt.Errorf("%w: no kernel candidate available", ErrFailClosed)
+		return nil, decision, &DropError{Reason: "no_kernel", Err: fmt.Errorf("%w: no kernel candidate available", ErrFailClosed)}
 	}
 	var lastErr error
 	for i, id := range candidates {
@@ -126,7 +118,6 @@ func (d *protocolDispatcher) OpenWithDecision(ctx context.Context, s Session, de
 	}
 	if d.metrics != nil {
 		d.metrics.KernelErrors.Add(1)
-		d.metrics.Dropped.Add(1)
 	}
 	if d.cfg.DirectOnFailure && !d.cfg.FailClosed {
 		// Explicit, opt-in leak path. Default is Fail-Closed (no DIRECT leak).
@@ -140,7 +131,7 @@ func (d *protocolDispatcher) OpenWithDecision(ctx context.Context, s Session, de
 	if lastErr == nil {
 		lastErr = ErrKernelDown
 	}
-	return nil, decision, fmt.Errorf("%w: %v", ErrFailClosed, lastErr)
+	return nil, decision, &DropError{Reason: "no_kernel", Err: fmt.Errorf("%w: %v", ErrFailClosed, lastErr)}
 }
 
 func (d *protocolDispatcher) candidates(decision RouteDecision) []contracts.CoreID {

@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.7.4
+### 🏷️ Generation 2 / 第二代 · Release v2.7.5
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -30,12 +30,12 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.6.4 | 规则集 / 接管全局 / DNS / 节点 / 链路编排 / 极简风 | 在 v2.6.3（登录门禁、链路编排、真 TUN、主机控制台、网络概览）之上：规则配置支持 GitHub 来源自定义增删、执行内核下拉、规则单条/多选/全选/全部删除、按三内核官方语法可视化新增规则集；接管全局状态可读化 + 八项组件逐项开关 + 默认内核可选；DNS 按三内核官方语法重布局；节点新增配置文件、采集数据、密钥配对、连通探测；链路承载内核显示全部内核；全站统一关闭说明文字层；网络概览增加组件状态、引擎启停、配置计数与快捷跳转 |
 | Gen 2 增补 | v2.7.1 | 总控启用 / 内核可靠性 / VPS 节点 / 用户订阅 | 总控「应用接管」改为一步「保存并接管」，不再因 master.enabled=false 空转；内核启动增加预检（`<binary> version`）与 3 秒快速失败，崩溃提示改为 `core.state` 且去重，端口与配置漂移时自动校准（备份 + 原生校验），内核管理新增诊断面板（二进制 / 版本 / 配置 / 端口占用 / 日志）；节点新增「部署到 VPS」一键脚本（VLESS / Trojan / Shadowsocks）；用户管理可绑定节点 + 协议 + 规则集 + DNS，生成 Clash / Surge / sing-box / v2ray / SOCKS5 五种订阅链接。
 | Gen 2 增补 | v2.7.2 | 控制中心：网卡 → 全量接管 → WAN 出口 | 把配置引擎的「接管全局」与网关中心的「总控设置」合并为 **网关中心 → 控制中心**（`/gateway/master`），按固定顺序编排：① 启动 NGG 虚拟网卡（TUN 默认名由 `ngg0` 改为 **NGG**，网卡名下拉**自动识别**本机已创建的虚拟网卡并可手输，旧网卡会在启动时清理其默认路由）② 强制接管全部网卡的全部流量（接口优先级 + 默认路由，`metric=0` 自动映射为 1，避免被 netsh 当作 automatic 而接管失败）③ WAN 出口选择物理网卡走本地运营商（`network.egress.interface` **即时生效**，无需重启引擎，同时回写 WAN 接口）；新增 `GET /gateway/control`、`POST /gateway/control/start|stop`、`GET /network/adapters`（含虚拟网卡识别与默认出口标记）；接管失败时 `master.enabled` 保持 false，不谎报已接管；原「接管全局」页面收敛为「高级诊断」（运行状态 / 会话 / 自检 / 原始配置） |
-| **Gen 2（当前）** | **v2.7.4** | 修复 TUN 只收不发 + 紧凑流量面板 | **根因修复**：Windows TUN 的写回协程用 `channel.Endpoint.Read()`（非阻塞，空队列立即返回 nil），启动瞬间就退出，导致网卡只收不发（「已发送 16 MB / 已接收 0」、浏览器超时）。改为 `ReadContext` 后 TCP/UDP 回包真实写回网卡，并新增注入真实 IP 包的数据面回归测试（旧代码必失败）；TUN 内 DNS 改走引擎固定网卡的出口拨号器，避免接管默认路由后 DNS 查询绕回自身形成环路；**接管幂等**：`netsh add route` 返回「对象已存在」不再判定为失败（撤销时「找不到元素」同样按成功处理），「一键启动」不会因路由已存在而中断；**流量面板**按需求收紧（速率区 18px、迷你图 20px、趋势图固定 148px），坐标轴整轴统一单位并支持小数，不再出现「1 B/s / 1 B/s / 1 B/s」重复刻度；`/network/metrics/history` 新增 `source/tun_open/tun_bytes_*/tun_rate_*`，虚拟网卡在线时图表与速率直接读取**网卡级真实收发字节**（整机流量），未创建时回落到会话计数，界面明确标注数据源；**速率与趋势改为 1:1 两等分短卡**（各 50%、高 208px、画布 118px）；**发布收敛为 Windows 独占**：工作流改为 `windows-latest` 单作业，只产出 `NGG-Setup-*.exe` / `NGG-Core-*.exe` / `NGG-Agent-*.exe` 与 `SHA256SUMS`，不再构建 Linux/macOS/FreeBSD，也不再产出 zip/tar.gz，发布前一旦发现非 `.exe` 资产即中止 |
+| Gen 2 增补 | v2.7.4 | 修复 TUN 只收不发 + 紧凑流量面板 | **根因修复**：Windows TUN 的写回协程用 `channel.Endpoint.Read()`（非阻塞，空队列立即返回 nil），启动瞬间就退出，导致网卡只收不发（「已发送 16 MB / 已接收 0」、浏览器超时）。改为 `ReadContext` 后 TCP/UDP 回包真实写回网卡，并新增注入真实 IP 包的数据面回归测试（旧代码必失败）；TUN 内 DNS 改走引擎固定网卡的出口拨号器，避免接管默认路由后 DNS 查询绕回自身形成环路；**接管幂等**：`netsh add route` 返回「对象已存在」不再判定为失败（撤销时「找不到元素」同样按成功处理），「一键启动」不会因路由已存在而中断；**流量面板**按需求收紧（速率区 18px、迷你图 20px、趋势图固定 148px），坐标轴整轴统一单位并支持小数，不再出现「1 B/s / 1 B/s / 1 B/s」重复刻度；`/network/metrics/history` 新增 `source/tun_open/tun_bytes_*/tun_rate_*`，虚拟网卡在线时图表与速率直接读取**网卡级真实收发字节**（整机流量），未创建时回落到会话计数，界面明确标注数据源；**速率与趋势改为 1:1 两等分短卡**（各 50%、高 208px、画布 118px）；**发布收敛为 Windows 独占**：工作流改为 `windows-latest` 单作业，只产出 `NGG-Setup-*.exe` / `NGG-Core-*.exe` / `NGG-Agent-*.exe` 与 `SHA256SUMS`，不再构建 Linux/macOS/FreeBSD，也不再产出 zip/tar.gz，发布前一旦发现非 `.exe` 资产即中止 |
+| **Gen 2（当前）** | **v2.7.5** | 数据面性能与丢包归因 | **UDP 不再静默丢弃**：TUN 里的非 53 UDP（QUIC / HTTP-3）改为用户态双向中继（空闲 90s 回收），只有需要代理的 UDP 才立即关闭——旧实现让每个 QUIC 流空占 30 秒 endpoint，浏览器因此等 QUIC 超时，表现为「延迟高、丢包」；**丢弃计数不再重复累加**（dispatcher 与 reject 各记一次导致显示约两倍），新增 `drop_reasons` 按原因拆解、`udp_flows` 统计真实中继流，界面在「连接与策略」直接列出直连失败 / 无可用内核 / 规则拦截等；**网络组件卡收敛为 4 个真实组件**（Ingress / DNS / TUN / Egress，带说明与状态），删除与「统一网络引擎 → 安全策略」重复的 4 条策略行；状态徽标可点击刷新，启动 / 停止改为真实按钮并按引擎状态禁用 |标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
 
-代际沿革与判定
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.4`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.7.5`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。

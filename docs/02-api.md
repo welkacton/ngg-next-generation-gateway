@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.7.4", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.7.5", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.7.4），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.7.5），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -640,8 +640,14 @@ DNS 解析也走引擎的出口拨号器：接管默认路由后，未绑定网�
 形成「查询 → 进隧道 → 再查询」的死循环。`TunDevice.dialer()` 复用 `egress.Dialer()` 的
 `IP_UNICAST_IF` 绑定，确保查询从物理网卡发出。
 
-UDP 处理策略：`53/tcp` 之外的 UDP 默认丢弃（TCP-only 调度器无法代理，直发又会绕过隧道），
-DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可用。
+UDP 处理策略（v2.7.5 改）：**不再静默丢弃**。
+
+- `:53` → 交给 `network.dns.upstreams[0]`，走固定网卡的出口拨号器。
+- 其它 UDP（QUIC / HTTP-3 / 游戏）→ 先问调度器，`DIRECT` 决策**直接做用户态 UDP 转发**
+  （一条 socket 双向中继，空闲 90s 回收），并计入 `udp_flows` 与字节计数。
+- 只有被判定为需要代理的 UDP 才会立刻关闭（本版未实现 SOCKS5 UDP ASSOCIATE）。
+  立刻关闭而不是挂 30 秒，是为了让浏览器马上回落到 TCP，而不是等 QUIC 超时——
+  旧实现每个非 DNS 流都空占一个 gVisor endpoint 30 秒，正是「延迟高、像丢包」的来源之一。
 
 ---
 
@@ -653,7 +659,7 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 | POST | `/network/rules/delete` | 规则批量删除 `{ids, all}`，返回剩余规则与删除数 |
 | GET | `/rulesets/syntax` | 三内核官方规则集字段 schema 与示例 |
 | GET | `/profiles/dns-schema` | 三内核官方 DNS 字段 schema 与示例 |
-| POST | `/network/components/toggle` | 八项网络组件 / 策略逐项开关，组件类返回 `requires_restart` |
+| POST | `/network/components/toggle` | 八项键位逐项开关（4 个组件 + 4 个策略），组件类返回 `requires_restart`；`GET /network/status.components` 自 v2.7.5 起只列 4 个真实组件 |
 | GET / POST / PUT | `/nodes/{id}/metrics`、`/nodes/keys/generate`、`/nodes/keys/pair`、`/nodes/{id}/probe`、`/nodes/{id}/config-file` | 节点采集、密钥生成配对、真实 TCP 探测、配置文件 |
 
 `GET /network/status` 增加 `default_core`、`direct_on_failure`、`bypass_tun` 与 `components`；`PUT /network/config` 对 `default_core` 做注册表白名单校验。
@@ -804,3 +810,22 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 - 任一步骤失败时 `ok=false`，且 `master.enabled` 会回退为 `false`——开关不谎报未生效的接管。
 - `wan_id` 与 `egress_interface` 同时给出时，会把该接口回写到对应 WAN 配置，WAN 设置页与
   控制中心描述同一个上行。
+
+## 17. 数据面性能与丢包归因（v2.7.5）
+
+`GET /api/v1/network/status` 的 `metrics` 新增：
+
+| 字段 | 说明 |
+| --- | --- |
+| `drop_reasons` | 丢弃连接按原因拆分：`dial` 直连失败 / `no_kernel` 无可用内核 / `blocked` 规则拦截 / `loop` 环路拒绝 / `udp` UDP 不可代理 / `session` 会话创建失败 / `rule` 规则错误 |
+| `udp_flows` | 已建立的 UDP 中继流数量（TUN 直连 UDP，含 QUIC） |
+
+**为什么之前的「丢弃连接」是虚高的**：`protocolDispatcher` 与 `Engine.reject()` 都会给同一个失败会话
+`Dropped.Add(1)`，控制台因此显示约两倍于真实值的丢包。现在只在 `reject()` 计数一次，
+并用 `DropError{Reason}` 把原因带出来，界面在「连接与策略」里按原因列出。
+
+TUN 数据面的其它调整：
+
+- 只有 `DIRECT` 的 UDP 会被中继；需要代理的 UDP 立即关闭（见 §15）。
+- `udp_flows` 为空闲 90 秒回收的流，不再让每个 QUIC 尝试空占 30 秒。
+- 连接失败时 `DropError` 会带上具体阶段，便于区分「规则拦的」和「拨号失败的」。

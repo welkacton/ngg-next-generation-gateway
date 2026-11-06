@@ -87,14 +87,15 @@ func TestNetworkStatusReportsCapabilityMatrix(t *testing.T) {
 			t.Errorf("status missing new field %q", k)
 		}
 	}
+	// v2.7.5: only real, independently observable resources are listed. The
+	// four policy keys (fail_closed / failover / direct_on_failure / bypass_tun)
+	// were removed: they cannot be started or stopped on their own and are
+	// already reported as 安全策略 by the engine card.
 	components, ok := status["components"].([]any)
-	if !ok || len(components) != 8 {
-		t.Fatalf("components should be 8 rows, got %T %v", status["components"], status["components"])
+	if !ok || len(components) != 4 {
+		t.Fatalf("components should be 4 rows, got %T %v", status["components"], status["components"])
 	}
-	wantKeys := map[string]bool{
-		"ingress": true, "dns": true, "tun": true, "egress": true,
-		"fail_closed": true, "failover": true, "direct_on_failure": true, "bypass_tun": true,
-	}
+	wantKeys := map[string]bool{"ingress": true, "dns": true, "tun": true, "egress": true}
 	for _, raw := range components {
 		row, ok := raw.(map[string]any)
 		if !ok {
