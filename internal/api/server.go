@@ -43,6 +43,8 @@ type Server struct {
 	auth         *auth.Store
 	pipeline     *pipeline.Store
 	gateway      *gateway.Store
+	agents       *agentHandlers
+	clients      *clientHandlers
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -73,6 +75,14 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 	// API and the persisted file can never drift apart.
 	if eng != nil {
 		s.gateway = eng.Gateway()
+		// 远程代理节点 / 客户端接入 also live in Core Manager, so the public
+		// agent listener and these admin routes see exactly the same records.
+		s.agents = newAgentHandlers(eng.Agents(), eng.AgentServerConfig())
+		s.clients = newClientHandlers(eng.Clients())
+		if s.agents != nil && s.agents.cfg != nil {
+			// 订阅地址优先用「对外地址」；为空时由 handler 退回相对路径。
+			s.clients.SetSubscriptionBase(s.agents.cfg.PublicBase)
+		}
 	}
 	// User-defined GitHub rule sources live beside the cached catalogs. A
 	// read failure must not take down the control plane; built-ins stay usable.
@@ -338,6 +348,23 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/sdwan/{action}", s.handleSDWANAction)
 	m.HandleFunc("GET /api/v1/platforms", s.handlePlatforms)
 	m.HandleFunc("POST /api/v1/platforms/build", s.handlePlatformBuild)
+
+	// v2.7.0 · 网关总控：虚拟网卡接管 + 智能分流 + 上行绑定。
+	// apply/revert 只在 Windows 提权时真正执行命令，其它情况原样返回命令。
+	m.HandleFunc("GET /api/v1/gateway/master", s.handleGatewayMasterGet)
+	m.HandleFunc("PUT /api/v1/gateway/master", s.handleGatewayMasterPut)
+	m.HandleFunc("GET /api/v1/gateway/datapath", s.handleGatewayDatapath)
+	m.HandleFunc("POST /api/v1/gateway/datapath/apply", s.handleGatewayDatapathApply)
+	m.HandleFunc("POST /api/v1/gateway/datapath/revert", s.handleGatewayDatapathRevert)
+	m.HandleFunc("POST /api/v1/gateway/master/split-rules", s.handleGatewaySplitRules)
+
+	// v2.7.0 · 远程代理节点与客户端接入（handler 自带注册表）。
+	if s.agents != nil {
+		s.agents.Register(m)
+	}
+	if s.clients != nil {
+		s.clients.Register(m)
+	}
 
 	m.HandleFunc("/", s.handleStatic)
 }

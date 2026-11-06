@@ -21,6 +21,18 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'WAN 设置' },
   },
   {
+    path: '/gateway/master',
+    name: 'gateway-master',
+    component: () => import('../views/gateway/MasterControl.vue'),
+    meta: { title: '总控设置' },
+  },
+  {
+    path: '/clients',
+    name: 'client-access',
+    component: () => import('../views/ClientAccess.vue'),
+    meta: { title: '客户端接入' },
+  },
+  {
     path: '/gateway/lan',
     name: 'gateway-lan',
     component: () => import('../views/gateway/LanSettings.vue'),

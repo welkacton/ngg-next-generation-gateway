@@ -26,6 +26,8 @@ interface WanDraft {
   route: GatewayWAN['route']
   weight: number | null
   priority: number | null
+  /** route=proxy 时绑定的链路编排；空 = 默认链路 */
+  pipelineId: string
 }
 
 const MODES: Array<{ id: GatewayWAN['mode']; label: string }> = [
@@ -48,6 +50,10 @@ const status = ref<GatewayStatus | null>(null)
 const list = ref<WanDraft[]>([])
 const loading = ref(false)
 const editingId = ref<string | null>(null)
+/** 链路编排下拉：当前仓库只有一条可执行链路，但接口允许按 ID 绑定。 */
+const pipelineOptions = ref<Array<{ label: string; value: string }>>([
+  { label: '默认链路', value: '' },
+])
 
 const interfaces = computed(() => status.value?.interfaces ?? [])
 const interfaceOptions = computed(() =>
@@ -92,6 +98,7 @@ function toDraft(w: GatewayWAN): WanDraft {
     route: w.route === 'proxy' ? 'proxy' : 'local',
     weight: typeof w.weight === 'number' && w.weight > 0 ? w.weight : 1,
     priority: typeof w.priority === 'number' && w.priority > 0 ? w.priority : 1,
+    pipelineId: w.pipeline_id ?? '',
   }
 }
 
@@ -160,6 +167,7 @@ function toPayload(w: WanDraft): GatewayWAN {
     route: w.route,
     weight: Number(w.weight),
     priority: Number(w.priority),
+    pipeline_id: w.pipelineId.trim(),
   }
   if (w.mode === 'pppoe') {
     item.username = w.username.trim()
@@ -172,7 +180,17 @@ function toPayload(w: WanDraft): GatewayWAN {
 async function load(): Promise<void> {
   loading.value = true
   try {
-    const [cfg, st] = await Promise.allSettled([api.getGatewayConfig(), api.getGatewayStatus()])
+    const [cfg, st, pipe] = await Promise.allSettled([
+      api.getGatewayConfig(),
+      api.getGatewayStatus(),
+      api.getPipeline(),
+    ])
+    if (pipe.status === 'fulfilled' && pipe.value?.config?.id) {
+      pipelineOptions.value = [
+        { label: '默认链路', value: '' },
+        { label: pipe.value.config.name || pipe.value.config.id, value: pipe.value.config.id },
+      ]
+    }
     if (cfg.status === 'fulfilled') {
       config.value = cfg.value.config
       syncFrom(cfg.value.config)
@@ -342,6 +360,15 @@ onMounted(() => {
                   @click="w.route = r.id"
                 >{{ r.label }}</button>
               </div>
+            </div>
+            <div v-if="w.route === 'proxy'" class="field span-2">
+              <div class="label">绑定链路编排</div>
+              <NSelect
+                v-model:value="w.pipelineId"
+                size="small"
+                :options="pipelineOptions"
+                placeholder="默认链路"
+              />
             </div>
             <div class="field">
               <div class="label">权重</div>

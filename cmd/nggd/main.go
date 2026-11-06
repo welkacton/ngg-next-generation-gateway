@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ngg-project/ngg/internal/agent"
 	"github.com/ngg-project/ngg/internal/api"
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
@@ -89,6 +90,29 @@ func run(configPath string, noRestore bool, stop <-chan struct{}) error {
 		}
 		ncancel()
 	}
+
+	// v2.7.0 · 远程代理节点上报与客户端订阅走独立监听。
+	// 控制面 API 仍然只监听回环，公网只暴露 /v1/agent/* 与 /sub/*。
+	agentEP := agent.NewEndpoint(eng.Agents(), eng.AgentServerConfig())
+	agentEP.SetLogger(func(format string, args ...any) { log.Printf(format, args...) })
+	agentEP.SetSubscription(func(_ context.Context, token string) (string, map[string]string, bool) {
+		sub, ok := eng.Clients().Subscription(token)
+		if !ok {
+			return "", nil, false
+		}
+		return string(sub.Body), sub.Headers, true
+	})
+	agentCtx, agentCancel := context.WithCancel(context.Background())
+	defer agentCancel()
+	go func() {
+		if !agentEP.Enabled() {
+			log.Printf("NGG agent endpoint disabled in config (remote nodes cannot report)")
+			return
+		}
+		if err := agentEP.Run(agentCtx); err != nil {
+			log.Printf("NGG agent endpoint stopped: %v", err)
+		}
+	}()
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()

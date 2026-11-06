@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ngg-project/ngg/internal/agent"
+	"github.com/ngg-project/ngg/internal/clients"
 	"github.com/ngg-project/ngg/internal/gateway"
 	"github.com/ngg-project/ngg/internal/hosts"
 	"github.com/ngg-project/ngg/internal/netengine"
@@ -98,6 +100,21 @@ func (e *Engine) initStage45() {
 	if err := e.gateway.Load(); err != nil {
 		fmt.Printf("NGG: could not load persisted gateway config: %v\n", err)
 	}
+	// 远程代理节点（Agent 插件）：节点注册表 + 公网上报服务端配置。
+	// 加载失败只打印，不 panic：控制面仍可启动并让操作员修复文件。
+	e.agents = agent.NewStore(e.cfg.Storage.Dir)
+	if err := e.agents.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted agents: %v\n", err)
+	}
+	e.agentCfg = agent.NewServerStore(e.cfg.Storage.Dir)
+	if err := e.agentCfg.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted agent server config: %v\n", err)
+	}
+	// 客户端接入：设备凭据与共享对外地址（<data>/clients.json）。
+	e.clientReg = clients.NewStore(e.cfg.Storage.Dir)
+	if err := e.clientReg.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted clients: %v\n", err)
+	}
 	if e.network != nil {
 		e.network.SetPluginHook(&pluginHookAdapter{m: e.plugins})
 		e.network.SetLinkSelector(e.sdwan)
@@ -108,14 +125,17 @@ func (e *Engine) initStage45() {
 	_ = e.store.AddAudit("stage45.init", "", "protocols/plugins/sdwan initialized")
 }
 
-func (e *Engine) Protocols() *protocols.Registry { return e.protocols }
-func (e *Engine) Plugins() *plugins.Manager      { return e.plugins }
-func (e *Engine) SDWAN() *sdwan.Manager          { return e.sdwan }
-func (e *Engine) Nodes() *nodes.Registry         { return e.nodeReg }
-func (e *Engine) Hosts() *hosts.Registry         { return e.hostReg }
-func (e *Engine) Users() *users.Registry         { return e.userReg }
-func (e *Engine) RuleSets() *rulesets.Registry   { return e.ruleSets }
-func (e *Engine) Gateway() *gateway.Store        { return e.gateway }
+func (e *Engine) Protocols() *protocols.Registry        { return e.protocols }
+func (e *Engine) Plugins() *plugins.Manager             { return e.plugins }
+func (e *Engine) SDWAN() *sdwan.Manager                 { return e.sdwan }
+func (e *Engine) Nodes() *nodes.Registry                { return e.nodeReg }
+func (e *Engine) Hosts() *hosts.Registry                { return e.hostReg }
+func (e *Engine) Users() *users.Registry                { return e.userReg }
+func (e *Engine) RuleSets() *rulesets.Registry          { return e.ruleSets }
+func (e *Engine) Gateway() *gateway.Store               { return e.gateway }
+func (e *Engine) Agents() *agent.Store                  { return e.agents }
+func (e *Engine) AgentServerConfig() *agent.ServerStore { return e.agentCfg }
+func (e *Engine) Clients() *clients.Store               { return e.clientReg }
 
 // Stages reports the honest implementation status of every stage.
 func (e *Engine) Stages() map[string]any {

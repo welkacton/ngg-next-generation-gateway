@@ -19,6 +19,13 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      - name: Cross-compile remote agent
+        run: |
+          set -e
+          for target in windows/amd64 linux/amd64 linux/arm64 darwin/arm64; do
+            echo "building ngg-agent for ${target}"
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -o /tmp/ngg-agent ./cmd/ngg-agent
+          done
       - name: Unit + integration tests
         run: go test -p 2 ./... -count=1 -timeout 240s
   frontend:

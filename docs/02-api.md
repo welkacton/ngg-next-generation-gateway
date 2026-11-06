@@ -662,3 +662,56 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 - `wan` 保留为 `wans[0]` 的兼容字段。
 
 `GET /gateway/status` 增加 `wan_links: [{id,interface,route,address,online}]`。
+
+---
+
+## v2.7.0 新增端点：远程出口节点 / 网关总控 / 客户端接入
+
+### 远程代理节点（Agent）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/agents` | 节点列表 + 实时指标 + 公网监听配置 |
+| POST | `/agents` | 创建节点，一次性返回 token、`agent.yaml` 与三平台安装脚本 |
+| GET / PUT / DELETE | `/agents/{id}` | 读取 / 更新 / 删除节点 |
+| POST | `/agents/{id}/rotate-token` | 轮换 token（旧 token 立即失效） |
+| GET | `/agents/{id}/metrics` | 最近采样（内存环形，进程重启清空） |
+| GET | `/agents/{id}/install?os=windows\|linux\|docker` | 安装脚本文本 |
+| GET / PUT | `/agents/server` | 插件接入监听配置（默认启用，端口 9191） |
+
+节点记录字段：`id,name,address,port,role,status,online,bound,os,arch,hostname,agent_version,last_seen,metrics`；
+指标：`cpu_pct,cpu_cores,load1,mem_total,mem_used,swap_total,swap_used,disk_total,disk_used,disks[],interfaces[],rx_bytes,tx_bytes,rx_rate,tx_rate,uptime_sec,sampled_at,source`。
+`source:"unavailable"` 表示插件尚未上报，此时数值为 0 且不参与展示。
+
+公网监听（默认 `0.0.0.0:9191`，不走控制面鉴权，用节点 token）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/v1/agent/report` | Header `X-NGG-Agent-Token`，上报系统指标 |
+| GET | `/v1/agent/ping` | 连通性自检 |
+| GET | `/sub/{token}` | 客户端订阅（sing-box JSON） |
+
+### 网关总控
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET / PUT | `/gateway/master` | 虚拟网卡接管、分流策略、上行绑定 |
+| GET | `/gateway/datapath` | 数据面状态（网卡是否存在、metric、默认路由是否经该网卡） |
+| POST | `/gateway/datapath/apply` | 生成并（在 Windows 提权时）执行接管命令 |
+| POST | `/gateway/datapath/revert` | 撤销接管 |
+| POST | `/gateway/master/split-rules` | 把分流清单写入规则引擎（幂等，`tag=gateway-master`） |
+
+`PUT /gateway/master` 与 `apply` 均返回 `warnings` / `commands`；非 Windows 或未提权时 `executed:false`，命令原样返回供人工执行，绝不上报「已接管」。
+
+### 客户端接入
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/clients` | 客户端列表 + 接入设置 |
+| POST | `/clients` | 创建客户端，一次性返回凭据 |
+| PUT / DELETE | `/clients/{id}` | 更新（启用 / 配额 / 过期）/ 删除 |
+| POST | `/clients/{id}/rotate` | 轮换凭据 |
+| GET | `/clients/{id}/config?format=singbox\|mihomo\|wireguard\|socks` | 生成配置 |
+| GET / PUT | `/clients/access` | 对外地址、端口、协议、TLS |
+
+配置格式：sing-box JSON、Mihomo YAML、WireGuard `.conf`、SOCKS5 参数；订阅地址 `<public_url>/sub/<credential>`。

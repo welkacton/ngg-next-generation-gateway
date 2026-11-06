@@ -521,6 +521,7 @@ func renderMihomo(c Config, in Inputs) (string, []string, error) {
 	}
 
 	outHosts := outboundHosts(c, in.Hosts)
+	chainHosts := []string{}
 	for _, h := range outHosts {
 		p, err := proxyFor(h)
 		if err != nil {
@@ -532,12 +533,30 @@ func renderMihomo(c Config, in Inputs) (string, []string, error) {
 			name = "out-" + h.ID
 		}
 		p["name"] = name
+
+		dialer := ""
 		if hasEntry {
 			// Chain: local -> entry VPS -> this outbound -> target.
-			p["dialer-proxy"] = "entry-" + entry.Internal
+			dialer = "entry-" + entry.Internal
+		}
+		// Optional proxy chain in front of the egress host: hop 1 dials
+		// directly (or through the entry), hop N dials hop N-1, and the
+		// outbound itself dials the last hop.
+		hops, hopNames := chainProxies(h, dialer)
+		if len(hops) > 0 {
+			proxies = append(proxies, hops...)
+			dialer = hopNames[len(hopNames)-1]
+			chainHosts = append(chainHosts, h.Name)
+		}
+		if dialer != "" {
+			p["dialer-proxy"] = dialer
 		}
 		proxies = append(proxies, p)
 		names = append(names, name)
+	}
+	if len(chainHosts) > 0 {
+		// Honest scope: the chain is real in mihomo only.
+		warnings = append(warnings, fmt.Sprintf("出口节点 %s 启用了链式代理：已用 dialer-proxy 串联渲染；sing-box / xray-core 骨架不包含链式跳转，切换内核后需手工配置。", strings.Join(chainHosts, "、")))
 	}
 
 	groupMembers := append([]string{}, names...)
@@ -617,6 +636,9 @@ func renderKernelSkeleton(c Config, in Inputs, kernel string) (string, []string,
 	warnings := []string{
 		fmt.Sprintf("%s 目前只生成官方语法的配置骨架：已写入本地入站、NGG DNS 上游、已启用规则集的引用与直连出站。", kernel),
 		fmt.Sprintf("出口节点代理与 share-link 转译尚未接入，且该骨架未经 %s 原生校验器校验；应用时以内核的真实校验结果为准，失败会原样返回。", kernel),
+	}
+	if n := countChainHosts(in.Hosts); n > 0 {
+		warnings = append(warnings, fmt.Sprintf("有 %d 个节点配置了链式代理：%s 骨架不含 dialer-proxy 串联，这些跳转需在生成后手工补全。", n, kernel))
 	}
 	listen := c.Inbound.Listen
 	if listen == "" {
@@ -803,8 +825,85 @@ func buildRules(c Config, in Inputs, warnings []string) []string {
 	return rules
 }
 
-// --------------------------------------------------------------- share links ---
+// ------------------------------------------------------------ chain proxies ---
 
+// countChainHosts counts hosts that actually have at least one enabled hop.
+// Disabled hops are drafts and do not change the rendered config.
+func countChainHosts(list []hosts.Host) int {
+	n := 0
+	for _, h := range list {
+		for _, hop := range h.Chain {
+			if hop.Enabled {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// chainProxies renders the enabled hops of h as mihomo proxy entries.
+//
+// Hop 1 dials firstDialer (the entry node) or directly when empty; hop N dials
+// hop N-1. The caller points the egress proxy at the LAST hop name, which is
+// what makes the chain "本机 → 跳1 → 跳2 → 出口".
+func chainProxies(h hosts.Host, firstDialer string) ([]map[string]any, []string) {
+	base := h.Internal
+	if strings.TrimSpace(base) == "" {
+		base = h.ID
+	}
+	base = sanitizeChainTag(base)
+	proxies := []map[string]any{}
+	tags := []string{}
+	prev := firstDialer
+	for _, hop := range h.Chain {
+		if !hop.Enabled {
+			continue
+		}
+		tag := fmt.Sprintf("chain-%s-%d", base, len(tags)+1)
+		p := map[string]any{
+			"name":   tag,
+			"type":   hop.Kind, // socks5 / http (validated by internal/hosts)
+			"server": hop.Address,
+			"port":   hop.Port,
+		}
+		if hop.Kind == hosts.ChainKindSOCKS5 {
+			// mihomo's http outbound has no udp option; socks5 does.
+			p["udp"] = true
+		}
+		if hop.Username != "" {
+			p["username"] = hop.Username
+		}
+		if hop.Password != "" {
+			p["password"] = hop.Password
+		}
+		if prev != "" {
+			p["dialer-proxy"] = prev
+		}
+		proxies = append(proxies, p)
+		tags = append(tags, tag)
+		prev = tag
+	}
+	return proxies, tags
+}
+
+// sanitizeChainTag keeps proxy names YAML/branch-safe.
+func sanitizeChainTag(s string) string {
+	out := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, strings.TrimSpace(s))
+	if out == "" {
+		out = "hop"
+	}
+	return out
+}
+
+// --------------------------------------------------------------- share links ---
 // proxyFor builds a mihomo proxy entry from a host. A full share link in
 // proxy_url wins (it carries REALITY / obfs parameters that the flat fields
 // cannot express); otherwise the flat fields are used.

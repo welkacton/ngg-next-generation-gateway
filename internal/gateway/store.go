@@ -95,6 +95,13 @@ func (s *Store) Save(c Config) (Config, []string, []string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// A payload without a "master" object (the pre-v2.7 shape) must not wipe
+	// the master switch: keep the stored one and let normalisation run over it.
+	if !c.masterSet {
+		c.Master = clone(s.cfg).Master
+		c.masterSet = true
+	}
+
 	c = normalize(c)
 	mergePasswords(&c, s.cfg)
 	if err := validate(c); err != nil {
@@ -112,6 +119,16 @@ func (s *Store) Save(c Config) (Config, []string, []string, error) {
 	s.updatedAt = now
 	s.loaded = true
 	return clone(c), changed, warnings, nil
+}
+
+// SaveMaster replaces only the master switch and writes the whole document
+// through the one write path, so a master-only PUT can never drop the WAN /
+// LAN / DNS / firewall policy that is already stored.
+func (s *Store) SaveMaster(m Master) (Config, []string, []string, error) {
+	cfg := s.Get()
+	cfg.Master = m
+	cfg.masterSet = true
+	return s.Save(cfg)
 }
 
 // mergePasswords keeps the stored secret of every port whose incoming password
@@ -167,6 +184,49 @@ func warningsFor(c Config) []string {
 	}
 	if c.LAN.Interface != "" && !interfaceExists(c.LAN.Interface) {
 		warnings = append(warnings, fmt.Sprintf("LAN 接口 %q 不在本机网卡列表中，该设置保存后不会生效", c.LAN.Interface))
+	}
+	warnings = append(warnings, masterWarnings(c)...)
+	return warnings
+}
+
+// masterWarnings reports the honest limits of the v2.7 master switch: nothing
+// here is applied by a save, and the parts that can be applied need a
+// privilege the daemon usually does not have.
+func masterWarnings(c Config) []string {
+	m := c.Master
+	warnings := []string{}
+	if m.Enabled {
+		warnings = append(warnings,
+			"数据面接管（虚拟网卡 + 默认路由）需要 Windows 管理员权限与 wintun.dll；未满足时 NGG 只生成命令，不会执行，也不会报告已生效")
+	} else {
+		warnings = append(warnings, "网关总控当前为关闭状态：保存只记录意图，NGG 不会创建虚拟网卡或改写默认路由")
+	}
+	if m.AdapterName != "" && !interfaceExists(m.AdapterName) {
+		warnings = append(warnings, fmt.Sprintf("虚拟网卡 %q 不在本机网卡列表中，需要先创建 Wintun 适配器才能接管流量", m.AdapterName))
+	}
+	if len(m.Split.ProxyDomains) > 0 || len(m.Split.ProxyCIDRs) > 0 ||
+		len(m.Split.LocalDomains) > 0 || len(m.Split.LocalCIDRs) > 0 {
+		warnings = append(warnings, "分流规则需要单独写入规则引擎（POST /gateway/master/split-rules），且需重新加载内核后才会作用于真实流量")
+	}
+	switch m.Uplink.Mode {
+	case "pipeline":
+		if m.Uplink.PipelineID == "" {
+			warnings = append(warnings, "master.uplink.mode=pipeline 但未指定 pipeline_id，将回落到默认链路")
+		}
+	case "gateway-wan":
+		if m.Uplink.WANID != "" {
+			found, enabled := false, false
+			for _, w := range c.WANs {
+				if w.ID == m.Uplink.WANID {
+					found, enabled = true, w.Enabled
+				}
+			}
+			if !found {
+				warnings = append(warnings, fmt.Sprintf("master.uplink.wan_id=%s 不是已知的 WAN 口", m.Uplink.WANID))
+			} else if !enabled {
+				warnings = append(warnings, fmt.Sprintf("master.uplink.wan_id=%s 当前未启用", m.Uplink.WANID))
+			}
+		}
 	}
 	return warnings
 }

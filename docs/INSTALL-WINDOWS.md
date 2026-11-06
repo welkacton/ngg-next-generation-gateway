@@ -36,8 +36,8 @@
 
 ## 2. 方式 A：GUI 安装包（推荐给本机使用）
 
-1. 从 Release 下载 `NGG-Setup-v2.6.8.exe`：
-   <https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.6.8>
+1. 从 Release 下载 `NGG-Setup-v2.7.0.exe`：
+   <https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.7.0>
    （私有仓库需登录有权限的 GitHub 账号；同页有 `SHA256SUMS` 可校验；也可按第 4 节自行构建）。
 2. 双击 → UAC 确认 → 选择安装目录（默认 `C:\Program Files\NGG`）→ 完成。
 3. 安装器会自动执行 `install.ps1 -ConfigureOnly -Silent -OpenBrowser`：
@@ -70,7 +70,7 @@ Get-Content "$env:ProgramFiles\NGG\NGG-ACCESS.txt"
 
 ### 3.1 最省事：双击 `install.bat`
 
-1. 下载 `NGG-v2.6.8-windows-amd64.zip` → **右键 → 全部解压**（不要直接在压缩包里双击）；
+1. 下载 `NGG-v2.7.0-windows-amd64.zip` → **右键 → 全部解压**（不要直接在压缩包里双击）；
 2. 进入解压出来的文件夹，确认里面有 `nggd.exe`、`install.ps1`、`install.bat`、`web-dist\`；
 3. **双击 `install.bat`** → UAC 点「是」→ 自动以管理员身份安装并打开浏览器。
 
@@ -78,11 +78,11 @@ Get-Content "$env:ProgramFiles\NGG\NGG-ACCESS.txt"
 
 ### 3.2 手工命令（把路径换成你自己的）
 
-假设解压到 `C:\Users\Admin\Downloads\NGG-v2.6.8-windows-amd64`：
+假设解压到 `C:\Users\Admin\Downloads\NGG-v2.7.0-windows-amd64`：
 
 ```powershell
 # 1) 先进入真实目录（按需改盘符/路径）
-Set-Location "$env:USERPROFILE\Downloads\NGG-v2.6.8-windows-amd64"
+Set-Location "$env:USERPROFILE\Downloads\NGG-v2.7.0-windows-amd64"
 
 # 2) 确认文件在眼前（这一步能避免 90% 的路径错误）
 Get-ChildItem | Select-Object Name
@@ -111,14 +111,14 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Source . -Silent
 
 ```powershell
 $env:GITHUB_TOKEN = 'ghp_xxx'
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v2.6.8 -Silent -OpenBrowser
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v2.7.0 -Silent -OpenBrowser
 ```
 
 脚本会用 `SHA256SUMS` 校验下载包；若 Release 没有该文件会给出明确警告。
 
 ### 3.3 直接双击 EXE（方式 A）其实更简单
 
-如果你只想要「下载 → 双击 → 完成」，用 `NGG-Setup-v2.6.8.exe`（Inno Setup 安装包），
+如果你只想要「下载 → 双击 → 完成」，用 `NGG-Setup-v2.7.0.exe`（Inno Setup 安装包），
 它会自己放好文件、注册服务、启动、打开浏览器，**完全不需要 PowerShell 命令**。
 便携 ZIP 是给自动化/静默部署用的。
 
@@ -163,15 +163,15 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version v2.6.8 -Silent -
 
 ```powershell
 # 仓库根目录，普通 PowerShell 即可（不需要管理员，只是产包）
-powershell -ExecutionPolicy Bypass -File .\installer\windows\build-installer.ps1 -Version v2.6.8
+powershell -ExecutionPolicy Bypass -File .\installer\windows\build-installer.ps1 -Version v2.7.0
 ```
 
 产物在 `out\`：
 
 | 文件 | 说明 |
 | --- | --- |
-| `NGG-v2.6.8-windows-amd64.zip` | 便携包（内含 `install.ps1`，解压即用） |
-| `NGG-Setup-v2.6.8.exe` | Inno Setup GUI 安装包（仅当找到 `ISCC.exe`） |
+| `NGG-v2.7.0-windows-amd64.zip` | 便携包（内含 `install.ps1`，解压即用） |
+| `NGG-Setup-v2.7.0.exe` | Inno Setup GUI 安装包（仅当找到 `ISCC.exe`） |
 | `*.sha256` | 校验文件 |
 
 找不到 Inno Setup 时脚本会明确提示并**仍然产出可用的 ZIP**；安装方式：
@@ -278,7 +278,7 @@ powershell -ExecutionPolicy Bypass -File .\installer\windows\set-system-proxy.ps
 
 | 现象 | 原因 / 处理 |
 | --- | --- |
-| `cd : 找不到路径 "C:\path\to\..."` | 复制了文档占位符。换成解压后的真实目录，例如 `Set-Location "$env:USERPROFILE\Downloads\NGG-v2.6.8-windows-amd64"`；或直接用 `install.bat` / `NGG-Setup-v2.6.8.exe` |
+| `cd : 找不到路径 "C:\path\to\..."` | 复制了文档占位符。换成解压后的真实目录，例如 `Set-Location "$env:USERPROFILE\Downloads\NGG-v2.7.0-windows-amd64"`；或直接用 `install.bat` / `NGG-Setup-v2.7.0.exe` |
 | `-File 形式参数的实际参数 ".\install.ps1" 不存在` | 当前目录里没有 `install.ps1`。先 `Set-Location` 到解压目录并 `Get-ChildItem` 确认；`-File` 是相对**当前目录**解析的 |
 | 安装脚本报 `Administrator privileges are required` | 用「以管理员身份运行」打开 PowerShell；更简单是双击 `install.bat`（会自动提权） |
 | 服务启动失败 / 错误 1053 | 看 `<安装目录>\logs\ngg-service.log`；最常见是 `-config` 路径不对、配置文件 ACL 不允许 SYSTEM 读取、或 YAML 语法错误 |

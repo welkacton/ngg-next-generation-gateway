@@ -20,6 +20,8 @@ import (
 
 	"github.com/ngg-project/ngg/internal/adapters/builtin"
 	"github.com/ngg-project/ngg/internal/adapters/generic"
+	"github.com/ngg-project/ngg/internal/agent"
+	"github.com/ngg-project/ngg/internal/clients"
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/core"
 	"github.com/ngg-project/ngg/internal/gateway"
@@ -75,6 +77,9 @@ type Engine struct {
 	userReg    *users.Registry
 	ruleSets   *rulesets.Registry
 	gateway    *gateway.Store
+	agents     *agent.Store
+	agentCfg   *agent.ServerStore
+	clientReg  *clients.Store
 	health     *healthMonitor
 	arch       archDetector
 	client     *http.Client

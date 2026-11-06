@@ -71,6 +71,10 @@ type WANConfig struct {
 	Route       string   `json:"route"`
 	Weight      int      `json:"weight"`
 	Priority    int      `json:"priority"`
+	// PipelineID optionally binds this uplink to a pipeline chain. It only
+	// means something when Route is "proxy"; the id shape is validated the
+	// same way as master.uplink.pipeline_id.
+	PipelineID string `json:"pipeline_id,omitempty"`
 }
 
 // DNSConfig is the enterprise router resolver policy. Like the rest of the
@@ -141,12 +145,41 @@ type FirewallConfig struct {
 // normalisation; WANs is the canonical list and always holds exactly
 // WANCount entries. A client that only sends "wan" (the pre-multi-WAN shape)
 // is migrated onto WANs[0] with the other five ports at their defaults.
+//
+// Master is the v2.7 "gateway master" switch (virtual adapter + smart split).
+// A document written before v2.7 has no "master" key at all; such documents
+// are migrated to DefaultMaster() instead of to a zero value, which is what
+// masterSet (set by UnmarshalJSON) lets normalisation distinguish.
 type Config struct {
 	WAN      WANConfig      `json:"wan"`
 	WANs     []WANConfig    `json:"wans"`
 	LAN      LANConfig      `json:"lan"`
 	DNS      DNSConfig      `json:"dns"`
 	Firewall FirewallConfig `json:"firewall"`
+	Master   Master         `json:"master"`
+
+	// masterSet records whether the decoded JSON carried a "master" object.
+	// It is never serialised: the difference only exists while reading.
+	masterSet bool
+}
+
+// UnmarshalJSON keeps track of whether "master" was present. The embedded
+// alias does the ordinary decoding; the explicit raw field wins the depth
+// race for "master" so it can be inspected before filling Config.Master.
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type plain Config
+	raw := struct {
+		*plain
+		Master json.RawMessage `json:"master"`
+	}{plain: (*plain)(c)}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Master) == 0 || string(raw.Master) == "null" {
+		return nil
+	}
+	c.masterSet = true
+	return json.Unmarshal(raw.Master, &c.Master)
 }
 
 // DefaultWAN returns the factory settings of the idx-th port (0-based).
@@ -212,6 +245,8 @@ func Default() Config {
 			UPnP:           false,
 			Conntrack:      true,
 		},
+		Master:    DefaultMaster(),
+		masterSet: true,
 	}
 }
 
@@ -249,6 +284,11 @@ func clone(c Config) Config {
 	}
 	out.Firewall.Rules = append([]FirewallRule{}, c.Firewall.Rules...)
 	out.Firewall.PortForwards = append([]PortForward{}, c.Firewall.PortForwards...)
+	out.Master.BypassCIDRs = append([]string{}, c.Master.BypassCIDRs...)
+	out.Master.Split.ProxyDomains = append([]string{}, c.Master.Split.ProxyDomains...)
+	out.Master.Split.LocalDomains = append([]string{}, c.Master.Split.LocalDomains...)
+	out.Master.Split.ProxyCIDRs = append([]string{}, c.Master.Split.ProxyCIDRs...)
+	out.Master.Split.LocalCIDRs = append([]string{}, c.Master.Split.LocalCIDRs...)
 	return out
 }
 
@@ -342,6 +382,15 @@ func normalize(c Config) Config {
 		forwards = append(forwards, f)
 	}
 	c.Firewall.PortForwards = forwards
+	// A document without a "master" object predates v2.7 (or came from a
+	// client that only knows the old shape): migrate it to the documented
+	// defaults rather than to a zero value that would say "capture nothing".
+	if c.masterSet {
+		c.Master = normalizeMaster(c.Master, d.Master)
+	} else {
+		c.Master = d.Master
+		c.masterSet = true
+	}
 	return c
 }
 
@@ -385,6 +434,7 @@ func normalizeWAN(w WANConfig, idx int) WANConfig {
 		w.Priority = d.Priority
 	}
 	w.PasswordSet = w.Password != ""
+	w.PipelineID = strings.ToLower(strings.TrimSpace(w.PipelineID))
 	return w
 }
 
@@ -504,6 +554,10 @@ func validate(c Config) error {
 		return err
 	}
 
+	if err := validateMaster(c.Master); err != nil {
+		return err
+	}
+
 	if !inboundDefaults[c.Firewall.DefaultInbound] {
 		return invalid("firewall.default_inbound", "只能是 accept / drop，收到 %q", c.Firewall.DefaultInbound)
 	}
@@ -614,6 +668,9 @@ func validateWAN(w WANConfig, idx int) error {
 		if net.ParseIP(d) == nil {
 			return invalid(field("dns"), "%q 不是合法 IP 地址", d)
 		}
+	}
+	if err := checkPipelineID(field("pipeline_id"), w.PipelineID); err != nil {
+		return err
 	}
 	// A disabled port is not dialled, so its addressing requirements are not
 	// enforced — the operator may fill the form in any order.

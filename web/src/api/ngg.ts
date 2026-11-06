@@ -1526,6 +1526,8 @@ export interface RemoteHost {
   track_traffic: boolean
   user_ratio: number
   node_ratio: number
+  /** 链式代理：按顺序经过的 SOCKS5 / HTTP 上游 */
+  chain?: HostChainHop[] | null
   created_at?: string
   updated_at?: string
 }
@@ -1940,6 +1942,8 @@ export interface GatewayWAN {
   weight: number
   /** 优先级 1..10，数字越小越优先 */
   priority: number
+  /** route=proxy 时绑定的链路编排 ID（pl-*），空 = 使用默认链路 */
+  pipeline_id?: string
 }
 
 export interface GatewayDNS {
@@ -2048,3 +2052,298 @@ export const getGatewayConfig = () => get<GatewayConfigResult>('/gateway/config'
 export const saveGatewayConfig = (config: GatewayConfig) =>
   put<GatewayConfigResult>('/gateway/config', config)
 export const getGatewayStatus = () => get<GatewayStatus>('/gateway/status')
+
+/* ------------------------------------------------------------------ *
+ * v2.7.0 · 出口节点 Agent / 网关总控 / 客户端接入
+ * ------------------------------------------------------------------ */
+
+export interface HostChainHop {
+  kind: 'socks5' | 'http'
+  address: string
+  port: number
+  username?: string
+  password?: string
+  enabled: boolean
+}
+
+export type AgentStatus = 'online' | 'offline' | 'never'
+
+export interface AgentDisk {
+  mount: string
+  fstype: string
+  total: number
+  used: number
+}
+
+export interface AgentInterface {
+  name: string
+  mac: string
+  mtu: number
+  up: boolean
+  addresses: string[]
+  rx_bytes: number
+  tx_bytes: number
+  rx_rate: number
+  tx_rate: number
+}
+
+export interface AgentMetrics {
+  cpu_pct: number
+  cpu_cores: number
+  load1: number
+  mem_total: number
+  mem_used: number
+  swap_total: number
+  swap_used: number
+  disk_total: number
+  disk_used: number
+  disks: AgentDisk[]
+  interfaces: AgentInterface[]
+  rx_bytes: number
+  tx_bytes: number
+  rx_rate: number
+  tx_rate: number
+  uptime_sec: number
+  sampled_at: string
+  source: 'agent' | 'unavailable'
+  note?: string
+}
+
+export interface AgentView {
+  id: string
+  name: string
+  address: string
+  port: number
+  note: string
+  role: 'outbound' | 'inbound' | 'both'
+  status: AgentStatus
+  online: boolean
+  bound: boolean
+  os: string
+  arch: string
+  hostname: string
+  agent_version: string
+  last_seen: string
+  created_at: string
+  updated_at: string
+  metrics: AgentMetrics | null
+}
+
+export interface AgentSample {
+  sampled_at: string
+  cpu_pct: number
+  mem_used: number
+  disk_used: number
+  rx_bytes: number
+  tx_bytes: number
+  rx_rate: number
+  tx_rate: number
+}
+
+export interface AgentServerConfig {
+  enabled: boolean
+  listen: string
+  port: number
+  public_url: string
+}
+
+export interface AgentInstallScripts {
+  windows: string
+  linux: string
+  docker: string
+}
+
+export interface AgentListResult {
+  agents: AgentView[]
+  count: number
+  server: AgentServerConfig
+}
+
+export interface AgentEnrollResult {
+  agent: AgentView
+  token: string
+  config_yaml: string
+  install: AgentInstallScripts
+}
+
+export interface AgentServerResult {
+  server: AgentServerConfig
+  requires_restart: boolean
+  warnings: string[]
+}
+
+const agentPath = (id: string) => `/agents/${encodeURIComponent(id)}`
+
+export const listAgents = () => get<AgentListResult>('/agents')
+export const createAgent = (payload: {
+  name: string
+  address: string
+  port: number
+  note?: string
+  role?: 'outbound' | 'inbound' | 'both'
+}) => post<AgentEnrollResult>('/agents', payload)
+export const getAgent = (id: string) => get<AgentView>(agentPath(id))
+export const updateAgent = (
+  id: string,
+  payload: Partial<Pick<AgentView, 'name' | 'address' | 'port' | 'note' | 'role'>>,
+) => put<AgentView>(agentPath(id), payload)
+export const deleteAgent = (id: string) => del<{ ok: boolean }>(agentPath(id))
+export const rotateAgentToken = (id: string) =>
+  post<AgentEnrollResult>(`${agentPath(id)}/rotate-token`)
+export const getAgentSamples = (id: string, limit = 60) =>
+  get<{ samples: AgentSample[] }>(`${agentPath(id)}/metrics?limit=${limit}`)
+export const getAgentInstallScript = (id: string, os: 'windows' | 'linux' | 'docker') =>
+  get<{ os: string; script: string }>(`${agentPath(id)}/install?os=${os}`)
+export const getAgentServer = () => get<AgentServerConfig>('/agents/server')
+export const saveAgentServer = (payload: AgentServerConfig) =>
+  put<AgentServerResult>('/agents/server', payload)
+
+/* ---------------------------- 网关总控 ---------------------------- */
+
+export interface GatewaySplitPolicy {
+  mode: 'smart' | 'global-proxy' | 'direct'
+  default: 'local' | 'proxy'
+  proxy_domains: string[]
+  local_domains: string[]
+  proxy_cidrs: string[]
+  local_cidrs: string[]
+}
+
+export interface GatewayUplinkPolicy {
+  mode: 'gateway-wan' | 'pipeline'
+  wan_id: string
+  pipeline_id: string
+}
+
+export interface GatewayMaster {
+  enabled: boolean
+  adapter_name: string
+  adapter_metric: number
+  capture_all: boolean
+  auto_start: boolean
+  bypass_private: boolean
+  bypass_cidrs: string[]
+  split: GatewaySplitPolicy
+  uplink: GatewayUplinkPolicy
+}
+
+export interface DatapathStatus {
+  platform: string
+  elevated: boolean
+  adapter_present: boolean
+  adapter_name: string
+  adapter_metric: number
+  default_route_via_adapter: boolean
+  tun_supported: boolean
+  wintun_present: boolean
+  capture_active: boolean
+  reason: string
+  checked_at: string
+}
+
+export interface DatapathResult {
+  applied: boolean
+  executed: boolean
+  commands: string[]
+  reason: string
+  status: DatapathStatus
+}
+
+export interface GatewayMasterResult {
+  master: GatewayMaster
+  status: DatapathStatus
+}
+
+export interface GatewayMasterSaveResult {
+  master: GatewayMaster
+  changed: string[]
+  persisted: boolean
+  warnings: string[]
+}
+
+export interface SplitRulesResult {
+  added: number
+  skipped: number
+  rules: unknown[]
+}
+
+export const getGatewayMaster = () => get<GatewayMasterResult>('/gateway/master')
+export const saveGatewayMaster = (master: GatewayMaster) =>
+  put<GatewayMasterSaveResult>('/gateway/master', master)
+export const getDatapathStatus = () => get<DatapathStatus>('/gateway/datapath')
+export const applyDatapath = () => post<DatapathResult>('/gateway/datapath/apply')
+export const revertDatapath = () => post<DatapathResult>('/gateway/datapath/revert')
+export const applySplitRules = () => post<SplitRulesResult>('/gateway/master/split-rules')
+
+/* --------------------------- 客户端接入 --------------------------- */
+
+export type ClientPlatform = 'ios' | 'android' | 'windows' | 'macos' | 'linux'
+export type ClientProtocol = 'socks5' | 'http' | 'wireguard'
+
+export interface AccessConfig {
+  public_host: string
+  public_port: number
+  protocol: ClientProtocol
+  tls: boolean
+  note: string
+}
+
+export interface ClientView {
+  id: string
+  name: string
+  platform: ClientPlatform
+  protocol: ClientProtocol
+  enabled: boolean
+  credential_set: boolean
+  created_at: string
+  expires_at: string
+  last_seen: string
+  quota_bytes: number
+  used_bytes: number
+  online: boolean
+  formats: string[]
+}
+
+export interface ClientListResult {
+  clients: ClientView[]
+  count: number
+  access: AccessConfig
+}
+
+export interface ClientCreateResult {
+  client: ClientView
+  credential: string
+}
+
+export interface ClientConfigResult {
+  format: string
+  filename: string
+  content: string
+  subscription_url: string
+}
+
+const clientPath = (id: string) => `/clients/${encodeURIComponent(id)}`
+
+export const listClients = () => get<ClientListResult>('/clients')
+export const createClient = (payload: {
+  name: string
+  platform: ClientPlatform
+  protocol?: ClientProtocol
+  expires_at?: string
+  quota_bytes?: number
+  note?: string
+}) => post<ClientCreateResult>('/clients', payload)
+export const updateClient = (
+  id: string,
+  payload: Partial<Pick<ClientView, 'name' | 'enabled' | 'expires_at' | 'quota_bytes'>>,
+) => put<ClientView>(clientPath(id), payload)
+export const deleteClient = (id: string) => del<{ ok: boolean }>(clientPath(id))
+export const rotateClient = (id: string) =>
+  post<ClientCreateResult>(`${clientPath(id)}/rotate`)
+export const getClientConfig = (
+  id: string,
+  format: 'singbox' | 'mihomo' | 'wireguard' | 'socks',
+) => get<ClientConfigResult>(`${clientPath(id)}/config?format=${format}`)
+export const getAccessConfig = () => get<AccessConfig>('/clients/access')
+export const saveAccessConfig = (access: AccessConfig) =>
+  put<{ access: AccessConfig; changed: string[] }>('/clients/access', access)

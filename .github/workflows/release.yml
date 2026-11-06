@@ -41,8 +41,14 @@ jobs:
         run: |
           mkdir -p dist/ngg
           BIN=nggd
-          [ "${{ matrix.goos }}" = "windows" ] && BIN=nggd.exe
+          AGENT=ngg-agent
+          EXT=""
+          [ "${{ matrix.goos }}" = "windows" ] && BIN=nggd.exe && AGENT=ngg-agent.exe && EXT=".exe"
           go build -trimpath -ldflags="-s -w" -o "dist/ngg/$BIN" ./cmd/nggd
+          # Ship the remote-node agent next to the daemon AND as a standalone
+          # download named exactly the way the generated install scripts expect.
+          go build -trimpath -ldflags="-s -w" -o "dist/ngg/$AGENT" ./cmd/ngg-agent
+          cp "dist/ngg/$AGENT" "ngg-agent-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
           cp -r web/dist dist/ngg/web-dist
           cp -r configs dist/ngg/configs
           cp -r docs dist/ngg/docs
@@ -63,6 +69,7 @@ jobs:
           path: |
             *.tar.gz
             *.sha256
+            ngg-agent-*
 
   windows-installer:
     needs: build

@@ -20,7 +20,7 @@ import {
   NTag,
 } from 'naive-ui'
 import * as api from '../api/ngg'
-import type { HostRole, HostStats, HostView, RemoteHost } from '../api/ngg'
+import type { HostChainHop, HostRole, HostStats, HostView, RemoteHost } from '../api/ngg'
 import { useApiAction } from '../composables/useApi'
 import { formatBytes, formatTime, prettyJson } from '../utils/format'
 
@@ -64,6 +64,11 @@ const ROLE_OPTIONS: Array<{ label: string; value: HostRole }> = [
   { label: '出站 Outbound（作为出口）', value: 'outbound' },
   { label: '双向 Both（同时入站与出站）', value: 'both' },
 ]
+const HOP_KIND_OPTIONS: Array<{ label: string; value: HostChainHop['kind'] }> = [
+  { label: 'SOCKS5', value: 'socks5' },
+  { label: 'HTTP', value: 'http' },
+]
+const MAX_CHAIN_HOPS = 8
 
 /** Windows Chrome has no flag-emoji glyphs; use a compact country-code pill. */
 function flag(code: string): string {
@@ -81,11 +86,29 @@ function roleType(role: string): 'success' | 'info' | 'warning' | 'default' {
  * 状态
  * ------------------------------------------------------------------ */
 
-interface HostForm extends Omit<RemoteHost, 'node_port' | 'svc_port' | 'user_ratio' | 'node_ratio'> {
+interface ChainHopDraft {
+  kind: HostChainHop['kind']
+  address: string
+  port: number | null
+  username: string
+  password: string
+  enabled: boolean
+}
+
+interface HostForm
+  extends Omit<
+    RemoteHost,
+    'node_port' | 'svc_port' | 'user_ratio' | 'node_ratio' | 'chain'
+  > {
   node_port: number | null
   svc_port: number | null
   user_ratio: number | null
   node_ratio: number | null
+  chain: ChainHopDraft[]
+}
+
+function emptyHop(): ChainHopDraft {
+  return { kind: 'socks5', address: '', port: 1080, username: '', password: '', enabled: true }
 }
 
 function emptyHost(role: HostRole): HostForm {
@@ -95,12 +118,84 @@ function emptyHost(role: HostRole): HostForm {
     protocol: 'vless-reality', core_id: '', profile: '',
     secret_key: '', proxy_url: '', plugin: '', provider: '',
     ip_addresses: [], tags: [], note: '', track_traffic: true,
-    user_ratio: 1, node_ratio: 1,
+    user_ratio: 1, node_ratio: 1, chain: [],
   }
 }
 
+function toChain(chain?: HostChainHop[] | null): ChainHopDraft[] {
+  return (chain ?? []).map((h) => ({
+    kind: h.kind === 'http' ? 'http' : 'socks5',
+    address: h.address ?? '',
+    port: typeof h.port === 'number' && h.port > 0 ? h.port : 1080,
+    username: h.username ?? '',
+    password: h.password ?? '',
+    enabled: h.enabled !== false,
+  }))
+}
+
+function chainPayload(rows: ChainHopDraft[]): HostChainHop[] {
+  return rows.map((r) => {
+    const hop: HostChainHop = {
+      kind: r.kind,
+      address: r.address.trim(),
+      port: Number(r.port ?? 0),
+      enabled: r.enabled,
+    }
+    const user = r.username.trim()
+    if (user) hop.username = user
+    if (r.password) hop.password = r.password
+    return hop
+  })
+}
+
+/** 前端先按后端约束校验：kind 枚举 / 地址非空且不含协议前缀 / 端口 1–65535 / 最多 8 跳。 */
+function validateChain(rows: ChainHopDraft[]): string | null {
+  if (rows.length > MAX_CHAIN_HOPS) return `链式代理最多 ${MAX_CHAIN_HOPS} 跳`
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i]
+    const tag = `第 ${i + 1} 跳`
+    if (row.kind !== 'socks5' && row.kind !== 'http') return `${tag}类型无效`
+    const addr = row.address.trim()
+    if (!addr) return `${tag}地址不能为空`
+    if (addr.includes('://')) return `${tag}地址不要带协议前缀`
+    if (/\s/.test(addr)) return `${tag}地址不能包含空格`
+    const port = Number(row.port ?? 0)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return `${tag}端口需在 1–65535`
+  }
+  return null
+}
+
+function addHop(rows: ChainHopDraft[]): void {
+  if (rows.length >= MAX_CHAIN_HOPS) {
+    window.$message?.warning(`链式代理最多 ${MAX_CHAIN_HOPS} 跳`)
+    return
+  }
+  rows.push(emptyHop())
+}
+
+function removeHop(rows: ChainHopDraft[], index: number): void {
+  rows.splice(index, 1)
+}
+
+function chainHops(chain?: HostChainHop[] | null): HostChainHop[] {
+  return (chain ?? []).filter((h) => h.enabled !== false)
+}
+
+/** 直连 / SOCKS5 → HTTP 摘要。 */
+function chainLabel(chain?: HostChainHop[] | null): string {
+  const hops = chainHops(chain)
+  if (!hops.length) return '直连'
+  return hops.map((h) => (h.kind === 'http' ? 'HTTP' : 'SOCKS5')).join(' → ')
+}
+
 function toForm(h: RemoteHost): HostForm {
-  return { ...h, ip_addresses: [...(h.ip_addresses ?? [])], tags: [...(h.tags ?? [])] }
+  const { chain, ...rest } = h
+  return {
+    ...rest,
+    ip_addresses: [...(h.ip_addresses ?? [])],
+    tags: [...(h.tags ?? [])],
+    chain: toChain(chain),
+  }
 }
 function toPayload(f: HostForm): RemoteHost {
   return {
@@ -111,6 +206,7 @@ function toPayload(f: HostForm): RemoteHost {
     node_ratio: Number(f.node_ratio ?? 1),
     ip_addresses: f.ip_addresses ?? [],
     tags: f.tags ?? [],
+    chain: chainPayload(f.chain),
   }
 }
 
@@ -231,6 +327,11 @@ async function createHost() {
     window.$message?.warning('请填写 ID、节点名称与地址')
     return
   }
+  const chainError = validateChain(addForm.value.chain)
+  if (chainError) {
+    window.$message?.warning(chainError)
+    return
+  }
   const res = await run('add', () => api.addHost(toPayload(addForm.value)), '节点已添加并执行真实连通性探测')
   if (res) {
     rawResult.value = res
@@ -252,6 +353,11 @@ async function saveHost() {
   if (!editingId.value) return
   if (!form.value.name.trim() || !form.value.address.trim()) {
     window.$message?.warning('节点名称与地址不能为空')
+    return
+  }
+  const chainError = validateChain(form.value.chain)
+  if (chainError) {
+    window.$message?.warning(chainError)
     return
   }
   const res = await run('save', () => api.updateHost(editingId.value!, toPayload(form.value)), '节点已保存')
@@ -574,6 +680,13 @@ onMounted(() => {
           <div class="host-card__probe" :class="h.probe?.online ? 'is-online' : 'is-offline'">
             {{ probeText(h) }}
           </div>
+          <div class="host-card__chain">
+            <span class="host-card__chain-k">链路</span>
+            <NTag size="small" :bordered="false" :type="chainHops(h.chain).length ? 'info' : 'default'">
+              {{ chainLabel(h.chain) }}
+            </NTag>
+            <span v-if="chainHops(h.chain).length" class="host-card__chain-n">{{ chainHops(h.chain).length }} 跳</span>
+          </div>
           <div v-if="h.tags?.length" class="host-card__tags">
             <NTag v-for="t in h.tags.slice(0, 4)" :key="t" size="small" :bordered="false">{{ t }}</NTag>
           </div>
@@ -865,6 +978,35 @@ onMounted(() => {
                 <NInput v-model:value="form.note" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
               </NSpace>
             </NCard>
+
+            <NCard size="small" title="链式代理" class="host-panel">
+              <div class="chain" :data-count="form.chain.length">
+                <div class="chain__head">
+                  <span class="chain__summary">{{ chainLabel(chainPayload(form.chain)) }}</span>
+                  <span class="chain__count mono">{{ form.chain.length }} / {{ MAX_CHAIN_HOPS }}</span>
+                  <NButton
+                    size="tiny"
+                    quaternary
+                    type="primary"
+                    :disabled="form.chain.length >= MAX_CHAIN_HOPS"
+                    @click="addHop(form.chain)"
+                  >＋ 添加一跳</NButton>
+                </div>
+                <div v-if="!form.chain.length" class="chain__empty mono">直连</div>
+                <div v-for="(hop, i) in form.chain" :key="i" class="chain__row">
+                  <span class="chain__idx mono">{{ i + 1 }}</span>
+                  <NSelect v-model:value="hop.kind" size="small" :options="HOP_KIND_OPTIONS" />
+                  <NInput v-model:value="hop.address" size="small" placeholder="host" />
+                  <NSwitch v-model:value="hop.enabled" size="small" />
+                  <NButton size="tiny" quaternary type="error" @click="removeHop(form.chain, i)">删除</NButton>
+                  <div class="chain__auth">
+                    <NInputNumber v-model:value="hop.port" size="small" :min="1" :max="65535" placeholder="port" style="width: 100%" />
+                    <NInput v-model:value="hop.username" size="small" placeholder="user" />
+                    <NInput v-model:value="hop.password" size="small" type="password" show-password-on="click" placeholder="pass" />
+                  </div>
+                </div>
+              </div>
+            </NCard>
           </NGi>
 
           <!-- 右栏 -->
@@ -974,6 +1116,33 @@ onMounted(() => {
             <NInputNumber v-model:value="addForm.svc_port" :min="0" :max="65535" style="width: 100%" />
           </NGi>
         </NGrid>
+
+        <div class="chain">
+          <div class="chain__head">
+            <span class="chain__summary">{{ chainLabel(chainPayload(addForm.chain)) }}</span>
+            <span class="chain__count mono">{{ addForm.chain.length }} / {{ MAX_CHAIN_HOPS }}</span>
+            <NButton
+              size="tiny"
+              quaternary
+              type="primary"
+              :disabled="addForm.chain.length >= MAX_CHAIN_HOPS"
+              @click="addHop(addForm.chain)"
+            >＋ 添加一跳</NButton>
+          </div>
+          <div v-if="!addForm.chain.length" class="chain__empty mono">直连</div>
+          <div v-for="(hop, i) in addForm.chain" :key="i" class="chain__row">
+            <span class="chain__idx mono">{{ i + 1 }}</span>
+            <NSelect v-model:value="hop.kind" size="small" :options="HOP_KIND_OPTIONS" />
+            <NInput v-model:value="hop.address" size="small" placeholder="host" />
+            <NSwitch v-model:value="hop.enabled" size="small" />
+            <NButton size="tiny" quaternary type="error" @click="removeHop(addForm.chain, i)">删除</NButton>
+            <div class="chain__auth">
+              <NInputNumber v-model:value="hop.port" size="small" :min="1" :max="65535" placeholder="port" style="width: 100%" />
+              <NInput v-model:value="hop.username" size="small" placeholder="user" />
+              <NInput v-model:value="hop.password" size="small" type="password" show-password-on="click" placeholder="pass" />
+            </div>
+          </div>
+        </div>
       </NSpace>
       <template #footer>
         <NSpace justify="end">
@@ -1007,3 +1176,88 @@ onMounted(() => {
     </NModal>
   </div>
 </template>
+
+<style scoped>
+.host-card__chain {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.host-card__chain-k {
+  font-size: 10.5px;
+  color: #8e8e93;
+  flex: 0 0 auto;
+}
+.host-card__chain-n {
+  font-size: 10.5px;
+  color: #6e6e73;
+  font-variant-numeric: tabular-nums;
+}
+
+.chain {
+  border: 1px solid #f0f0f2;
+  border-radius: 10px;
+  background: #fafafb;
+  padding: 8px 10px;
+}
+.chain__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.chain__summary {
+  font-size: 11.5px;
+  color: #3a3a3c;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chain__count {
+  font-size: 10.5px;
+  color: #8e8e93;
+  margin-left: auto;
+}
+.chain__empty {
+  font-size: 11.5px;
+  color: #a1a1a6;
+  padding: 2px 0 4px;
+}
+.chain__row {
+  display: grid;
+  grid-template-columns: 16px 84px minmax(0, 1fr) 30px auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #fff;
+  border: 1px solid #ececf0;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+.chain__row:last-child {
+  margin-bottom: 0;
+}
+.chain__idx {
+  font-size: 10px;
+  color: #8e8e93;
+  text-align: center;
+}
+.chain__row :deep(.n-select) {
+  width: 100%;
+  min-width: 0;
+}
+.chain__auth {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+</style>

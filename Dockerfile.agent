@@ -1,0 +1,24 @@
+# NGG remote agent — metrics reporter only (no control plane, no kernel).
+#
+# 该镜像默认未发布到任何 registry。需要自行构建：
+#   docker build -f Dockerfile.agent -t ghcr.io/welkacton/ngg-agent:latest .
+# 之后用控制台「远程节点 → 安装 → Docker」给出的命令运行，或：
+#   docker run -d --name ngg-agent --restart=always \
+#     -e NGG_SERVER=http://<ngg-host>:9191 \
+#     -e NGG_AGENT_ID=<id> -e NGG_AGENT_TOKEN=<token> \
+#     ghcr.io/welkacton/ngg-agent:latest
+FROM golang:1.27-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ internal/ pkg/ /src/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ngg-agent ./cmd/ngg-agent
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata \
+    && adduser -D -H -u 65532 ngg
+COPY --from=build /out/ngg-agent /usr/local/bin/ngg-agent
+# 可选：挂载 /etc/ngg/agent.yaml 并用 -config 指定；默认走 NGG_* 环境变量。
+VOLUME ["/etc/ngg"]
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/ngg-agent"]

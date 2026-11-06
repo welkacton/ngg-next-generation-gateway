@@ -40,6 +40,31 @@ func ValidRole(r Role) bool {
 	return r == RoleInbound || r == RoleOutbound || r == RoleBoth
 }
 
+// MaxChainHops caps how many proxy hops may be stacked in front of an
+// outbound host. Eight is already absurd for real traffic and keeps the
+// rendered kernel config readable.
+const MaxChainHops = 8
+
+// Chain-hop kinds.
+const (
+	ChainKindSOCKS5 = "socks5"
+	ChainKindHTTP   = "http"
+)
+
+// ChainHop is one upstream proxy between NGG and the egress host, used to
+// reach a host that is only reachable through an intermediate proxy.
+type ChainHop struct {
+	Kind     string `json:"kind"` // "socks5" | "http"
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	// Password is echoed back like the existing SecretKey field: the console
+	// needs it to edit the hop, and hiding it would make a PUT from the UI
+	// silently clear the credential. It is never written to logs.
+	Password string `json:"password"`
+	Enabled  bool   `json:"enabled"`
+}
+
 // Host is one registered remote machine.
 type Host struct {
 	ID       string `json:"id"`
@@ -55,6 +80,10 @@ type Host struct {
 	Protocol string `json:"protocol"`
 	CoreID   string `json:"core_id"`
 	Profile  string `json:"profile"`
+
+	// Chain is the optional proxy chain in front of this host. nil (old data)
+	// means "direct", exactly as before v2.7.0.
+	Chain []ChainHop `json:"chain"`
 
 	SecretKey string `json:"secret_key"`
 	ProxyURL  string `json:"proxy_url"`
@@ -135,6 +164,72 @@ func normalize(h *Host) {
 	if h.Tags == nil {
 		h.Tags = []string{}
 	}
+	h.Chain = normalizeChain(h.Chain)
+}
+
+// normalizeChain trims every hop and canonicalises the kind. It returns nil
+// for an empty chain so a host without a chain serialises as null (the
+// pre-v2.7.0 shape) instead of an empty array.
+func normalizeChain(in []ChainHop) []ChainHop {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ChainHop, 0, len(in))
+	for _, hop := range in {
+		kind := strings.ToLower(strings.TrimSpace(hop.Kind))
+		switch kind {
+		case "", "socks", "socks5", "socks5h":
+			// "" is kept so validation can report "kind 必填" for a hop that
+			// was actually configured; a missing kind is never silently
+			// turned into socks5.
+			if kind == "socks" || kind == "socks5h" {
+				kind = ChainKindSOCKS5
+			}
+		}
+		out = append(out, ChainHop{
+			Kind:     kind,
+			Address:  strings.TrimSpace(hop.Address),
+			Port:     hop.Port,
+			Username: strings.TrimSpace(hop.Username),
+			Password: hop.Password,
+			Enabled:  hop.Enabled,
+		})
+	}
+	return out
+}
+
+// validateChain enforces the chain contract: at most MaxChainHops hops, a
+// known kind, an address without scheme, and a real port for enabled hops.
+func validateChain(chain []ChainHop) error {
+	if len(chain) > MaxChainHops {
+		return fmt.Errorf("链式代理最多 %d 跳，当前 %d 跳", MaxChainHops, len(chain))
+	}
+	for i, hop := range chain {
+		label := fmt.Sprintf("第 %d 跳链式代理", i+1)
+		if hop.Kind != ChainKindSOCKS5 && hop.Kind != ChainKindHTTP {
+			return fmt.Errorf("%s：kind 必须是 socks5 或 http", label)
+		}
+		if strings.Contains(hop.Address, "://") {
+			return fmt.Errorf("%s：地址不含协议前缀（不要写 socks5://）", label)
+		}
+		if hop.Address != "" && (!hostRE.MatchString(hop.Address) || strings.Contains(hop.Address, " ")) {
+			return fmt.Errorf("%s：地址需为 IP 或域名", label)
+		}
+		if hop.Port != 0 && (hop.Port < 1 || hop.Port > 65535) {
+			return fmt.Errorf("%s：端口需在 1..65535", label)
+		}
+		// A disabled hop is a draft the operator saved; it only has to be
+		// complete once it is switched on.
+		if hop.Enabled {
+			if hop.Address == "" {
+				return fmt.Errorf("%s：启用后必须填写地址", label)
+			}
+			if hop.Port < 1 || hop.Port > 65535 {
+				return fmt.Errorf("%s：启用后必须填写 1..65535 的端口", label)
+			}
+		}
+	}
+	return nil
 }
 
 func validate(h Host) error {
@@ -163,6 +258,9 @@ func validate(h Host) error {
 		if strings.TrimSpace(ip) == "" {
 			return fmt.Errorf("IP 地址列表含有空项")
 		}
+	}
+	if err := validateChain(h.Chain); err != nil {
+		return err
 	}
 	return nil
 }

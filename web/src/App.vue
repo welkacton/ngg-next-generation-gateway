@@ -168,11 +168,13 @@ const menuOptions: MenuOption[] = [
     key: 'group-gateway',
     icon: menuIcon,
     children: [
+      { label: '总控设置', key: 'gateway-master', icon: menuIcon },
       { label: 'WAN 设置', key: 'gateway-wan', icon: menuIcon },
       { label: 'LAN 设置', key: 'gateway-lan', icon: menuIcon },
       { label: 'DNS 设置', key: 'gateway-dns', icon: menuIcon },
       { label: 'SD-WAN', key: 'gateway-sdwan', icon: menuIcon },
       { label: '防火墙设置', key: 'gateway-firewall', icon: menuIcon },
+      { label: '客户端接入', key: 'client-access', icon: menuIcon },
     ],
   },
   { type: 'divider', key: 'divider-top' },
