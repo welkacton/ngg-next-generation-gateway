@@ -652,3 +652,13 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 配置结构：`wan{mode,interface,address,gateway,mtu,dns[],ipv6,username,password_set}`、
 `lan{interface,address,netmask,dhcp_enabled,dhcp_start,dhcp_end,lease_minutes,domain}`、
 `firewall{default_inbound,rules[],port_forwards[],upnp,conntrack}`。
+
+### v2.6.7 网关中心扩展
+
+`GET/PUT /gateway/config` 的 `config` 增加：
+
+- `wans[]`：固定 6 个 WAN 口，字段 `id,name,enabled,mode,interface,address,gateway,mtu,dns[],ipv6,username,password_set,route,weight,priority`；`route` 为 `local`（本地直出）或 `proxy`（配置引擎国际代理）。
+- `dns`：`mode(forward|recursive), servers[], fallback[], doh, cache_enabled, cache_size, cache_ttl, local_domain, hosts, blocklist[], dnssec, log_queries`。
+- `wan` 保留为 `wans[0]` 的兼容字段。
+
+`GET /gateway/status` 增加 `wan_links: [{id,interface,route,address,online}]`。

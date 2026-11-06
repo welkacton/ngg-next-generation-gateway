@@ -202,6 +202,142 @@ func TestGatewayConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestGatewayMultiWANContract(t *testing.T) {
+	ts, token := newTestServer(t)
+
+	getConfig := func() map[string]any {
+		t.Helper()
+		resp, body := req(t, "GET", ts.URL+"/api/v1/gateway/config", token, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET config: %d %s", resp.StatusCode, body)
+		}
+		var got struct {
+			Config map[string]any `json:"config"`
+		}
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatalf("decode: %v (%s)", err, body)
+		}
+		return got.Config
+	}
+
+	// 1) 默认必须是固定 6 口，wan 是 wans[0] 的兼容镜像，DNS 段有默认值。
+	cfg := getConfig()
+	wans, _ := cfg["wans"].([]any)
+	if len(wans) != 6 {
+		t.Fatalf("default wans length = %d, want 6", len(wans))
+	}
+	first, _ := wans[0].(map[string]any)
+	wan, _ := cfg["wan"].(map[string]any)
+	if first["id"] != "wan1" || first["name"] != "WAN 1" {
+		t.Errorf("wans[0] = %v, want wan1 / WAN 1", first)
+	}
+	if first["enabled"] != true {
+		t.Error("wan1 must be enabled by default")
+	}
+	if wan["id"] != first["id"] || wan["priority"] != first["priority"] {
+		t.Errorf("wan must mirror wans[0]: %v vs %v", wan, first)
+	}
+	for i, raw := range wans[1:] {
+		w, _ := raw.(map[string]any)
+		if w["enabled"] != false {
+			t.Errorf("wans[%d] must start disabled", i+1)
+		}
+	}
+	dns, _ := cfg["dns"].(map[string]any)
+	if dns["mode"] != "forward" || dns["cache_size"] != float64(10000) || dns["local_domain"] != "lan" {
+		t.Errorf("default dns = %v", dns)
+	}
+
+	// 2) 只启用第二个口做 PPPoE：密码独立保存，响应只回 password_set。
+	second, _ := wans[1].(map[string]any)
+	second["enabled"] = true
+	second["mode"] = "pppoe"
+	second["interface"] = "eth1"
+	second["username"] = "user2@isp"
+	second["password"] = "secret-wan2"
+	second["route"] = "proxy"
+	blob, _ := json.Marshal(cfg)
+	resp, body := req(t, "PUT", ts.URL+"/api/v1/gateway/config", token, string(blob))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT multi-wan: %d %s", resp.StatusCode, body)
+	}
+	if strings.Contains(body, "secret-wan2") {
+		t.Fatalf("PUT response leaked the per-port password: %s", body)
+	}
+	var saved struct {
+		Config   map[string]any `json:"config"`
+		Warnings []string       `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(body), &saved); err != nil {
+		t.Fatalf("decode PUT: %v (%s)", err, body)
+	}
+	savedWANs, _ := saved.Config["wans"].([]any)
+	if len(savedWANs) != 6 {
+		t.Fatalf("saved wans = %d, want 6", len(savedWANs))
+	}
+	s0, _ := savedWANs[0].(map[string]any)
+	s1, _ := savedWANs[1].(map[string]any)
+	if s0["password_set"] != false || s1["password_set"] != true {
+		t.Errorf("password_set flags = %v / %v", s0["password_set"], s1["password_set"])
+	}
+	if _, ok := s1["password"]; ok {
+		t.Error("the saved response must not carry a password key")
+	}
+	proxyWarned := false
+	for _, w := range saved.Warnings {
+		if strings.Contains(w, "route=proxy") {
+			proxyWarned = true
+		}
+	}
+	if !proxyWarned {
+		t.Errorf("route=proxy must be reported as not implemented: %v", saved.Warnings)
+	}
+
+	// 3) 状态里每个启用的口都有一条 wan_links，结构固定。
+	resp, body = req(t, "GET", ts.URL+"/api/v1/gateway/status", token, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status: %d %s", resp.StatusCode, body)
+	}
+	var st struct {
+		WANLinks []struct {
+			ID        string `json:"id"`
+			Interface string `json:"interface"`
+			Route     string `json:"route"`
+			Address   string `json:"address"`
+			Online    bool   `json:"online"`
+		} `json:"wan_links"`
+	}
+	if err := json.Unmarshal([]byte(body), &st); err != nil {
+		t.Fatalf("decode status: %v (%s)", err, body)
+	}
+	if len(st.WANLinks) != 2 {
+		t.Fatalf("wan_links = %+v, want the two enabled ports", st.WANLinks)
+	}
+	if st.WANLinks[0].ID != "wan1" || st.WANLinks[1].ID != "wan2" {
+		t.Fatalf("wan_links ids = %+v", st.WANLinks)
+	}
+	if st.WANLinks[1].Interface != "eth1" || st.WANLinks[1].Route != "proxy" {
+		t.Errorf("wan_links[1] = %+v", st.WANLinks[1])
+	}
+
+	// 4) 全部关掉必须 422，且磁盘上的配置不变。
+	for _, raw := range wans {
+		w, _ := raw.(map[string]any)
+		w["enabled"] = false
+	}
+	blob, _ = json.Marshal(cfg)
+	resp, body = req(t, "PUT", ts.URL+"/api/v1/gateway/config", token, string(blob))
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("all-disabled PUT: got %d, want 422 (%s)", resp.StatusCode, body)
+	}
+	after := getConfig()
+	afterWANs, _ := after["wans"].([]any)
+	after1, _ := afterWANs[1].(map[string]any)
+	if after1["enabled"] != true || after1["mode"] != "pppoe" {
+		t.Fatalf("a rejected config changed the stored one: %v", after1)
+	}
+}
+
 func TestGatewayRequiresAuth(t *testing.T) {
 	ts, _ := newTestServer(t)
 	for _, path := range []string{"/api/v1/gateway/config", "/api/v1/gateway/status"} {

@@ -21,6 +21,20 @@ type InterfaceInfo struct {
 	Up           bool     `json:"up"`
 }
 
+// WANLink is the live view of one enabled WAN port. Everything in it is read
+// from the host: the interface name and route come from the saved policy, the
+// address and online flag from the real NIC.
+//
+// A port whose interface is not configured, or is not present on this host,
+// reports online=false with an empty address — it is never guessed.
+type WANLink struct {
+	ID        string `json:"id"`
+	Interface string `json:"interface"`
+	Route     string `json:"route"`
+	Address   string `json:"address"`
+	Online    bool   `json:"online"`
+}
+
 // Status is the live host view plus the parts of the saved policy that can be
 // answered honestly.
 //
@@ -34,6 +48,7 @@ type Status struct {
 	DefaultGateway   string          `json:"default_gateway"`
 	DNS              []string        `json:"dns"`
 	FirewallActive   bool            `json:"firewall_active"`
+	WANLinks         []WANLink       `json:"wan_links"`
 	CheckedAt        time.Time       `json:"checked_at"`
 }
 
@@ -44,12 +59,20 @@ const probeTarget = "8.8.8.8:80"
 
 const probeTimeout = 2 * time.Second
 
+// liveIface pairs what the UI sees with the parsed addresses, so an IP from
+// the kernel's routing table can be matched back to its interface.
+type liveIface struct {
+	info InterfaceInfo
+	ips  []net.IP
+}
+
 // Status reads the host state now. It never blocks longer than probeTimeout
 // plus the cost of enumerating interfaces.
 func (s *Store) Status() Status {
 	st := Status{
 		Interfaces: []InterfaceInfo{},
 		DNS:        []string{},
+		WANLinks:   []WANLink{},
 		CheckedAt:  time.Now().UTC(),
 	}
 	cfg := s.Get()
@@ -61,10 +84,6 @@ func (s *Store) Status() Status {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return st
-	}
-	type liveIface struct {
-		info InterfaceInfo
-		ips  []net.IP
 	}
 	live := make([]liveIface, 0, len(ifaces))
 	for _, ifc := range ifaces {
@@ -101,7 +120,54 @@ func (s *Store) Status() Status {
 		st.Interfaces = append(st.Interfaces, li.info)
 	}
 	st.DefaultGateway = defaultGateway()
+	st.WANLinks = wanLinks(cfg, live)
 	return st
+}
+
+// wanLinks maps the enabled ports of the saved policy onto the NICs that
+// really exist. A port is online only when its interface is present, up, and
+// holds at least one address; anything else is reported as offline rather than
+// assumed reachable.
+func wanLinks(cfg Config, live []liveIface) []WANLink {
+	links := make([]WANLink, 0, len(cfg.WANs))
+	byName := make(map[string]liveIface, len(live))
+	for _, li := range live {
+		byName[li.info.Name] = li
+	}
+	for _, w := range cfg.WANs {
+		if !w.Enabled {
+			continue
+		}
+		link := WANLink{ID: w.ID, Interface: w.Interface, Route: w.Route}
+		if w.Interface != "" {
+			if li, ok := byName[w.Interface]; ok {
+				link.Address = firstIPv4(li.info.Addresses)
+				link.Online = li.info.Up && len(li.info.Addresses) > 0 && link.Address != ""
+			}
+		}
+		links = append(links, link)
+	}
+	return links
+}
+
+// firstIPv4 picks the address that would actually be used, skipping loopback
+// and link-local entries. It returns "" when the interface only carries IPv6.
+func firstIPv4(addresses []string) string {
+	for _, raw := range addresses {
+		host := raw
+		if i := strings.Index(host, "/"); i > 0 {
+			host = host[:i]
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		return ip.To4().String()
+	}
+	return ""
 }
 
 func addrIP(a net.Addr) net.IP {

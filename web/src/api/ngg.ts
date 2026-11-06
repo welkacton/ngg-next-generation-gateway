@@ -1918,6 +1918,10 @@ export const saveNodeConfigFile = (id: string, payload: { content: string; forma
  * ------------------------------------------------------------------ */
 
 export interface GatewayWAN {
+  /** wan1 .. wan6 */
+  id: string
+  name: string
+  enabled: boolean
   mode: 'dhcp' | 'static' | 'pppoe'
   interface: string
   address: string
@@ -1930,6 +1934,29 @@ export interface GatewayWAN {
   password_set?: boolean
   /** 仅写入时使用 */
   password?: string
+  /** local = 本地直出；proxy = 交由配置引擎走国际代理 */
+  route: 'local' | 'proxy'
+  /** 负载权重 1..100 */
+  weight: number
+  /** 优先级 1..10，数字越小越优先 */
+  priority: number
+}
+
+export interface GatewayDNS {
+  /** forward = 转发上游；recursive = 本地递归（声明式） */
+  mode: 'forward' | 'recursive'
+  servers: string[]
+  fallback: string[]
+  /** DoH 端点，空表示不启用 */
+  doh: string
+  cache_enabled: boolean
+  cache_size: number
+  cache_ttl: number
+  local_domain: string
+  hosts: Record<string, string>
+  blocklist: string[]
+  dnssec: boolean
+  log_queries: boolean
 }
 
 export interface GatewayLAN {
@@ -1973,8 +2000,12 @@ export interface GatewayFirewall {
 }
 
 export interface GatewayConfig {
+  /** 兼容字段：始终等于 wans[0] */
   wan: GatewayWAN
+  /** 固定 6 个 WAN 口 */
+  wans: GatewayWAN[]
   lan: GatewayLAN
+  dns: GatewayDNS
   firewall: GatewayFirewall
 }
 

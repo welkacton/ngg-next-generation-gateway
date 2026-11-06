@@ -78,12 +78,12 @@ const forwardForm = reactive({
   enabled: true,
 })
 
-const statRows = computed(() => [
-  { label: '默认入站策略', value: defaultInbound.value === 'drop' ? '丢弃' : '允许' },
-  { label: '规则数', value: String(rules.value.length) },
-  { label: '端口转发数', value: String(forwards.value.length) },
+const stats = computed(() => [
+  { label: '默认入站', value: defaultInbound.value === 'drop' ? '丢弃' : '允许' },
+  { label: '规则', value: String(rules.value.length) },
+  { label: '端口转发', value: String(forwards.value.length) },
   {
-    label: '防火墙状态',
+    label: '防火墙',
     value: status.value ? (status.value.firewall_active ? '已启用' : '未启用') : '—',
   },
 ])
@@ -190,7 +190,7 @@ const ruleColumns: any[] = [
   {
     title: '启用',
     key: 'enabled',
-    width: 62,
+    width: 54,
     align: 'center',
     titleAlign: 'center',
     render: (row: FirewallRule) =>
@@ -205,14 +205,14 @@ const ruleColumns: any[] = [
   {
     title: '名称',
     key: 'name',
-    minWidth: 130,
+    minWidth: 120,
     render: (row: FirewallRule) =>
       h('span', { class: 'cell-clip', title: row.name }, row.name || '—'),
   },
   {
     title: '动作',
     key: 'action',
-    width: 84,
+    width: 68,
     render: (row: FirewallRule) =>
       h(
         NTag,
@@ -220,29 +220,29 @@ const ruleColumns: any[] = [
         { default: () => ACTION_LABEL[row.action] },
       ),
   },
-  { title: '协议', key: 'protocol', width: 74 },
+  { title: '协议', key: 'protocol', width: 66 },
   {
     title: '来源',
     key: 'src',
-    minWidth: 130,
+    minWidth: 110,
     render: (row: FirewallRule) => h('span', { class: 'cell-clip' }, row.src || '—'),
   },
   {
     title: '目标',
     key: 'dst',
-    minWidth: 130,
+    minWidth: 110,
     render: (row: FirewallRule) => h('span', { class: 'cell-clip' }, row.dst || '—'),
   },
   {
     title: '端口',
     key: 'port',
-    width: 110,
+    width: 90,
     render: (row: FirewallRule) => h('span', { class: 'mono' }, row.port || '—'),
   },
   {
     title: '操作',
     key: 'ops',
-    width: 116,
+    width: 100,
     fixed: 'right',
     render: (row: FirewallRule) =>
       h('div', { class: 'row-actions' }, [
@@ -326,7 +326,7 @@ const forwardColumns: any[] = [
   {
     title: '启用',
     key: 'enabled',
-    width: 62,
+    width: 54,
     align: 'center',
     titleAlign: 'center',
     render: (row: PortForward) =>
@@ -341,33 +341,33 @@ const forwardColumns: any[] = [
   {
     title: '名称',
     key: 'name',
-    minWidth: 140,
+    minWidth: 130,
     render: (row: PortForward) =>
       h('span', { class: 'cell-clip', title: row.name }, row.name || '—'),
   },
-  { title: '协议', key: 'protocol', width: 90 },
+  { title: '协议', key: 'protocol', width: 80 },
   {
     title: '外部端口',
     key: 'ext_port',
-    width: 100,
+    width: 90,
     render: (row: PortForward) => h('span', { class: 'mono' }, String(row.ext_port)),
   },
   {
     title: '内部地址',
     key: 'int_addr',
-    minWidth: 140,
+    minWidth: 120,
     render: (row: PortForward) => h('span', { class: 'mono' }, row.int_addr || '—'),
   },
   {
     title: '内部端口',
     key: 'int_port',
-    width: 100,
+    width: 90,
     render: (row: PortForward) => h('span', { class: 'mono' }, String(row.int_port)),
   },
   {
     title: '操作',
     key: 'ops',
-    width: 116,
+    width: 100,
     fixed: 'right',
     render: (row: PortForward) =>
       h('div', { class: 'row-actions' }, [
@@ -443,11 +443,7 @@ async function save(): Promise<void> {
     conntrack: conntrack.value,
   }
 
-  const saved = await run(
-    'save',
-    () => api.saveGatewayConfig({ ...base, firewall }),
-    '已保存',
-  )
+  const saved = await run('save', () => api.saveGatewayConfig({ ...base, firewall }), '已保存')
   if (saved) {
     config.value = saved.config
     syncFrom(saved.config)
@@ -461,45 +457,44 @@ onMounted(() => {
 
 <template>
   <div class="gw">
-    <div class="gw-head">
-      <h2 class="page-title">防火墙设置</h2>
-      <div class="gw-head__right">
-        <button class="gw-refresh" type="button" :disabled="loading" @click="load">
-          {{ loading ? '刷新中' : '刷新' }}
-        </button>
+    <header class="gw-head">
+      <h2 class="gw-title">防火墙设置</h2>
+      <div class="gw-head__ops">
+        <NButton size="tiny" quaternary type="primary" :loading="loading" @click="load">刷新</NButton>
+        <NButton size="tiny" type="primary" :loading="isBusy('save')" @click="save">保存</NButton>
       </div>
-    </div>
+    </header>
 
     <section class="gw-stats">
-      <div v-for="row in statRows" :key="row.label" class="gw-stat">
-        <div class="gw-stat__label">{{ row.label }}</div>
-        <div class="gw-stat__value" :title="row.value">{{ row.value }}</div>
+      <div v-for="item in stats" :key="item.label" class="gw-stat">
+        <div class="gw-stat__label">{{ item.label }}</div>
+        <div class="gw-stat__value" :title="item.value">{{ item.value }}</div>
       </div>
     </section>
 
     <section class="gw-card">
-      <div class="gw-card__head">
-        <h3 class="gw-card__title">默认入站策略</h3>
-        <div class="gw-seg" role="group" aria-label="默认入站策略">
-          <button
-            type="button"
-            :class="{ 'is-active': defaultInbound === 'drop' }"
-            @click="defaultInbound = 'drop'"
-          >丢弃</button>
-          <button
-            type="button"
-            :class="{ 'is-active': defaultInbound === 'accept' }"
-            @click="defaultInbound = 'accept'"
-          >允许</button>
+      <div class="policy">
+        <div class="policy__seg">
+          <span class="label">默认入站</span>
+          <div class="seg" role="group" aria-label="默认入站策略">
+            <button
+              type="button"
+              :class="{ 'is-active': defaultInbound === 'drop' }"
+              @click="defaultInbound = 'drop'"
+            >丢弃</button>
+            <button
+              type="button"
+              :class="{ 'is-active': defaultInbound === 'accept' }"
+              @click="defaultInbound = 'accept'"
+            >允许</button>
+          </div>
         </div>
-      </div>
-      <div class="gw-switches">
-        <div class="gw-switch">
-          <span class="gw-label">UPnP</span>
+        <div class="inline">
+          <span class="label">UPnP</span>
           <NSwitch v-model:value="upnp" size="small" />
         </div>
-        <div class="gw-switch">
-          <span class="gw-label">连接跟踪</span>
+        <div class="inline">
+          <span class="label">连接跟踪</span>
           <NSwitch v-model:value="conntrack" size="small" />
         </div>
       </div>
@@ -508,15 +503,16 @@ onMounted(() => {
     <section class="gw-card">
       <div class="gw-card__head">
         <h3 class="gw-card__title">规则</h3>
-        <NButton size="tiny" type="primary" @click="openRule()">+ 新增规则</NButton>
+        <NButton size="tiny" type="primary" @click="openRule()">新增规则</NButton>
       </div>
       <NDataTable
+        class="table"
         :columns="ruleColumns"
         :data="rules"
         :row-key="ruleRowKey"
         :bordered="false"
         :pagination="false"
-        :scroll-x="940"
+        :scroll-x="760"
         size="small"
       />
     </section>
@@ -524,62 +520,60 @@ onMounted(() => {
     <section class="gw-card">
       <div class="gw-card__head">
         <h3 class="gw-card__title">端口转发</h3>
-        <NButton size="tiny" type="primary" @click="openForward()">+ 新增转发</NButton>
+        <NButton size="tiny" type="primary" @click="openForward()">新增转发</NButton>
       </div>
       <NDataTable
+        class="table"
         :columns="forwardColumns"
         :data="forwards"
         :row-key="forwardRowKey"
         :bordered="false"
         :pagination="false"
-        :scroll-x="820"
+        :scroll-x="680"
         size="small"
       />
     </section>
-
-    <div class="gw-save">
-      <NButton type="primary" size="small" :loading="isBusy('save')" @click="save">保存</NButton>
-    </div>
 
     <NModal
       v-model:show="showRule"
       preset="card"
       :title="ruleEditingId ? '编辑规则' : '新增规则'"
-      style="width: 520px"
+      class="modal"
+      style="width: 460px"
       :bordered="false"
     >
-      <div class="gw-form">
-        <div class="gw-field span-2">
-          <div class="gw-label">名称</div>
-          <NInput v-model:value="ruleForm.name" size="small" />
+      <div class="grid">
+        <div class="field span-2">
+          <div class="label">名称</div>
+          <NInput v-model:value="ruleForm.name" size="small" :maxlength="64" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">动作</div>
+        <div class="field">
+          <div class="label">动作</div>
           <NSelect v-model:value="ruleForm.action" size="small" :options="ACTION_OPTIONS" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">协议</div>
+        <div class="field">
+          <div class="label">协议</div>
           <NSelect
             v-model:value="ruleForm.protocol"
             size="small"
             :options="RULE_PROTOCOL_OPTIONS"
           />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">来源</div>
+        <div class="field">
+          <div class="label">来源</div>
           <NInput v-model:value="ruleForm.src" size="small" placeholder="any" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">目标</div>
+        <div class="field">
+          <div class="label">目标</div>
           <NInput v-model:value="ruleForm.dst" size="small" placeholder="any" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">端口</div>
+        <div class="field">
+          <div class="label">端口</div>
           <NInput v-model:value="ruleForm.port" size="small" placeholder="any" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">启用</div>
-          <NSwitch v-model:value="ruleForm.enabled" size="small" />
+        <div class="field">
+          <div class="label">启用</div>
+          <div class="switch-row"><NSwitch v-model:value="ruleForm.enabled" size="small" /></div>
         </div>
       </div>
       <div class="m-foot">
@@ -592,37 +586,38 @@ onMounted(() => {
       v-model:show="showForward"
       preset="card"
       :title="forwardEditingId ? '编辑端口转发' : '新增端口转发'"
-      style="width: 520px"
+      class="modal"
+      style="width: 460px"
       :bordered="false"
     >
-      <div class="gw-form">
-        <div class="gw-field span-2">
-          <div class="gw-label">名称</div>
-          <NInput v-model:value="forwardForm.name" size="small" />
+      <div class="grid">
+        <div class="field span-2">
+          <div class="label">名称</div>
+          <NInput v-model:value="forwardForm.name" size="small" :maxlength="64" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">协议</div>
+        <div class="field">
+          <div class="label">协议</div>
           <NSelect
             v-model:value="forwardForm.protocol"
             size="small"
             :options="FORWARD_PROTOCOL_OPTIONS"
           />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">外部端口</div>
+        <div class="field">
+          <div class="label">外部端口</div>
           <NInputNumber v-model:value="forwardForm.extPort" size="small" :min="1" :max="65535" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">内部地址</div>
+        <div class="field">
+          <div class="label">内部地址</div>
           <NInput v-model:value="forwardForm.intAddr" size="small" placeholder="192.168.10.20" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">内部端口</div>
+        <div class="field">
+          <div class="label">内部端口</div>
           <NInputNumber v-model:value="forwardForm.intPort" size="small" :min="1" :max="65535" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">启用</div>
-          <NSwitch v-model:value="forwardForm.enabled" size="small" />
+        <div class="field">
+          <div class="label">启用</div>
+          <div class="switch-row"><NSwitch v-model:value="forwardForm.enabled" size="small" /></div>
         </div>
       </div>
       <div class="m-foot">
@@ -638,9 +633,10 @@ onMounted(() => {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
   background: #f5f5f7;
-  border-radius: 18px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 12px;
   color: #1d1d1f;
+  font-size: 12px;
   min-height: calc(100vh - 120px);
 }
 
@@ -648,60 +644,46 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-.gw-head__right {
-  display: flex;
-  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 8px;
 }
-.gw-refresh {
-  appearance: none;
-  border: 1px solid #e8e8ed;
-  background: #fff;
-  color: #0071e3;
-  font: inherit;
-  font-size: 12.5px;
+.gw-title {
+  margin: 0;
+  font-size: 18px;
   font-weight: 600;
-  padding: 7px 14px;
-  border-radius: 10px;
-  cursor: pointer;
+  letter-spacing: -0.3px;
+  line-height: 1.3;
 }
-.gw-refresh:disabled {
-  opacity: 0.55;
-  cursor: default;
+.gw-head__ops {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .gw-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.gw-stat,
-.gw-card {
-  background: #fff;
-  border: 1px solid #e8e8ed;
-  border-radius: 13px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .gw-stat {
-  padding: 11px 13px 12px;
+  background: #fff;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  padding: 8px 10px;
   min-width: 0;
 }
 .gw-stat__label {
-  font-size: 12px;
+  font-size: 10.5px;
   color: #6e6e73;
   font-weight: 500;
 }
 .gw-stat__value {
-  font-size: 20px;
-  font-weight: 650;
+  font-size: 18px;
+  font-weight: 600;
   letter-spacing: -0.02em;
-  margin-top: 5px;
+  margin-top: 2px;
   line-height: 1.25;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -710,109 +692,144 @@ onMounted(() => {
 }
 
 .gw-card {
-  padding: 14px 16px 16px;
-  margin-bottom: 10px;
+  background: #fff;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.gw-card:last-of-type {
+  margin-bottom: 0;
 }
 .gw-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 .gw-card__title {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-.gw-seg {
+.policy {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.policy__seg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.label {
+  font-size: 10.5px;
+  color: #6e6e73;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+.policy .label,
+.inline .label {
+  margin-bottom: 0;
+}
+
+.seg {
   display: inline-flex;
   gap: 2px;
-  padding: 3px;
-  background: #e9e9ed;
-  border-radius: 10px;
+  padding: 2px;
+  background: #ececef;
+  border-radius: 7px;
 }
-.gw-seg button {
+.seg button {
   appearance: none;
   border: 0;
   background: transparent;
   color: #6e6e73;
   font: inherit;
-  font-size: 12.5px;
-  padding: 5px 14px;
-  border-radius: 7px;
+  font-size: 10.5px;
+  padding: 3px 12px;
+  border-radius: 5px;
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
-.gw-seg button:hover {
+.seg button:hover {
   color: #1d1d1f;
 }
-.gw-seg button.is-active {
+.seg button.is-active {
   background: #fff;
   color: #1d1d1f;
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
-.gw-switches {
-  display: flex;
-  align-items: center;
-  gap: 28px;
-  flex-wrap: wrap;
-  border-top: 1px solid #f0f0f2;
-  padding-top: 12px;
+.table :deep(.n-data-table-th) {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 8px;
+  white-space: nowrap;
 }
-.gw-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
+.table :deep(.n-data-table-td) {
+  font-size: 11.5px;
+  padding: 6px 8px;
+  line-height: 1.35;
+}
+.table :deep(.n-data-table-th__title) {
+  white-space: nowrap;
+}
+.table :deep(.mono) {
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace;
+  font-variant-numeric: tabular-nums;
 }
 
-.gw-form {
+.grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
+  gap: 8px 12px;
 }
-.gw-field {
+.field {
   min-width: 0;
 }
-.gw-field.span-2 {
-  grid-column: 1 / -1;
+.span-2 {
+  grid-column: span 2;
 }
-.gw-label {
-  font-size: 12.5px;
-  color: #6e6e73;
-  margin-bottom: 5px;
-  font-weight: 500;
+.switch-row {
+  display: flex;
+  align-items: center;
+  height: 28px;
 }
-
-.gw-save {
+.m-foot {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
 }
 
-.m-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+.modal :deep(.n-card-header__main) {
+  font-size: 14px;
+  font-weight: 600;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 900px) {
   .gw-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 720px) {
-  .gw-form,
-  .gw-stats {
+@media (max-width: 620px) {
+  .grid {
     grid-template-columns: 1fr;
+  }
+  .span-2 {
+    grid-column: 1 / -1;
   }
 }
 </style>

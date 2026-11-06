@@ -49,14 +49,14 @@ const maskOptions = computed(() => {
   return options
 })
 
-const statRows = computed(() => [
-  { label: 'LAN 接口', value: config.value?.lan.interface || '—' },
-  { label: 'LAN 地址', value: config.value?.lan.address || '—' },
+const stats = computed(() => [
+  { label: 'LAN 接口', value: form.interface || '—' },
+  { label: 'LAN 地址', value: form.address || '—' },
+  { label: 'DHCP', value: form.dhcpEnabled ? '已开启' : '已关闭' },
   {
-    label: 'DHCP',
-    value: config.value ? (config.value.lan.dhcp_enabled ? '已开启' : '已关闭') : '—',
+    label: '租约',
+    value: form.leaseMinutes === null ? '—' : `${form.leaseMinutes} 分`,
   },
-  { label: '租约数', value: '—' },
 ])
 
 function ipToInt(ip: string): number | null {
@@ -80,9 +80,8 @@ function syncFrom(cfg: GatewayConfig): void {
   form.dhcpEnabled = lan.dhcp_enabled === true
   form.dhcpStart = lan.dhcp_start ?? ''
   form.dhcpEnd = lan.dhcp_end ?? ''
-  form.leaseMinutes = typeof lan.lease_minutes === 'number' && lan.lease_minutes > 0
-    ? lan.lease_minutes
-    : 1440
+  form.leaseMinutes =
+    typeof lan.lease_minutes === 'number' && lan.lease_minutes > 0 ? lan.lease_minutes : 1440
   form.domain = lan.domain ?? ''
 }
 
@@ -96,7 +95,7 @@ function validate(): string | null {
 
   const lease = form.leaseMinutes
   if (lease === null || Number.isNaN(lease)) return '租约分钟数不能为空'
-  if (lease < 1 || lease > 525600) return '租约需在 1–525600 分钟之间'
+  if (lease < 1 || lease > 10080) return '租约需在 1–10080 分钟之间'
 
   if (form.dhcpEnabled) {
     const start = form.dhcpStart.trim()
@@ -107,9 +106,12 @@ function validate(): string | null {
     const netInt = (ipToInt(address) ?? 0) & maskInt
     const startInt = ipToInt(start) ?? 0
     const endInt = ipToInt(end) ?? 0
+    const broadcast = (netInt | (~maskInt >>> 0)) >>> 0
     if ((startInt & maskInt) !== netInt) return '起始地址不在 LAN 网段内'
     if ((endInt & maskInt) !== netInt) return '结束地址不在 LAN 网段内'
     if (startInt >= endInt) return '起始地址需小于结束地址'
+    if (startInt === netInt) return '起始地址不能是网络地址'
+    if (endInt === broadcast) return '结束地址不能是广播地址'
   }
   return null
 }
@@ -150,11 +152,7 @@ async function save(): Promise<void> {
     domain: form.domain.trim(),
   }
 
-  const saved = await run(
-    'save',
-    () => api.saveGatewayConfig({ ...base, lan }),
-    '已保存',
-  )
+  const saved = await run('save', () => api.saveGatewayConfig({ ...base, lan }), '已保存')
   if (saved) {
     config.value = saved.config
     syncFrom(saved.config)
@@ -168,53 +166,49 @@ onMounted(() => {
 
 <template>
   <div class="gw">
-    <div class="gw-head">
-      <h2 class="page-title">LAN 设置</h2>
-      <div class="gw-head__right">
-        <span class="gw-pill">
-          <i class="gw-dot" :class="form.interface ? 'is-on' : 'is-off'" />
-          网卡 {{ interfaces.length }}
-        </span>
-        <button class="gw-refresh" type="button" :disabled="loading" @click="load">
-          {{ loading ? '刷新中' : '刷新' }}
-        </button>
+    <header class="gw-head">
+      <h2 class="gw-title">LAN 设置</h2>
+      <div class="gw-head__ops">
+        <span class="gw-meta">{{ interfaces.length }} 个网卡</span>
+        <NButton size="tiny" quaternary type="primary" :loading="loading" @click="load">刷新</NButton>
+        <NButton size="tiny" type="primary" :loading="isBusy('save')" @click="save">保存</NButton>
       </div>
-    </div>
+    </header>
 
     <section class="gw-stats">
-      <div v-for="row in statRows" :key="row.label" class="gw-stat">
-        <div class="gw-stat__label">{{ row.label }}</div>
-        <div class="gw-stat__value" :title="row.value">{{ row.value }}</div>
+      <div v-for="item in stats" :key="item.label" class="gw-stat">
+        <div class="gw-stat__label">{{ item.label }}</div>
+        <div class="gw-stat__value mono" :title="item.value">{{ item.value }}</div>
       </div>
     </section>
 
     <section class="gw-card">
       <div class="gw-card__head">
-        <h3 class="gw-card__title">接口参数</h3>
-        <div class="gw-inline">
-          <span class="gw-label">DHCP</span>
+        <h3 class="gw-card__title">接口</h3>
+        <div class="inline">
+          <span class="label">DHCP</span>
           <NSwitch v-model:value="form.dhcpEnabled" size="small" />
         </div>
       </div>
 
-      <div class="gw-form">
-        <div class="gw-field">
-          <div class="gw-label">接口</div>
+      <div class="grid">
+        <div class="field">
+          <div class="label">接口</div>
           <NSelect
             v-model:value="form.interface"
             size="small"
             filterable
             tag
             :options="interfaceOptions"
-            placeholder="选择接口"
+            placeholder="eth1"
           />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">LAN 地址</div>
+        <div class="field">
+          <div class="label">LAN 地址</div>
           <NInput v-model:value="form.address" size="small" placeholder="192.168.10.1" />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">子网掩码</div>
+        <div class="field">
+          <div class="label">子网掩码</div>
           <NSelect
             v-model:value="form.netmask"
             size="small"
@@ -224,27 +218,22 @@ onMounted(() => {
             placeholder="255.255.255.0"
           />
         </div>
-        <div class="gw-field">
-          <div class="gw-label">租约分钟数</div>
-          <NInputNumber v-model:value="form.leaseMinutes" size="small" :min="1" :max="525600" />
+        <div class="field">
+          <div class="label">租约分钟</div>
+          <NInputNumber v-model:value="form.leaseMinutes" size="small" :min="1" :max="10080" />
         </div>
-
-        <div class="gw-field span-2">
-          <div class="gw-label">地址池</div>
-          <div class="gw-pair">
-            <NInput v-model:value="form.dhcpStart" size="small" placeholder="192.168.10.100" />
-            <NInput v-model:value="form.dhcpEnd" size="small" placeholder="192.168.10.200" />
-          </div>
+        <div class="field">
+          <div class="label">地址池起始</div>
+          <NInput v-model:value="form.dhcpStart" size="small" placeholder="192.168.10.100" />
         </div>
-
-        <div class="gw-field span-2">
-          <div class="gw-label">本地域名</div>
+        <div class="field">
+          <div class="label">地址池结束</div>
+          <NInput v-model:value="form.dhcpEnd" size="small" placeholder="192.168.10.200" />
+        </div>
+        <div class="field">
+          <div class="label">本地域名</div>
           <NInput v-model:value="form.domain" size="small" placeholder="lan" />
         </div>
-      </div>
-
-      <div class="gw-foot">
-        <NButton type="primary" size="small" :loading="isBusy('save')" @click="save">保存</NButton>
       </div>
     </section>
   </div>
@@ -255,9 +244,10 @@ onMounted(() => {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
   background: #f5f5f7;
-  border-radius: 18px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 12px;
   color: #1d1d1f;
+  font-size: 12px;
   min-height: calc(100vh - 120px);
 }
 
@@ -265,87 +255,51 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-.gw-head__right {
-  display: flex;
-  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 8px;
 }
-.gw-pill {
-  display: inline-flex;
+.gw-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  line-height: 1.3;
+}
+.gw-head__ops {
+  display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: #fff;
-  border: 1px solid #e8e8ed;
+  gap: 6px;
+}
+.gw-meta {
+  font-size: 10.5px;
+  color: #6e6e73;
   font-variant-numeric: tabular-nums;
-}
-.gw-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #8e8e93;
-  flex: 0 0 auto;
-}
-.gw-dot.is-on {
-  background: #34c759;
-  box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.15);
-}
-.gw-dot.is-off {
-  background: #ff9f0a;
-  box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.14);
-}
-.gw-refresh {
-  appearance: none;
-  border: 1px solid #e8e8ed;
-  background: #fff;
-  color: #0071e3;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 7px 14px;
-  border-radius: 10px;
-  cursor: pointer;
-}
-.gw-refresh:disabled {
-  opacity: 0.55;
-  cursor: default;
 }
 
 .gw-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.gw-stat,
-.gw-card {
-  background: #fff;
-  border: 1px solid #e8e8ed;
-  border-radius: 13px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .gw-stat {
-  padding: 11px 13px 12px;
+  background: #fff;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  padding: 8px 10px;
   min-width: 0;
 }
 .gw-stat__label {
-  font-size: 12px;
+  font-size: 10.5px;
   color: #6e6e73;
   font-weight: 500;
 }
 .gw-stat__value {
-  font-size: 20px;
-  font-weight: 650;
+  font-size: 18px;
+  font-weight: 600;
   letter-spacing: -0.02em;
-  margin-top: 5px;
+  margin-top: 2px;
   line-height: 1.25;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -354,72 +308,55 @@ onMounted(() => {
 }
 
 .gw-card {
-  padding: 14px 16px 16px;
+  background: #fff;
+  border: 1px solid #e6e6eb;
+  border-radius: 10px;
+  padding: 10px 12px;
 }
 .gw-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .gw-card__title {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.gw-inline {
+.inline {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-.gw-inline .gw-label {
-  margin-bottom: 0;
+  gap: 6px;
 }
 
-.gw-form {
+.grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
+  gap: 8px 12px;
 }
-.gw-field {
+.field {
   min-width: 0;
 }
-.gw-field.span-2 {
-  grid-column: 1 / -1;
-}
-.gw-label {
-  font-size: 12.5px;
+.label {
+  font-size: 10.5px;
   color: #6e6e73;
-  margin-bottom: 5px;
   font-weight: 500;
+  margin-bottom: 4px;
 }
-.gw-pair {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.gw-foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-  padding-top: 13px;
-  border-top: 1px solid #f0f0f2;
+.mono {
+  font-family: 'SF Mono Nerd Font', 'PingFang SC', 'Microsoft YaHei', monospace;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 900px) {
   .gw-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 720px) {
-  .gw-form,
-  .gw-stats,
-  .gw-pair {
+@media (max-width: 620px) {
+  .grid {
     grid-template-columns: 1fr;
   }
 }

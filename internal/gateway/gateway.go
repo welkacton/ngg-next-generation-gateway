@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,16 +29,35 @@ import (
 // one definition.
 var (
 	wanModes        = map[string]bool{"dhcp": true, "static": true, "pppoe": true}
+	wanRoutes       = map[string]bool{"local": true, "proxy": true}
+	dnsModes        = map[string]bool{"forward": true, "recursive": true}
 	ruleActions     = map[string]bool{"accept": true, "drop": true, "reject": true}
 	ruleProtocols   = map[string]bool{"tcp": true, "udp": true, "any": true}
 	forwardProtos   = map[string]bool{"tcp": true, "udp": true, "both": true}
 	inboundDefaults = map[string]bool{"accept": true, "drop": true}
 )
 
-// WANConfig is the uplink. Password is write-only on the API surface: GET
+// wanIDPattern keeps the port ids stable: the chassis has six fixed ports, so
+// an id is a slot name, not free text (the display name is).
+var wanIDPattern = regexp.MustCompile(`^wan[1-6]$`)
+
+// WANCount is the fixed number of WAN ports on the gateway.
+const WANCount = 6
+
+// DefaultWANDNS is what every fresh WAN starts with: two domestic resolvers.
+var DefaultWANDNS = []string{"223.5.5.5", "119.29.29.29"}
+
+// WANConfig is one uplink. Password is write-only on the API surface: GET
 // returns PasswordSet instead of the secret, and a PUT with an empty password
-// keeps the stored one.
+// keeps the stored one. Each port keeps its own secret.
+//
+// Route is declarative only: "proxy" records the operator's intent to hand
+// this uplink to the NGG policy engine, nothing in this package programs a
+// policy route (see warningsFor).
 type WANConfig struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Enabled     bool     `json:"enabled"`
 	Mode        string   `json:"mode"`
 	Interface   string   `json:"interface"`
 	Address     string   `json:"address"`
@@ -48,6 +68,27 @@ type WANConfig struct {
 	Username    string   `json:"username"`
 	Password    string   `json:"password,omitempty"`
 	PasswordSet bool     `json:"password_set"`
+	Route       string   `json:"route"`
+	Weight      int      `json:"weight"`
+	Priority    int      `json:"priority"`
+}
+
+// DNSConfig is the enterprise router resolver policy. Like the rest of the
+// document it is declarative: NGG stores the desired state, it does not run a
+// forwarder or a recursive resolver yet.
+type DNSConfig struct {
+	Mode         string            `json:"mode"`
+	Servers      []string          `json:"servers"`
+	Fallback     []string          `json:"fallback"`
+	DoH          string            `json:"doh"`
+	CacheEnabled bool              `json:"cache_enabled"`
+	CacheSize    int               `json:"cache_size"`
+	CacheTTL     int               `json:"cache_ttl"`
+	LocalDomain  string            `json:"local_domain"`
+	Hosts        map[string]string `json:"hosts"`
+	Blocklist    []string          `json:"blocklist"`
+	DNSSEC       bool              `json:"dnssec"`
+	LogQueries   bool              `json:"log_queries"`
 }
 
 // LANConfig is the downlink / DHCP scope.
@@ -95,21 +136,65 @@ type FirewallConfig struct {
 }
 
 // Config is the whole gateway document.
+//
+// WAN is the v2.6 compatibility field and always equals WANs[0] after
+// normalisation; WANs is the canonical list and always holds exactly
+// WANCount entries. A client that only sends "wan" (the pre-multi-WAN shape)
+// is migrated onto WANs[0] with the other five ports at their defaults.
 type Config struct {
 	WAN      WANConfig      `json:"wan"`
+	WANs     []WANConfig    `json:"wans"`
 	LAN      LANConfig      `json:"lan"`
+	DNS      DNSConfig      `json:"dns"`
 	Firewall FirewallConfig `json:"firewall"`
+}
+
+// DefaultWAN returns the factory settings of the idx-th port (0-based).
+func DefaultWAN(idx int) WANConfig {
+	if idx < 0 || idx >= WANCount {
+		idx = 0
+	}
+	return WANConfig{
+		ID:       fmt.Sprintf("wan%d", idx+1),
+		Name:     fmt.Sprintf("WAN %d", idx+1),
+		Enabled:  idx == 0,
+		Mode:     "dhcp",
+		MTU:      1500,
+		DNS:      append([]string{}, DefaultWANDNS...),
+		IPv6:     true,
+		Route:    "local",
+		Weight:   1,
+		Priority: idx + 1,
+	}
+}
+
+// DefaultDNS returns the factory resolver policy.
+func DefaultDNS() DNSConfig {
+	return DNSConfig{
+		Mode:         "forward",
+		Servers:      append([]string{}, DefaultWANDNS...),
+		Fallback:     []string{"8.8.8.8"},
+		DoH:          "",
+		CacheEnabled: true,
+		CacheSize:    10000,
+		CacheTTL:     3600,
+		LocalDomain:  "lan",
+		Hosts:        map[string]string{},
+		Blocklist:    []string{},
+		DNSSEC:       false,
+		LogQueries:   false,
+	}
 }
 
 // Default returns the configuration a fresh installation starts from.
 func Default() Config {
+	wans := make([]WANConfig, 0, WANCount)
+	for i := 0; i < WANCount; i++ {
+		wans = append(wans, DefaultWAN(i))
+	}
 	return Config{
-		WAN: WANConfig{
-			Mode: "dhcp",
-			MTU:  1500,
-			IPv6: true,
-			DNS:  []string{"223.5.5.5", "119.29.29.29"},
-		},
+		WAN:  wans[0],
+		WANs: wans,
 		LAN: LANConfig{
 			Address:      "192.168.10.1",
 			Netmask:      "255.255.255.0",
@@ -119,6 +204,7 @@ func Default() Config {
 			LeaseMinutes: 1440,
 			Domain:       "lan",
 		},
+		DNS: DefaultDNS(),
 		Firewall: FirewallConfig{
 			DefaultInbound: "drop",
 			Rules:          []FirewallRule{},
@@ -129,18 +215,38 @@ func Default() Config {
 	}
 }
 
-// Public returns a copy safe to hand to the UI: the WAN password is replaced
-// by its presence flag so the secret never leaves the process.
+// Public returns a copy safe to hand to the UI: every WAN password is replaced
+// by its presence flag so no secret leaves the process.
 func (c Config) Public() Config {
 	out := clone(c)
-	out.WAN.PasswordSet = c.WAN.Password != ""
-	out.WAN.Password = ""
+	for i := range out.WANs {
+		out.WANs[i].PasswordSet = out.WANs[i].Password != ""
+		out.WANs[i].Password = ""
+	}
+	if len(out.WANs) > 0 {
+		out.WAN = out.WANs[0]
+	} else {
+		out.WAN.PasswordSet = out.WAN.Password != ""
+		out.WAN.Password = ""
+	}
 	return out
 }
 
 func clone(c Config) Config {
 	out := c
 	out.WAN.DNS = append([]string{}, c.WAN.DNS...)
+	out.WANs = make([]WANConfig, len(c.WANs))
+	for i, w := range c.WANs {
+		w.DNS = append([]string{}, w.DNS...)
+		out.WANs[i] = w
+	}
+	out.DNS.Servers = append([]string{}, c.DNS.Servers...)
+	out.DNS.Fallback = append([]string{}, c.DNS.Fallback...)
+	out.DNS.Blocklist = append([]string{}, c.DNS.Blocklist...)
+	out.DNS.Hosts = make(map[string]string, len(c.DNS.Hosts))
+	for k, v := range c.DNS.Hosts {
+		out.DNS.Hosts[k] = v
+	}
 	out.Firewall.Rules = append([]FirewallRule{}, c.Firewall.Rules...)
 	out.Firewall.PortForwards = append([]PortForward{}, c.Firewall.PortForwards...)
 	return out
@@ -149,35 +255,35 @@ func clone(c Config) Config {
 // normalize trims and lower-cases enum-ish fields and fills the defaults that
 // are unambiguous to fill (a zero MTU or lease time is never intentional).
 // Empty-but-explicit values (an empty DNS list, conntrack=false) are kept.
+//
+// It also performs the multi-WAN migration: a document without "wans" (the
+// single-WAN era shape, or a request that only carries the compat "wan" field)
+// is promoted to six ports with WANs[0] taken from "wan", and a document with
+// fewer than six ports is padded from the defaults. The result always has
+// exactly WANCount ports and WAN == WANs[0].
 func normalize(c Config) Config {
 	d := Default()
 
-	c.WAN.Mode = strings.ToLower(strings.TrimSpace(c.WAN.Mode))
-	if c.WAN.Mode == "" {
-		c.WAN.Mode = d.WAN.Mode
+	wans := c.WANs
+	if len(wans) == 0 {
+		legacy := c.WAN
+		// A pre-multi-WAN document has no "enabled" flag at all: its single
+		// uplink was in use by definition, so the migrated port1 is up.
+		legacy.Enabled = true
+		wans = []WANConfig{legacy}
 	}
-	c.WAN.Interface = strings.TrimSpace(c.WAN.Interface)
-	c.WAN.Address = strings.TrimSpace(c.WAN.Address)
-	c.WAN.Gateway = strings.TrimSpace(c.WAN.Gateway)
-	c.WAN.Username = strings.TrimSpace(c.WAN.Username)
-	if c.WAN.MTU == 0 {
-		c.WAN.MTU = d.WAN.MTU
-	}
-	if c.WAN.DNS == nil {
-		c.WAN.DNS = append([]string{}, d.WAN.DNS...)
-	}
-	dns := make([]string, 0, len(c.WAN.DNS))
-	seen := map[string]bool{}
-	for _, s := range c.WAN.DNS {
-		s = strings.TrimSpace(s)
-		if s == "" || seen[strings.ToLower(s)] {
-			continue
+	normalized := make([]WANConfig, 0, WANCount)
+	for i := 0; i < WANCount; i++ {
+		src := d.WANs[i]
+		if i < len(wans) {
+			src = wans[i]
 		}
-		seen[strings.ToLower(s)] = true
-		dns = append(dns, s)
+		normalized = append(normalized, normalizeWAN(src, i))
 	}
-	c.WAN.DNS = dns
-	c.WAN.PasswordSet = c.WAN.Password != ""
+	c.WANs = normalized
+	c.WAN = normalized[0]
+
+	c.DNS = normalizeDNS(c.DNS)
 
 	c.LAN.Interface = strings.TrimSpace(c.LAN.Interface)
 	c.LAN.Address = strings.TrimSpace(c.LAN.Address)
@@ -239,6 +345,113 @@ func normalize(c Config) Config {
 	return c
 }
 
+// normalizeWAN trims one port and fills the per-port defaults that are safe to
+// fill. idx is the port position, which also supplies the fallback id/name and
+// the default priority.
+func normalizeWAN(w WANConfig, idx int) WANConfig {
+	d := DefaultWAN(idx)
+
+	w.ID = strings.ToLower(strings.TrimSpace(w.ID))
+	if w.ID == "" {
+		w.ID = d.ID
+	}
+	w.Name = strings.TrimSpace(w.Name)
+	if w.Name == "" {
+		w.Name = d.Name
+	}
+	w.Mode = strings.ToLower(strings.TrimSpace(w.Mode))
+	if w.Mode == "" {
+		w.Mode = d.Mode
+	}
+	w.Route = strings.ToLower(strings.TrimSpace(w.Route))
+	if w.Route == "" {
+		w.Route = d.Route
+	}
+	w.Interface = strings.TrimSpace(w.Interface)
+	w.Address = strings.TrimSpace(w.Address)
+	w.Gateway = strings.TrimSpace(w.Gateway)
+	w.Username = strings.TrimSpace(w.Username)
+	if w.MTU == 0 {
+		w.MTU = d.MTU
+	}
+	if w.DNS == nil {
+		w.DNS = append([]string{}, d.DNS...)
+	}
+	w.DNS = dedupeStrings(w.DNS)
+	if w.Weight == 0 {
+		w.Weight = d.Weight
+	}
+	if w.Priority == 0 {
+		w.Priority = d.Priority
+	}
+	w.PasswordSet = w.Password != ""
+	return w
+}
+
+// normalizeDNS trims the resolver policy and fills its documented defaults.
+func normalizeDNS(n DNSConfig) DNSConfig {
+	d := DefaultDNS()
+
+	n.Mode = strings.ToLower(strings.TrimSpace(n.Mode))
+	if n.Mode == "" {
+		n.Mode = d.Mode
+	}
+	if n.Servers == nil {
+		n.Servers = append([]string{}, d.Servers...)
+	}
+	n.Servers = dedupeStrings(n.Servers)
+	if n.Fallback == nil {
+		n.Fallback = append([]string{}, d.Fallback...)
+	}
+	n.Fallback = dedupeStrings(n.Fallback)
+	n.DoH = strings.TrimSpace(n.DoH)
+	if n.CacheSize == 0 {
+		n.CacheSize = d.CacheSize
+	}
+	if n.CacheTTL == 0 {
+		n.CacheTTL = d.CacheTTL
+	}
+	n.LocalDomain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(n.LocalDomain)), ".")
+	if n.LocalDomain == "" {
+		n.LocalDomain = d.LocalDomain
+	}
+	hosts := make(map[string]string, len(n.Hosts))
+	for k, v := range n.Hosts {
+		k = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(k)), ".")
+		v = strings.TrimSpace(v)
+		if k == "" {
+			continue
+		}
+		hosts[k] = v
+	}
+	n.Hosts = hosts
+	if n.Blocklist == nil {
+		n.Blocklist = []string{}
+	}
+	blocked := make([]string, 0, len(n.Blocklist))
+	for _, s := range dedupeStrings(n.Blocklist) {
+		blocked = append(blocked, strings.TrimSuffix(strings.ToLower(s), "."))
+	}
+	n.Blocklist = blocked
+	return n
+}
+
+// dedupeStrings trims and de-duplicates case-insensitively, dropping empties
+// and keeping the first spelling seen.
+func dedupeStrings(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[strings.ToLower(s)] {
+			continue
+		}
+		seen[strings.ToLower(s)] = true
+		out = append(out, s)
+	}
+	return out
+}
+
 // ValidationError marks a payload that must be rejected with 422 and must not
 // be persisted. The API layer distinguishes it from I/O failures this way.
 type ValidationError struct {
@@ -258,43 +471,33 @@ func invalid(field, format string, args ...any) error {
 }
 
 // validate enforces the documented contract. Callers pass an already
-// normalised config so enum case never causes a false rejection.
+// normalised config so enum case never causes a false rejection, and a config
+// whose WAN passwords have already been merged with the stored ones (that is
+// what makes "leave the password empty to keep it" work for PPPoE).
 func validate(c Config) error {
-	if !wanModes[c.WAN.Mode] {
-		return invalid("wan.mode", "只能是 dhcp / static / pppoe，收到 %q", c.WAN.Mode)
+	if len(c.WANs) != WANCount {
+		return invalid("wans", "必须恰好包含 %d 个 WAN 口，收到 %d", WANCount, len(c.WANs))
 	}
-	if c.WAN.MTU < 576 || c.WAN.MTU > 9000 {
-		return invalid("wan.mtu", "必须在 576-9000 之间，收到 %d", c.WAN.MTU)
-	}
-	if c.WAN.Address != "" && !isIPv4(c.WAN.Address) {
-		return invalid("wan.address", "%q 不是合法 IPv4 地址", c.WAN.Address)
-	}
-	if c.WAN.Gateway != "" && !isIPv4(c.WAN.Gateway) {
-		return invalid("wan.gateway", "%q 不是合法 IPv4 地址", c.WAN.Gateway)
-	}
-	for _, d := range c.WAN.DNS {
-		if net.ParseIP(d) == nil {
-			return invalid("wan.dns", "%q 不是合法 IP 地址", d)
+	enabled := 0
+	seenID := map[string]bool{}
+	for i, w := range c.WANs {
+		if err := validateWAN(w, i); err != nil {
+			return err
+		}
+		if seenID[w.ID] {
+			return invalid(fmt.Sprintf("wans[%d].id", i), "重复的 WAN id %q", w.ID)
+		}
+		seenID[w.ID] = true
+		if w.Enabled {
+			enabled++
 		}
 	}
-	switch c.WAN.Mode {
-	case "static":
-		if c.WAN.Address == "" {
-			return invalid("wan.address", "静态模式下必填")
-		}
-		if c.WAN.Gateway == "" {
-			return invalid("wan.gateway", "静态模式下必填")
-		}
-	case "pppoe":
-		if c.WAN.Username == "" {
-			return invalid("wan.username", "PPPoE 模式下必填")
-		}
-		if c.WAN.Password == "" {
-			return invalid("wan.password", "PPPoE 模式下必填（已保存的密码留空即沿用）")
-		}
+	if enabled == 0 {
+		return invalid("wans", "至少需要启用一个 WAN 口")
 	}
-	if c.WAN.Interface != "" && utf8.RuneCountInString(c.WAN.Interface) > 64 {
-		return invalid("wan.interface", "长度不能超过 64 个字符")
+
+	if err := validateDNS(c.DNS); err != nil {
+		return err
 	}
 
 	if err := validateLAN(c.LAN); err != nil {
@@ -366,6 +569,147 @@ func validate(c Config) error {
 		}
 	}
 	return nil
+}
+
+func validateWAN(w WANConfig, idx int) error {
+	field := func(name string) string { return fmt.Sprintf("wans[%d].%s", idx, name) }
+
+	if w.ID == "" {
+		return invalid(field("id"), "不能为空")
+	}
+	if !wanIDPattern.MatchString(w.ID) {
+		return invalid(field("id"), "只能是 wan1..wan6，收到 %q", w.ID)
+	}
+	if w.Name == "" {
+		return invalid(field("name"), "不能为空")
+	}
+	if utf8.RuneCountInString(w.Name) > 64 {
+		return invalid(field("name"), "长度不能超过 64 个字符")
+	}
+	if !wanModes[w.Mode] {
+		return invalid(field("mode"), "只能是 dhcp / static / pppoe，收到 %q", w.Mode)
+	}
+	if !wanRoutes[w.Route] {
+		return invalid(field("route"), "只能是 local / proxy，收到 %q", w.Route)
+	}
+	if w.MTU < 576 || w.MTU > 9000 {
+		return invalid(field("mtu"), "必须在 576-9000 之间，收到 %d", w.MTU)
+	}
+	if w.Weight < 1 || w.Weight > 100 {
+		return invalid(field("weight"), "必须在 1-100 之间，收到 %d", w.Weight)
+	}
+	if w.Priority < 1 || w.Priority > 10 {
+		return invalid(field("priority"), "必须在 1-10 之间，收到 %d", w.Priority)
+	}
+	if w.Interface != "" && utf8.RuneCountInString(w.Interface) > 64 {
+		return invalid(field("interface"), "长度不能超过 64 个字符")
+	}
+	if w.Address != "" && !isIPv4(w.Address) {
+		return invalid(field("address"), "%q 不是合法 IPv4 地址", w.Address)
+	}
+	if w.Gateway != "" && !isIPv4(w.Gateway) {
+		return invalid(field("gateway"), "%q 不是合法 IPv4 地址", w.Gateway)
+	}
+	for _, d := range w.DNS {
+		if net.ParseIP(d) == nil {
+			return invalid(field("dns"), "%q 不是合法 IP 地址", d)
+		}
+	}
+	// A disabled port is not dialled, so its addressing requirements are not
+	// enforced — the operator may fill the form in any order.
+	if !w.Enabled {
+		return nil
+	}
+	switch w.Mode {
+	case "static":
+		if w.Address == "" {
+			return invalid(field("address"), "静态模式下必填")
+		}
+		if w.Gateway == "" {
+			return invalid(field("gateway"), "静态模式下必填")
+		}
+	case "pppoe":
+		if w.Username == "" {
+			return invalid(field("username"), "PPPoE 模式下必填")
+		}
+		if w.Password == "" {
+			return invalid(field("password"), "PPPoE 模式下必填（已保存的密码留空即沿用）")
+		}
+	}
+	return nil
+}
+
+func validateDNS(n DNSConfig) error {
+	if !dnsModes[n.Mode] {
+		return invalid("dns.mode", "只能是 forward / recursive，收到 %q", n.Mode)
+	}
+	if len(n.Servers) == 0 {
+		return invalid("dns.servers", "至少需要一条上游 DNS")
+	}
+	for _, s := range n.Servers {
+		if net.ParseIP(s) == nil {
+			return invalid("dns.servers", "%q 不是合法 IP 地址", s)
+		}
+	}
+	for _, s := range n.Fallback {
+		if net.ParseIP(s) == nil {
+			return invalid("dns.fallback", "%q 不是合法 IP 地址", s)
+		}
+	}
+	if n.DoH != "" && !strings.HasPrefix(strings.ToLower(n.DoH), "https://") {
+		return invalid("dns.doh", "必须以 https:// 开头，收到 %q", n.DoH)
+	}
+	if n.CacheSize < 100 || n.CacheSize > 1000000 {
+		return invalid("dns.cache_size", "必须在 100-1000000 之间，收到 %d", n.CacheSize)
+	}
+	if n.CacheTTL < 10 || n.CacheTTL > 86400 {
+		return invalid("dns.cache_ttl", "必须在 10-86400 之间，收到 %d", n.CacheTTL)
+	}
+	if !isDomainName(n.LocalDomain) {
+		return invalid("dns.local_domain", "%q 不是合法域名", n.LocalDomain)
+	}
+	for k, v := range n.Hosts {
+		if !isDomainName(k) {
+			return invalid("dns.hosts", "主机名 %q 不是合法域名", k)
+		}
+		if net.ParseIP(v) == nil {
+			return invalid("dns.hosts", "主机 %q 的地址 %q 不是合法 IP", k, v)
+		}
+	}
+	for _, b := range n.Blocklist {
+		// Adblock-style lists use a "*.example.com" prefix; the suffix is the
+		// domain that actually gets blocked.
+		if !isDomainName(strings.TrimPrefix(b, "*.")) {
+			return invalid("dns.blocklist", "%q 不是合法域名", b)
+		}
+	}
+	return nil
+}
+
+// isDomainName accepts the RFC 1123 shape (labels of 1-63 characters of
+// letters/digits/hyphen, no leading or trailing hyphen). Underscores are
+// tolerated because SRV/TXT records in a hosts-style map legitimately use them.
+func isDomainName(s string) bool {
+	s = strings.TrimSuffix(strings.TrimSpace(s), ".")
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateLAN(l LANConfig) error {

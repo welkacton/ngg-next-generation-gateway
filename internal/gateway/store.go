@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,9 +21,9 @@ type document struct {
 
 // Store persists the gateway config to <data>/gateway-config.json.
 //
-// The WAN password lives in that file (mode 0600) and nowhere else: it is
-// never logged, never returned by Get, and a save that carries an empty
-// password keeps the stored secret.
+// The per-port WAN (PPPoE) passwords live in that file (mode 0600) and nowhere
+// else: they are never logged, never returned by Get, and a save that carries
+// an empty password keeps the stored secret of that port.
 type Store struct {
 	mu        sync.Mutex
 	path      string
@@ -84,7 +85,7 @@ func (s *Store) Loaded() bool {
 	return s.loaded
 }
 
-// Save validates, merges the password and atomically replaces the file.
+// Save validates, merges the passwords and atomically replaces the file.
 //
 // Ordering matters for the rollback promise: nothing is assigned to the
 // in-memory state until the atomic write has succeeded, so a failed write
@@ -95,10 +96,7 @@ func (s *Store) Save(c Config) (Config, []string, []string, error) {
 	defer s.mu.Unlock()
 
 	c = normalize(c)
-	if c.WAN.Password == "" {
-		c.WAN.Password = s.cfg.WAN.Password
-	}
-	c.WAN.PasswordSet = c.WAN.Password != ""
+	mergePasswords(&c, s.cfg)
 	if err := validate(c); err != nil {
 		return Config{}, nil, nil, err
 	}
@@ -116,20 +114,59 @@ func (s *Store) Save(c Config) (Config, []string, []string, error) {
 	return clone(c), changed, warnings, nil
 }
 
+// mergePasswords keeps the stored secret of every port whose incoming password
+// is empty, and always re-syncs WAN with WANs[0]. Each port has its own
+// secret: rotating wan3 must not disturb wan1.
+func mergePasswords(c *Config, prev Config) {
+	stored := make(map[string]string, len(prev.WANs))
+	for _, w := range prev.WANs {
+		if w.Password != "" {
+			stored[w.ID] = w.Password
+		}
+	}
+	for i := range c.WANs {
+		if c.WANs[i].Password == "" {
+			c.WANs[i].Password = stored[c.WANs[i].ID]
+		}
+		c.WANs[i].PasswordSet = c.WANs[i].Password != ""
+	}
+	if len(c.WANs) > 0 {
+		c.WAN = c.WANs[0]
+	}
+}
+
 // warningsFor reports the honest limits of a declarative save: which parts of
 // the request cannot take effect on this host, and why.
 func warningsFor(c Config) []string {
 	warnings := []string{
 		"网关中心为声明式配置：保存只记录期望状态，NGG 不会改写本机网卡 / DHCP / 防火墙规则",
 	}
-	if c.WAN.Interface != "" && !interfaceExists(c.WAN.Interface) {
-		warnings = append(warnings, fmt.Sprintf("WAN 接口 %q 不在本机网卡列表中，该设置保存后不会生效", c.WAN.Interface))
+	if len(c.WANs) > 1 {
+		warnings = append(warnings, "多 WAN 目前只是声明式配置：NGG 尚未实现按 WAN 的策略路由 / 负载均衡 / 故障切换，实际出口仍由本机路由表决定")
+	}
+	proxyRouted := []string{}
+	for _, w := range c.WANs {
+		if !w.Enabled {
+			continue
+		}
+		if w.Interface != "" && !interfaceExists(w.Interface) {
+			warnings = append(warnings, fmt.Sprintf("WAN %s（%s）的接口 %q 不在本机网卡列表中，该设置保存后不会生效", w.Name, w.ID, w.Interface))
+		}
+		if w.Mode == "dhcp" && (w.Address != "" || w.Gateway != "") {
+			warnings = append(warnings, fmt.Sprintf("WAN %s（%s）为 DHCP 模式，address / gateway 由上游下发，此处填写的值会被忽略", w.Name, w.ID))
+		}
+		if w.Route == "proxy" {
+			proxyRouted = append(proxyRouted, w.ID)
+		}
+	}
+	if len(proxyRouted) > 0 {
+		warnings = append(warnings, fmt.Sprintf("WAN %s 标记为 route=proxy，本版仅记录意图：NGG 不会真的把这些出口交给国际代理引擎分流", strings.Join(proxyRouted, ", ")))
+	}
+	if c.DNS.Hosts != nil || len(c.DNS.Servers) > 0 || len(c.DNS.Blocklist) > 0 {
+		warnings = append(warnings, "DNS 段同样为声明式配置：NGG 不会启动转发 / 递归解析器、写 hosts 或下发黑名单")
 	}
 	if c.LAN.Interface != "" && !interfaceExists(c.LAN.Interface) {
 		warnings = append(warnings, fmt.Sprintf("LAN 接口 %q 不在本机网卡列表中，该设置保存后不会生效", c.LAN.Interface))
-	}
-	if c.WAN.Mode == "dhcp" && (c.WAN.Address != "" || c.WAN.Gateway != "") {
-		warnings = append(warnings, "DHCP 模式下 address / gateway 由上游下发，此处填写的值会被忽略")
 	}
 	return warnings
 }

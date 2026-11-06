@@ -19,12 +19,12 @@ const props = withDefaults(
   { mode: 'rate' },
 )
 
-const W = 800
-const H = 260
-const PAD_L = 62
-const PAD_R = 18
-const PAD_T = 18
-const PAD_B = 30
+const W = 1000
+const H = 170
+const PAD_L = 54
+const PAD_R = 14
+const PAD_T = 12
+const PAD_B = 24
 const PLOT_W = W - PAD_L - PAD_R
 const PLOT_H = H - PAD_T - PAD_B
 const BOTTOM = PAD_T + PLOT_H
@@ -269,10 +269,10 @@ const outPeak = computed(() => peak('out'))
 .tac-legend {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
-  font-size: 12.5px;
+  margin-bottom: 6px;
+  font-size: 11px;
   color: #6e6e73;
 }
 .tac-legend__item {
@@ -284,13 +284,13 @@ const outPeak = computed(() => peak('out'))
 }
 .tac-legend__hint {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: 10.5px;
   color: #8e8e93;
 }
 .tac-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex: 0 0 auto;
 }
@@ -300,9 +300,9 @@ const outPeak = computed(() => peak('out'))
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 150px;
+  min-height: 110px;
   color: #8e8e93;
-  font-size: 13px;
+  font-size: 11.5px;
   background: #fafafa;
   border-radius: 14px;
   text-align: center;
@@ -312,7 +312,7 @@ const outPeak = computed(() => peak('out'))
   position: relative;
   width: 100%;
   /* Keep the viewBox aspect ratio so axis labels are never stretched. */
-  aspect-ratio: 800 / 260;
+  aspect-ratio: 1000 / 170;
 }
 .tac-canvas svg {
   width: 100%;
@@ -327,7 +327,7 @@ const outPeak = computed(() => peak('out'))
 }
 .tac-axis text {
   fill: #8e8e93;
-  font-size: 11px;
+  font-size: 9.5px;
   font-variant-numeric: tabular-nums;
 }
 .tac-line {

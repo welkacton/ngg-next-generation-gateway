@@ -29,7 +29,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/gateway/dns',
     name: 'gateway-dns',
-    component: () => import('../views/DNS.vue'),
+    component: () => import('../views/gateway/GatewayDNS.vue'),
     meta: { title: 'DNS 设置' },
   },
   {

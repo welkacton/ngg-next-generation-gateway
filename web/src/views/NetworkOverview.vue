@@ -476,10 +476,9 @@ onUnmounted(() => {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
     'PingFang SC', 'Microsoft YaHei', sans-serif;
   background: #f5f5f7;
-  border-radius: 18px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 12px;
   color: #1d1d1f;
-  min-height: calc(100vh - 120px);
 }
 .netov :deep(.mono) {
   font-family: 'SF Mono Nerd Font', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -492,7 +491,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 18px;
   flex-wrap: wrap;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .netov-eyebrow {
   font-size: 10.5px;
@@ -502,7 +501,7 @@ onUnmounted(() => {
 }
 .netov-title {
   margin: 4px 0 2px;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 650;
   letter-spacing: -0.025em;
   line-height: 1.2;
@@ -577,7 +576,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .netov-refresh:disabled { opacity: .55; cursor: default; }
-.netov-alert { margin-bottom: 10px; border-radius: 14px !important; }
+.netov-alert { margin-bottom: 8px; border-radius: 14px !important; }
 
 .netov-hero {
   display: flex;
@@ -586,18 +585,18 @@ onUnmounted(() => {
   flex-wrap: wrap;
   background: linear-gradient(135deg, #ffffff 0%, #f2f7ff 100%);
   border: 1px solid #e8e8ed;
-  border-radius: 16px;
-  padding: 16px 18px;
+  border-radius: 10px;
+  padding: 10px 12px;
   box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 12px 32px rgba(0,0,0,.04);
   margin-bottom: 12px;
 }
 .netov-hero__label { font-size: 12.5px; color: #6e6e73; font-weight: 500; }
 .netov-hero__value {
-  font-size: 30px;
+  font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.035em;
   line-height: 1.15;
-  margin: 6px 0 8px;
+  margin: 4px 0 6px;
   font-variant-numeric: tabular-nums;
 }
 .netov-hero__meta { display: flex; gap: 22px; flex-wrap: wrap; font-size: 13px; color: #1d1d1f; }
@@ -610,11 +609,11 @@ onUnmounted(() => {
   align-items: center;
 }
 .netov-spark {
-  width: 132px;
+  width: 118px;
   background: rgba(255,255,255,.8);
   border: 1px solid #e8e8ed;
-  border-radius: 12px;
-  padding: 8px 10px 6px;
+  border-radius: 8px;
+  padding: 6px 8px 4px;
 }
 .netov-spark__head {
   display: flex;
@@ -647,10 +646,10 @@ onUnmounted(() => {
 .netov-card {
   background: #fff;
   border: 1px solid #e8e8ed;
-  border-radius: 14px;
+  border-radius: 10px;
   box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 8px 24px rgba(0,0,0,.035);
 }
-.netov-kpi { padding: 12px 14px 14px; }
+.netov-kpi { padding: 8px 10px 10px; }
 .netov-kpi__label {
   display: flex;
   align-items: center;
@@ -660,28 +659,28 @@ onUnmounted(() => {
   font-weight: 500;
 }
 .netov-kpi__value {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: -0.025em;
-  margin: 6px 0 4px;
+  margin: 4px 0 3px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.netov-kpi__value--sm { font-size: 18px; }
+.netov-kpi__value--sm { font-size: 15px; }
 .netov-kpi__sub { font-size: 11.5px; color: #8e8e93; line-height: 1.5; }
 
-.netov-card { padding: 14px 16px; }
+.netov-card { padding: 10px 12px; }
 .netov-card__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
-.netov-card__title { margin: 0; font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; }
+.netov-card__title { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
 .netov-card__sub { margin: 5px 0 0; font-size: 11.5px; color: #8e8e93; }
-.netov-chart-card { margin-bottom: 12px; }
+.netov-chart-card { margin-bottom: 8px; }
 .netov-chart-foot {
   display: flex;
   justify-content: space-between;
@@ -700,9 +699,9 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  padding: 7px 0;
+  padding: 5px 0;
   border-bottom: 1px solid #f2f2f4;
-  font-size: 12.5px;
+  font-size: 11.5px;
 }
 .netov-flow__label { color: #6e6e73; }
 .netov-flow__value { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -716,9 +715,9 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 7px 0;
+  padding: 5px 0;
   border-bottom: 1px solid #f2f2f4;
-  font-size: 12.5px;
+  font-size: 11.5px;
 }
 .netov-engine__row span { color: #6e6e73; }
 .netov-engine__row b { font-weight: 600; text-align: right; }
