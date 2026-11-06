@@ -104,7 +104,7 @@ func (s *Store) Save(c Config) (Config, []string, []string, error) {
 	}
 
 	changed := diffPaths(s.cfg, c)
-	warnings := s.warningsFor(c)
+	warnings := warningsFor(c)
 	now := time.Now().UTC()
 	doc := document{Config: c, UpdatedAt: now}
 	if err := atomicfile.WriteJSON(s.path, doc); err != nil {
@@ -118,7 +118,7 @@ func (s *Store) Save(c Config) (Config, []string, []string, error) {
 
 // warningsFor reports the honest limits of a declarative save: which parts of
 // the request cannot take effect on this host, and why.
-func (s *Store) warningsFor(c Config) []string {
+func warningsFor(c Config) []string {
 	warnings := []string{
 		"网关中心为声明式配置：保存只记录期望状态，NGG 不会改写本机网卡 / DHCP / 防火墙规则",
 	}

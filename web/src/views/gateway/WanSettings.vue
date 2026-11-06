@@ -85,7 +85,7 @@ function dnsList(): string[] {
 }
 
 function validate(): string | null {
-  if (!form.interface.trim()) return '请选择接口'
+  if (interfaces.value.length && !form.interface.trim()) return '请选择接口'
   const mtu = form.mtu
   if (mtu === null || Number.isNaN(mtu)) return 'MTU 不能为空'
   if (mtu < 576 || mtu > 9000) return 'MTU 需在 576–9000 之间'
@@ -203,6 +203,8 @@ onMounted(() => {
           <NSelect
             v-model:value="form.interface"
             size="small"
+            filterable
+            tag
             :options="interfaceOptions"
             placeholder="选择接口"
           />

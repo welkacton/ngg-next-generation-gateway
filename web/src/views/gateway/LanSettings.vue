@@ -87,7 +87,7 @@ function syncFrom(cfg: GatewayConfig): void {
 }
 
 function validate(): string | null {
-  if (!form.interface.trim()) return '请选择接口'
+  if (interfaces.value.length && !form.interface.trim()) return '请选择接口'
   const address = form.address.trim()
   if (!IPV4.test(address)) return 'LAN 地址格式无效'
   const netmask = form.netmask.trim()
@@ -203,6 +203,8 @@ onMounted(() => {
           <NSelect
             v-model:value="form.interface"
             size="small"
+            filterable
+            tag
             :options="interfaceOptions"
             placeholder="选择接口"
           />
