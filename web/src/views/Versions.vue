@@ -170,13 +170,7 @@ onMounted(async () => {
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      可用版本列表来自 <span class="mono">GET /cores/{id}/versions</span>，由后端从上游仓库探测。
-      安装 / 升级时会下载 <span class="mono">asset_url</span> 对应的产物，并用
-      <span class="mono">digest_url</span> 提供的摘要做完整性校验，校验不通过则拒绝替换现有内核。
-      仓库：<span class="mono">{{ repository }}</span>
-    </NAlert>
-
+    
     <NCard size="small" title="当前版本" class="section-gap">
       <NDescriptions bordered :column="3" size="small" label-placement="left">
         <NDescriptionsItem label="内核已安装版本">

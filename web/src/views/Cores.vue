@@ -418,15 +418,7 @@ onUnmounted(stopPolling)
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>按钮配色 = 当前状态</template>
-      <strong>蓝色「启动」</strong> 表示内核已安装且未运行（状态标签可能显示「已安装」）；点击后蓝色熄灭、
-      <strong style="color: #d03050">红色「停止」</strong> 点亮，表示内核运行中；
-      <strong>蓝色「安装」</strong> 只在未安装时出现。灰色按钮代表当前状态下不可用。
-      批量栏同理：两个启动按钮只高亮<strong>当前选中的启动模式</strong>，内核全部运行后启动按钮熄灭、
-      「全部停止」变红。状态来自后端真实 <span class="mono">CoreStatus.state</span>，不使用点击记录伪造。
-    </NAlert>
-
+    
     <NCard size="small" class="section-gap">
       <NSpace align="center" :wrap="true" :size="10">
         <NTag :bordered="false" size="small">已选 {{ selectedKeys.length }} 个</NTag>

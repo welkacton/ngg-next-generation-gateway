@@ -120,13 +120,7 @@ onMounted(async () => {
       </NSpace>
     </div>
 
-    <NAlert type="warning" :bordered="false" class="section-gap">
-      <template #header>配置修改的事务顺序</template>
-      点击「保存」后，后端严格按
-      <strong>① 备份当前配置 → ② 调用内核原生校验 → ③ 校验通过后原子替换</strong>
-      的顺序执行；任一步失败都会保留原配置并生成可追溯的备份。建议先「校验」再「保存」。
-    </NAlert>
-
+    
     <NDescriptions
       v-if="store.config"
       bordered

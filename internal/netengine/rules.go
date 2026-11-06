@@ -185,6 +185,30 @@ func (s *RuleSet) SetEnabled(ids []string, all bool, enabled bool) int {
 	return changed
 }
 
+// RemoveMany deletes every rule whose ID is in ids, or the whole table when
+// all is true. It returns the number of rules actually removed. A full
+// Replace() is deliberately avoided: deleting rules must never re-validate
+// the remaining table, so one legacy rule cannot Fail-Closed the operation.
+func (s *RuleSet) RemoveMany(ids []string, all bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	kept := make([]Rule, 0, len(s.rules))
+	removed := 0
+	for i := range s.rules {
+		if all || selected[s.rules[i].ID] {
+			removed++
+			continue
+		}
+		kept = append(kept, s.rules[i])
+	}
+	s.rules = kept
+	return removed
+}
+
 func (s *RuleSet) Remove(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

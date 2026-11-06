@@ -182,13 +182,7 @@ onMounted(refreshAll)
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>调度策略</template>
-      policy 支持 <span class="mono">lowest-latency</span> / <span class="mono">weighted</span> /
-      <span class="mono">priority</span> / <span class="mono">failover</span>。
-      下方链路健康表按后端返回字段动态展示（含健康状态 / RTT / 丢包 / 探测次数）。
-    </NAlert>
-
+    
     <NCard size="small" title="运行状态（/sdwan/status）" class="section-gap">
       <template #header-extra>
         <NSpace :size="8" :wrap="true">

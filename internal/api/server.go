@@ -67,6 +67,11 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 		githubIndex: rulesets.NewGitHubIndex(dataDir, gitToken),
 		installs:    newInstallManager(),
 	}
+	// User-defined GitHub rule sources live beside the cached catalogs. A
+	// read failure must not take down the control plane; built-ins stay usable.
+	if err := rulesets.InitCustomPresets(dataDir); err != nil {
+		log.Printf("custom github presets unavailable: %v", err)
+	}
 	// 单管理员登录：首次打开需要手动创建账号，之后只有登录窗口。
 	authStore := auth.NewStore(dataDir)
 	if err := authStore.Load(); err != nil {
@@ -177,6 +182,7 @@ func (s *Server) routes() {
 
 	// Stage 2-3: Unified Network Engine
 	m.HandleFunc("GET /api/v1/network/status", s.handleNetworkStatus)
+	m.HandleFunc("POST /api/v1/network/components/toggle", s.handleNetworkComponentToggle)
 	m.HandleFunc("GET /api/v1/network/metrics/history", s.handleNetworkMetricsHistory)
 	m.HandleFunc("GET /api/v1/network/global/status", s.handleGlobalStatus)
 	m.HandleFunc("POST /api/v1/network/global/attach", s.handleGlobalAttach)
@@ -197,8 +203,11 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/rulesets", s.handleRuleSets)
 	m.HandleFunc("POST /api/v1/rulesets", s.handleRuleSets)
 	m.HandleFunc("GET /api/v1/rulesets/formats", s.handleRuleSetFormats)
+	m.HandleFunc("GET /api/v1/rulesets/syntax", s.handleRuleSetSyntax)
 	m.HandleFunc("POST /api/v1/rulesets/toggle", s.handleRuleSetsToggle)
 	m.HandleFunc("GET /api/v1/rulesets/github/presets", s.handleGitHubPresets)
+	m.HandleFunc("POST /api/v1/rulesets/github/presets", s.handleGitHubPresetCreate)
+	m.HandleFunc("DELETE /api/v1/rulesets/github/presets/{id}", s.handleGitHubPresetDelete)
 	m.HandleFunc("GET /api/v1/rulesets/github/catalog", s.handleGitHubCatalog)
 	m.HandleFunc("POST /api/v1/rulesets/github/catalog/refresh", s.handleGitHubCatalog)
 	m.HandleFunc("POST /api/v1/rulesets/github/mount", s.handleGitHubMount)
@@ -210,6 +219,7 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/v1/rulesets/{id}", s.handleRuleSetByID)
 	m.HandleFunc("POST /api/v1/network/rules/toggle", s.handleNetworkRulesToggle)
 	m.HandleFunc("POST /api/v1/network/rules", s.handleNetworkRules)
+	m.HandleFunc("POST /api/v1/network/rules/delete", s.handleNetworkRulesDelete)
 	m.HandleFunc("PUT /api/v1/network/rules", s.handleNetworkRules)
 	m.HandleFunc("DELETE /api/v1/network/rules/{id}", s.handleNetworkRuleByID)
 	m.HandleFunc("POST /api/v1/network/rules/load", s.handleNetworkRulesLoad)
@@ -231,7 +241,12 @@ func (s *Server) routes() {
 	m.HandleFunc("PUT /api/v1/nodes/import", s.handleNodeImport)
 	m.HandleFunc("POST /api/v1/nodes/parse", s.handleParseNative)
 	m.HandleFunc("POST /api/v1/nodes/from-native", s.handleFromNative)
+	m.HandleFunc("POST /api/v1/nodes/keys/generate", s.handleNodeKeysGenerate)
+	m.HandleFunc("POST /api/v1/nodes/keys/pair", s.handleNodeKeysPair)
 	m.HandleFunc("POST /api/v1/nodes/{id}/config", s.handleNodeConfig)
+	m.HandleFunc("GET /api/v1/nodes/{id}/metrics", s.handleNodeMetrics)
+	m.HandleFunc("PUT /api/v1/nodes/{id}/config-file", s.handleNodeConfigFile)
+	m.HandleFunc("POST /api/v1/nodes/{id}/probe", s.handleNodeProbe)
 	m.HandleFunc("GET /api/v1/nodes/{id}", s.handleNodeByID)
 	m.HandleFunc("PUT /api/v1/nodes/{id}", s.handleNodeByID)
 	m.HandleFunc("DELETE /api/v1/nodes/{id}", s.handleNodeByID)
@@ -263,6 +278,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/protocols/catalog", s.handleProtocolCatalog)
 	m.HandleFunc("POST /api/v1/protocols/catalog/refresh", s.handleProtocolCatalogRefresh)
 	m.HandleFunc("GET /api/v1/profiles/options", s.handleProfileOptions)
+	m.HandleFunc("GET /api/v1/profiles/dns-schema", s.handleDnsSchemas)
 	m.HandleFunc("POST /api/v1/profiles/validate", s.handleProfileValidate)
 	m.HandleFunc("POST /api/v1/profiles/split", s.handleProfileSplit)
 	m.HandleFunc("POST /api/v1/profiles/toggle", s.handleProfilesToggle)

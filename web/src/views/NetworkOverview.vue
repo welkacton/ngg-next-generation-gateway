@@ -10,10 +10,12 @@
  * /network/status。网络引擎未运行时不绘制任何模拟曲线、不编造速率。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { NAlert, NTag } from 'naive-ui'
+import { useRouter } from 'vue-router'
+import { NAlert, NButton, NSpace, NTag } from 'naive-ui'
 import * as api from '../api/ngg'
-import type { MetricsHistoryResult, MetricsSample, NetworkStatus } from '../api/ngg'
+import type { MetricsHistoryResult, MetricsSample, NetworkComponent, NetworkStatus } from '../api/ngg'
 import TrafficAreaChart from '../components/TrafficAreaChart.vue'
+import { useApiAction } from '../composables/useApi'
 import { formatBytes, formatTime } from '../utils/format'
 
 const history = ref<MetricsHistoryResult | null>(null)
@@ -24,6 +26,73 @@ const refreshing = ref(false)
 const lastUpdated = ref('')
 const loadError = ref('')
 let timer: number | undefined
+
+const router = useRouter()
+const { isBusy, run } = useApiAction()
+
+/* 网络组件 / 配置概览：每个数据源独立抓取，单接口失败不影响其它卡片。 */
+const components = ref<NetworkComponent[]>([])
+const engineRunning = ref<boolean | null>(null)
+const nodeCount = ref<number | null>(null)
+const ruleCount = ref<number | null>(null)
+const ruleSetCount = ref<number | null>(null)
+const userCount = ref<number | null>(null)
+
+function countText(v: number | null): string {
+  return v === null ? '—' : v.toLocaleString('zh-CN')
+}
+function go(name: string): void {
+  void router.push({ name })
+}
+
+async function loadExtras(): Promise<void> {
+  const results = await Promise.allSettled([
+    api.getNetworkStatus(),
+    api.listNodes(),
+    api.getRules(),
+    api.listRuleSets(),
+    api.listUsers(),
+  ])
+  if (results[0].status === 'fulfilled') {
+    const s = results[0].value
+    components.value = Array.isArray(s.components) ? s.components : []
+    engineRunning.value = s.running === true
+  }
+  if (results[1].status === 'fulfilled') {
+    const d = results[1].value
+    nodeCount.value = Array.isArray(d.nodes)
+      ? d.nodes.length
+      : (typeof d.count === 'number' ? d.count : null)
+  }
+  if (results[2].status === 'fulfilled') {
+    const d = results[2].value
+    ruleCount.value = Array.isArray(d.rules) ? d.rules.length : null
+  }
+  if (results[3].status === 'fulfilled') {
+    const d = results[3].value
+    ruleSetCount.value = typeof d.count === 'number'
+      ? d.count
+      : (Array.isArray(d.rulesets) ? d.rulesets.length : null)
+  }
+  if (results[4].status === 'fulfilled') {
+    const d = results[4].value
+    userCount.value = typeof d.count === 'number'
+      ? d.count
+      : (Array.isArray(d.users) ? d.users.length : null)
+  }
+}
+
+async function toggleEngine(action: 'start' | 'stop'): Promise<void> {
+  const r = await run(
+    'engine-' + action,
+    () => (action === 'start' ? api.startNetwork() : api.stopNetwork()),
+    action === 'start' ? '网络引擎启动命令已下发' : '网络引擎停止命令已下发',
+  )
+  if (r) {
+    await refresh()
+    await loadExtras()
+  }
+}
 
 const samples = computed<MetricsSample[]>(() => history.value?.samples ?? [])
 const running = computed(() => history.value?.running === true)
@@ -145,6 +214,7 @@ watch(running, (now, before) => {
 
 onMounted(() => {
   void refresh()
+  void loadExtras()
   timer = window.setInterval(() => void refresh(), 2000)
 })
 onUnmounted(() => {
@@ -324,6 +394,71 @@ onUnmounted(() => {
         </div>
         <div class="netov-engine__note">
           内核端点为 NGG Core Adapter Bridge 的真实连接目标；CPU / 内存等进程指标在「内核管理」查看。
+        </div>
+      </div>
+    </section>
+
+    <!-- 网络组件 / 配置概览 -->
+    <section class="netov-grid netov-grid--2">
+      <div class="netov-card">
+        <div class="netov-card__head">
+          <div>
+            <h3 class="netov-card__title">网络组件</h3>
+            <p class="netov-card__sub">GET /network/status · components</p>
+          </div>
+          <NSpace :size="6" align="center" :wrap="true">
+            <NTag size="small" :bordered="false" :type="engineRunning === true ? 'success' : 'default'">
+              {{ engineRunning === null ? '状态未知' : (engineRunning ? '运行中' : '未运行') }}
+            </NTag>
+            <NButton size="tiny" :loading="isBusy('engine-start')" @click="toggleEngine('start')">启动引擎</NButton>
+            <NButton size="tiny" :loading="isBusy('engine-stop')" @click="toggleEngine('stop')">停止引擎</NButton>
+            <NButton size="tiny" quaternary @click="go('network')">前往网络引擎 →</NButton>
+          </NSpace>
+        </div>
+        <div class="netov-components">
+          <div v-for="c in components" :key="c.key" class="netov-component">
+            <span class="netov-component__label">{{ c.label }}</span>
+            <NSpace :size="6" align="center">
+              <NTag size="small" :bordered="false" :type="c.enabled ? 'info' : 'default'">
+                {{ c.enabled ? '已启用' : '未启用' }}
+              </NTag>
+              <NTag size="small" :bordered="false" :type="c.running ? 'success' : 'default'">
+                {{ c.running ? '运行中' : '未运行' }}
+              </NTag>
+            </NSpace>
+          </div>
+          <div v-if="!components.length" class="netov-component__empty">—</div>
+        </div>
+      </div>
+
+      <div class="netov-card">
+        <div class="netov-card__head">
+          <div>
+            <h3 class="netov-card__title">配置概览</h3>
+            <p class="netov-card__sub">各接口独立读取 · 失败项显示「—」</p>
+          </div>
+        </div>
+        <div class="netov-config">
+          <button type="button" class="netov-config__item" @click="go('inbound')">
+            <span class="netov-config__label">节点数</span>
+            <span class="netov-config__value">{{ countText(nodeCount) }}</span>
+            <span class="netov-config__go">入口节点 →</span>
+          </button>
+          <button type="button" class="netov-config__item" @click="go('rules')">
+            <span class="netov-config__label">规则数</span>
+            <span class="netov-config__value">{{ countText(ruleCount) }}</span>
+            <span class="netov-config__go">规则配置 →</span>
+          </button>
+          <button type="button" class="netov-config__item" @click="go('dns')">
+            <span class="netov-config__label">规则集数</span>
+            <span class="netov-config__value">{{ countText(ruleSetCount) }}</span>
+            <span class="netov-config__go">DNS 配置 →</span>
+          </button>
+          <button type="button" class="netov-config__item" @click="go('users')">
+            <span class="netov-config__label">用户数</span>
+            <span class="netov-config__value">{{ countText(userCount) }}</span>
+            <span class="netov-config__go">用户管理 →</span>
+          </button>
         </div>
       </div>
     </section>
@@ -598,6 +733,47 @@ onUnmounted(() => {
   line-height: 1.7;
 }
 
+.netov-components { display: grid; gap: 0; }
+.netov-component {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #f2f2f4;
+  font-size: 12.5px;
+}
+.netov-component:last-child { border-bottom: 0; }
+.netov-component__label { color: #1d1d1f; font-weight: 500; }
+.netov-component__empty { padding: 9px 0; color: #8e8e93; font-size: 12.5px; }
+
+.netov-config { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.netov-config__item {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid #e8e8ed;
+  border-radius: 14px;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+.netov-config__item:hover { border-color: #0071e3; box-shadow: 0 2px 10px rgba(0,113,227,.1); }
+.netov-config__label { font-size: 12px; color: #6e6e73; }
+.netov-config__value {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+  color: #1d1d1f;
+}
+.netov-config__go { font-size: 11px; color: #0071e3; font-weight: 600; }
+
 @media (max-width: 1100px) {
   .netov-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -608,5 +784,6 @@ onUnmounted(() => {
   .netov-hero__value { font-size: 36px; }
   .netov-hero__right { width: 100%; }
   .netov-spark { flex: 1 1 140px; width: auto; }
+  .netov-config { grid-template-columns: 1fr; }
 }
 </style>

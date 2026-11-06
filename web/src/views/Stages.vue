@@ -64,13 +64,7 @@ onMounted(refresh)
       </NSpace>
     </div>
 
-    <NAlert type="warning" :bordered="false" class="section-gap">
-      <template #header>Stage 2 能力边界（务必注意）</template>
-      <strong>Stage 2 的 TUN 模式需要 Linux + CAP_NET_ADMIN 能力</strong>才能创建并接管内核 TUN 设备；
-      在 <strong>Windows 平台上使用 userspace ingress</strong> 接管流量，不具备内核 TUN 能力。
-      端点、会话与自检结果均来自后端真实状态，不做任何模拟。
-    </NAlert>
-
+    
     <NEmpty v-if="!stages.length" description="暂无阶段数据" class="section-gap" />
 
     <NGrid v-else cols="1 m:2" responsive="screen" :x-gap="14" :y-gap="14">

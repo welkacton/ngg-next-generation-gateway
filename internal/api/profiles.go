@@ -56,6 +56,11 @@ func (s *Server) handleProfileOptions(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// GET /profiles/dns-schema — official DNS schemas for all three kernels.
+func (s *Server) handleDnsSchemas(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"schemas": protocols.DnsSchemas()})
+}
+
 // POST /profiles/toggle — enable/disable one, a selection, or all profiles.
 // Each profile keeps its own kernel; several kernels can be enabled at once.
 func (s *Server) handleProfilesToggle(w http.ResponseWriter, r *http.Request) {

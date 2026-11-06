@@ -622,3 +622,19 @@ SHA-256 `07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51`，
 
 UDP 处理策略：`53/tcp` 之外的 UDP 默认丢弃（TCP-only 调度器无法代理，直发又会绕过隧道），
 DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可用。
+
+---
+
+## v2.6.4 新增端点
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET / POST / DELETE | `/rulesets/github/presets` | GitHub 规则集来源列表 / 自定义新增 / 删除（内置不可删，持久化 `ruleset-github/presets.json`） |
+| POST | `/network/rules/delete` | 规则批量删除 `{ids, all}`，返回剩余规则与删除数 |
+| GET | `/rulesets/syntax` | 三内核官方规则集字段 schema 与示例 |
+| GET | `/profiles/dns-schema` | 三内核官方 DNS 字段 schema 与示例 |
+| POST | `/network/components/toggle` | 八项网络组件 / 策略逐项开关，组件类返回 `requires_restart` |
+| GET / POST / PUT | `/nodes/{id}/metrics`、`/nodes/keys/generate`、`/nodes/keys/pair`、`/nodes/{id}/probe`、`/nodes/{id}/config-file` | 节点采集、密钥生成配对、真实 TCP 探测、配置文件 |
+
+`GET /network/status` 增加 `default_core`、`direct_on_failure`、`bypass_tun` 与 `components`；`PUT /network/config` 对 `default_core` 做注册表白名单校验。
+详见 [`15-v264-features.md`](15-v264-features.md)（本版能力说明与验证口径）。

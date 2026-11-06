@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,9 +14,48 @@ import (
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
 
-// GET /rulesets/github/presets — well-known rule repositories.
+// GET /rulesets/github/presets — built-in + user-defined rule repositories.
+// "custom" lists the repos the UI is allowed to delete.
 func (s *Server) handleGitHubPresets(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"presets": rulesets.Presets()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"presets": rulesets.Presets(),
+		"custom":  rulesets.CustomRepos(),
+	})
+}
+
+// POST /rulesets/github/presets — add a user-defined source. repo must be
+// owner/name (validated and scrubbed inside AddCustomPreset).
+func (s *Server) handleGitHubPresetCreate(w http.ResponseWriter, r *http.Request) {
+	var body rulesets.GitHubPreset
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	preset, err := rulesets.AddCustomPreset(body)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "preset": preset})
+}
+
+// DELETE /rulesets/github/presets/{id} — id is the repo (owner/name). The
+// frontend encodeURIComponent()s it, so PathValue returns the decoded repo.
+func (s *Server) handleGitHubPresetDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "missing preset repo")
+		return
+	}
+	if err := rulesets.RemoveCustomPreset(id); err != nil {
+		if errors.Is(err, rulesets.ErrBuiltinPreset) {
+			writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": id})
 }
 
 // GET /rulesets/github/catalog?repo=&branch=&format=&refresh=true

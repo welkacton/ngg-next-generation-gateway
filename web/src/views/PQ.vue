@@ -44,13 +44,7 @@ onMounted(refresh)
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>说明</template>
-      本页展示后端 <span class="mono">/pq/status</span> 的真实能力声明，
-      <span class="mono">implemented</span> 表示当前构建是否已落地该套件。
-      握手自测结果直接来自 <span class="mono">POST /pq/selftest</span>，不做任何模拟。
-    </NAlert>
-
+    
     <NCard size="small" title="套件状态（/pq/status）" class="section-gap">
       <NDescriptions bordered :column="3" size="small" label-placement="left">
         <NDescriptionsItem label="套件 suite">

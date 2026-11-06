@@ -166,6 +166,7 @@ export type EventType =
   | 'core.log'
   | 'core.stats'
   | 'core.install'
+  | 'system.ready'
   | 'system.alert'
   | string
 
@@ -397,6 +398,10 @@ export interface NetworkStatus {
   stage: string | number
   fail_closed: boolean
   failover: boolean
+  default_core?: string
+  direct_on_failure?: boolean
+  bypass_tun?: boolean
+  components?: NetworkComponent[]
   ingress: NetworkIngress
   tun: NetworkTun
   dns: unknown
@@ -1363,6 +1368,7 @@ export interface RuleSetDef {
   warnings: string[]
   rule_count: number
   enabled: boolean
+  kernel?: string
   created_at?: string
   updated_at?: string
 }
@@ -1408,6 +1414,7 @@ export interface GitHubPreset {
   formats: string[]
   homepage: string
   note: string
+  custom?: boolean
 }
 
 export interface GitHubCategory {
@@ -1454,7 +1461,7 @@ export interface GitHubMountResult {
 }
 
 export const getGitHubPresets = () =>
-  get<{ presets: GitHubPreset[] }>('/rulesets/github/presets')
+  get<{ presets: GitHubPreset[]; custom?: string[] }>('/rulesets/github/presets')
 export const getGitHubCatalog = (repo: string, branch = '', format = '', refresh = false) =>
   get<GitHubCatalog>('/rulesets/github/catalog', {
     params: { repo, branch, format, refresh: refresh ? 'true' : '' },
@@ -1777,3 +1784,131 @@ export const renderPipeline = () =>
 export const applyPipeline = () => post<PipelineApplyResult>('/pipeline/apply', {})
 export const testPipeline = (target?: string) =>
   post<PipelineTestResult>('/pipeline/test', target ? { target } : {})
+
+/* ================================================================== *
+ * v2.3.0 · 规则配置 / 接管全局 / DNS / 节点 / 用户管理
+ * 契约见同批后端实现；此处只放类型与请求函数，不含模拟数据。
+ * ================================================================== */
+
+/** 三内核官方配置 schema 的公共字段描述。 */
+export interface KernelConfigField {
+  key: string
+  label: string
+  type: 'text' | 'number' | 'bool' | 'select' | 'list'
+  options?: string[]
+  default: string
+  description: string
+  required: boolean
+}
+
+export interface KernelConfigSchema {
+  kernel: string
+  label: string
+  format: 'yaml' | 'json'
+  syntax: string
+  doc_url: string
+  doc_name: string
+  description: string
+  fields: KernelConfigField[]
+  example: string
+}
+
+export interface RuleSetSyntaxResult { schemas: KernelConfigSchema[] }
+export interface DnsSchemaResult { schemas: KernelConfigSchema[] }
+
+// 规则配置 -------------------------------------------------------------
+export interface RuleDeleteResult {
+  ok: boolean
+  deleted: number
+  scope: 'selected' | 'all'
+  rules: Rule[]
+  default_action: string
+  default_core: string
+}
+export const deleteRules = (payload: { ids?: string[]; all?: boolean }) =>
+  post<RuleDeleteResult>('/network/rules/delete', payload)
+export const getRuleSetSyntax = () => get<RuleSetSyntaxResult>('/rulesets/syntax')
+export const addGitHubPreset = (preset: Partial<GitHubPreset>) =>
+  post<{ ok: boolean; preset: GitHubPreset }>('/rulesets/github/presets', preset)
+export const deleteGitHubPreset = (repo: string) =>
+  del<{ ok: boolean; deleted: string }>(`/rulesets/github/presets/${encodeURIComponent(repo)}`)
+
+// 接管全局 -------------------------------------------------------------
+export interface NetworkComponent {
+  key: string
+  label: string
+  enabled: boolean
+  running: boolean
+  description: string
+}
+export interface ComponentToggleResult {
+  ok: boolean
+  key: string
+  enabled: boolean
+  running: boolean
+  requires_restart: boolean
+  message: string
+}
+export const toggleNetworkComponent = (payload: { key: string; enabled: boolean }) =>
+  post<ComponentToggleResult>('/network/components/toggle', payload)
+
+// DNS ------------------------------------------------------------------
+export const getDnsSchemas = () => get<DnsSchemaResult>('/profiles/dns-schema')
+
+// 入口 / 出口节点 ------------------------------------------------------
+export interface NodeMetrics {
+  ok: boolean
+  node_id: string
+  cpu_percent: number
+  memory_rss: number
+  bytes_in: number
+  bytes_out: number
+  active_sessions: number
+  sampled_at: string
+  source: 'local' | 'unavailable'
+  note: string
+}
+export interface NodeKeyPair {
+  ok: boolean
+  kind: string
+  private_key: string
+  public_key: string
+  uuid?: string
+  password?: string
+  created_at: string
+}
+export interface NodePairResult {
+  ok: boolean
+  kind: string
+  paired: boolean
+  persisted: boolean
+  inbound: Record<string, unknown>
+  outbound: Record<string, unknown>
+}
+export interface NodeProbeResult {
+  ok: boolean
+  node_id: string
+  address: string
+  port: number
+  reachable: boolean
+  latency_ms: number
+  error?: string
+  checked_at: string
+}
+export interface NodeConfigFileResult {
+  ok: boolean
+  node_id: string
+  path: string
+  bytes: number
+  validated: boolean
+}
+export const getNodeMetrics = (id: string) =>
+  get<NodeMetrics>(`/nodes/${encodeURIComponent(id)}/metrics`)
+export const generateNodeKeys = (payload: { kind: 'wireguard' | 'uuid' | 'password' }) =>
+  post<NodeKeyPair>('/nodes/keys/generate', payload)
+export const pairNodeKeys = (payload: { inbound_id: string; outbound_id: string; kind: string }) =>
+  post<NodePairResult>('/nodes/keys/pair', payload)
+export const probeNode = (id: string, payload: { timeout_ms?: number } = {}) =>
+  post<NodeProbeResult>(`/nodes/${encodeURIComponent(id)}/probe`, payload)
+export const saveNodeConfigFile = (id: string, payload: { content: string; format?: string }) =>
+  put<NodeConfigFileResult>(`/nodes/${encodeURIComponent(id)}/config-file`, payload)

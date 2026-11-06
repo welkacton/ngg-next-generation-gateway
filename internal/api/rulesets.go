@@ -83,6 +83,13 @@ func (s *Server) handleRuleSetFormats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rulesets.Formats())
 }
 
+// GET /rulesets/syntax — official rule-set syntax schemas for all three
+// kernels. POST /rulesets accepts an optional "kernel" field, which is stored
+// on RuleSet and echoed back by GET /rulesets and GET /rulesets/{id}.
+func (s *Server) handleRuleSetSyntax(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"schemas": rulesets.SyntaxSchemas()})
+}
+
 func (s *Server) handleRuleSetByID(w http.ResponseWriter, r *http.Request) {
 	reg := s.engine.RuleSets()
 	if reg == nil {

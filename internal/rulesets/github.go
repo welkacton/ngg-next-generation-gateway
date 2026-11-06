@@ -14,6 +14,7 @@ package rulesets
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,9 +24,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ngg-project/ngg/internal/atomicfile"
 )
 
-// GitHubPreset is a well-known rule repository offered in the UI.
+// GitHubPreset is a well-known rule repository offered in the UI. Custom is
+// set only for user-defined sources returned by Presets(); it is never
+// persisted, so built-in sources stay clean.
 type GitHubPreset struct {
 	Repo     string   `json:"repo"`
 	Label    string   `json:"label"`
@@ -33,6 +38,7 @@ type GitHubPreset struct {
 	Formats  []string `json:"formats"`
 	Homepage string   `json:"homepage"`
 	Note     string   `json:"note"`
+	Custom   bool     `json:"custom,omitempty"`
 }
 
 var githubPresets = []GitHubPreset{
@@ -50,7 +56,198 @@ var githubPresets = []GitHubPreset{
 	},
 }
 
-func Presets() []GitHubPreset { return append([]GitHubPreset(nil), githubPresets...) }
+// ---------------------------------------------------------------------------
+// User-defined GitHub sources. Built-in presets can never be deleted or
+// overwritten; custom ones are persisted atomically with mode 0600.
+// ---------------------------------------------------------------------------
+
+const customPresetsFile = "presets.json"
+
+// ErrBuiltinPreset is returned when a caller tries to delete or overwrite a
+// built-in source. The API maps it to HTTP 422.
+var ErrBuiltinPreset = errors.New("内置预设不可删除或覆盖")
+
+// CustomPresetStore owns user-defined GitHub presets. It is concurrency-safe
+// and persists every change to <data>/ruleset-github/presets.json atomically,
+// rolling back its in-memory list on a write failure.
+type CustomPresetStore struct {
+	mu   sync.RWMutex
+	path string
+	list []GitHubPreset
+}
+
+func newCustomPresetStore(dir string) *CustomPresetStore {
+	if dir == "" {
+		return &CustomPresetStore{}
+	}
+	return &CustomPresetStore{path: filepath.Join(dir, customPresetsFile)}
+}
+
+func (s *CustomPresetStore) load() error {
+	if s.path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var list []GitHubPreset
+	if err := json.Unmarshal(b, &list); err != nil {
+		return fmt.Errorf("parse %s: %w", s.path, err)
+	}
+	s.list = list
+	return nil
+}
+
+func (s *CustomPresetStore) persistLocked() error {
+	if s.path == "" {
+		return fmt.Errorf("custom preset store is not initialized")
+	}
+	return atomicfile.WriteJSON(s.path, s.list)
+}
+
+// validateRepo enforces owner/name and scrubs any path-traversal attempt.
+func validateRepo(repo string) (string, error) {
+	repo = strings.TrimSpace(repo)
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("repo 必须形如 owner/name，例如 blackmatrix7/ios_rule_script")
+	}
+	for _, p := range parts {
+		if p == "." || p == ".." || strings.ContainsAny(p, `\/`) {
+			return "", fmt.Errorf("repo 含非法字符或路径片段")
+		}
+		for _, r := range p {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.') {
+				return "", fmt.Errorf("repo 只能包含字母、数字、-、_、.")
+			}
+		}
+	}
+	return parts[0] + "/" + parts[1], nil
+}
+
+func isBuiltinRepo(repo string) bool {
+	for _, p := range githubPresets {
+		if strings.EqualFold(p.Repo, repo) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *CustomPresetStore) add(p GitHubPreset) (GitHubPreset, error) {
+	repo, err := validateRepo(p.Repo)
+	if err != nil {
+		return GitHubPreset{}, err
+	}
+	if isBuiltinRepo(repo) {
+		return GitHubPreset{}, fmt.Errorf("%w: %s", ErrBuiltinPreset, repo)
+	}
+	p.Repo = repo
+	p.Custom = true
+	if strings.TrimSpace(p.Label) == "" {
+		p.Label = repo
+	}
+	if strings.TrimSpace(p.Branch) == "" {
+		p.Branch = "master"
+	}
+	if len(p.Formats) == 0 {
+		p.Formats = []string{"Clash"}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.list {
+		if strings.EqualFold(s.list[i].Repo, repo) {
+			return GitHubPreset{}, fmt.Errorf("自定义来源 %q 已存在", repo)
+		}
+	}
+	s.list = append(s.list, p)
+	if err := s.persistLocked(); err != nil {
+		s.list = s.list[:len(s.list)-1]
+		return GitHubPreset{}, fmt.Errorf("持久化失败: %w", err)
+	}
+	return p, nil
+}
+
+func (s *CustomPresetStore) remove(repo string) error {
+	repo = strings.TrimSpace(repo)
+	if isBuiltinRepo(repo) {
+		return ErrBuiltinPreset
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.list {
+		if strings.EqualFold(s.list[i].Repo, repo) {
+			old := append([]GitHubPreset(nil), s.list...)
+			s.list = append(s.list[:i], s.list[i+1:]...)
+			if err := s.persistLocked(); err != nil {
+				s.list = old
+				return fmt.Errorf("持久化失败: %w", err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("自定义来源 %q 不存在", repo)
+}
+
+func (s *CustomPresetStore) repos() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.list))
+	for _, p := range s.list {
+		out = append(out, p.Repo)
+	}
+	return out
+}
+
+func (s *CustomPresetStore) custom() []GitHubPreset {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]GitHubPreset, 0, len(s.list))
+	for _, p := range s.list {
+		p.Custom = true
+		out = append(out, p)
+	}
+	return out
+}
+
+func (s *CustomPresetStore) merged() []GitHubPreset {
+	out := append([]GitHubPreset(nil), githubPresets...)
+	out = append(out, s.custom()...)
+	return out
+}
+
+// globalCustomPresets is wired to the real data dir by InitCustomPresets from
+// api.New. Before that call it is empty, so Presets() still returns built-ins.
+var globalCustomPresets = newCustomPresetStore("")
+
+// InitCustomPresets wires the process-wide store to <dataDir>/ruleset-github
+// and loads any persisted entries. It is safe to call again (e.g. in tests).
+func InitCustomPresets(dataDir string) error {
+	s := newCustomPresetStore(filepath.Join(dataDir, "ruleset-github"))
+	if err := s.load(); err != nil {
+		return err
+	}
+	globalCustomPresets = s
+	return nil
+}
+
+// Presets returns built-in + custom presets; custom items carry custom:true.
+func Presets() []GitHubPreset { return globalCustomPresets.merged() }
+
+// AddCustomPreset validates and persists a new user-defined source.
+func AddCustomPreset(p GitHubPreset) (GitHubPreset, error) { return globalCustomPresets.add(p) }
+
+// RemoveCustomPreset deletes a user-defined source. Built-ins return
+// ErrBuiltinPreset; unknown repos return a not-found error.
+func RemoveCustomPreset(repo string) error { return globalCustomPresets.remove(repo) }
+
+// CustomRepos lists the repos that the UI may offer to delete.
+func CustomRepos() []string { return globalCustomPresets.repos() }
 
 // GitHubCategory is one discovered 分流规则分类.
 type GitHubCategory struct {

@@ -478,11 +478,7 @@ onMounted(refresh)
             </NCard>
 
             <NCard size="small" title="真实状态" class="user-panel">
-              <NAlert type="default" :bordered="false" size="small">
-                Active / Expired / Limited / Disabled 由 enabled、到期时间与配额实时计算，
-                不存在手工设置的状态字段。数据用量只由数据面累加。
-              </NAlert>
-            </NCard>
+                          </NCard>
           </NGi>
         </NGrid>
 

@@ -8,10 +8,11 @@
 //
 // The first two describe how traffic gets IN, the middle two decide where it
 // goes, the last two describe who may use it and where it leaves. Render()
-// produces a real mihomo configuration from those six sources; the API layer
-// applies it through the existing config manager (native `mihomo -t` check,
-// backup, hot replace) and then dials through the resulting SOCKS port to prove
-// the chain actually works.
+// produces a fully rendered mihomo configuration from those six sources, or
+// an honest official-syntax JSON skeleton for sing-box / xray-core (node
+// proxies are not translated there). The API layer applies it through the
+// existing config manager (native check, backup, hot replace) and then dials
+// through the resulting SOCKS port to prove the chain actually works.
 package pipeline
 
 import (
@@ -244,10 +245,11 @@ func Validate(c Config, in Inputs) []Step {
 	steps := make([]Step, 0, 7)
 
 	// 1) 协议
-	s1 := step("protocol", "协议", 1, "protocols", c.Protocol, "客户端以 SOCKS5 / HTTP 混合端口接入，由 mihomo 承载")
-	if c.Kernel != "mihomo" {
+	s1 := step("protocol", "协议", 1, "protocols", c.Protocol, fmt.Sprintf("客户端以 SOCKS5 / HTTP 混合端口接入，由 %s 承载", c.Kernel))
+	if c.Kernel != "mihomo" && c.Kernel != "" {
 		s1.Status = "warn"
-		s1.Detail = fmt.Sprintf("当前只对 mihomo 做完整渲染与原生校验，%s 暂未接入链路编排", c.Kernel)
+		s1.Detail = fmt.Sprintf("%s 已生成官方语法的配置骨架（入站 / DNS / 路由 / 直连出站），但节点代理与 share-link 转译尚未接入，且骨架未经 %s 原生校验器校验；mihomo 才是完整渲染与原生校验链路", c.Kernel, c.Kernel)
+		s1.FixHint = "如需完整可运行链路请选 mihomo；或手工把出口节点配置合并进生成的骨架后再应用"
 	}
 	steps = append(steps, s1)
 
@@ -374,7 +376,7 @@ func Validate(c Config, in Inputs) []Step {
 	if !in.KernelReady {
 		s7.Status = "fail"
 		s7.Detail = fmt.Sprintf("%s 未安装，链路无法启动", c.Kernel)
-		s7.FixHint = "在「内核管理」安装 mihomo"
+		s7.FixHint = fmt.Sprintf("在「内核管理」安装 %s", c.Kernel)
 	} else {
 		s7.Detail = fmt.Sprintf("%s 已安装，当前状态 %s", c.Kernel, in.KernelState)
 	}
@@ -476,8 +478,25 @@ type mihomoDNS struct {
 	} `yaml:"fallback-filter,omitempty"`
 }
 
-// Render produces a complete mihomo configuration for the chain.
+// Render produces a configuration for the chain's carrier kernel. mihomo is
+// fully rendered and natively validated; sing-box / xray-core receive an
+// HONEST official-syntax skeleton (see renderKernelSkeleton). An unknown
+// kernel is rejected instead of silently producing a wrong document.
 func Render(c Config, in Inputs) (string, []string, error) {
+	switch c.Kernel {
+	case "mihomo", "":
+		return renderMihomo(c, in)
+	case "sing-box":
+		return renderKernelSkeleton(c, in, "sing-box")
+	case "xray-core":
+		return renderKernelSkeleton(c, in, "xray-core")
+	default:
+		return "", nil, fmt.Errorf("未知承载内核 %q：只支持 mihomo / sing-box / xray-core", c.Kernel)
+	}
+}
+
+// renderMihomo produces a complete mihomo configuration for the chain.
+func renderMihomo(c Config, in Inputs) (string, []string, error) {
 	warnings := []string{}
 	proxies := []map[string]any{}
 	names := []string{}
@@ -586,6 +605,115 @@ func Render(c Config, in Inputs) (string, []string, error) {
 	}
 	_ = enc.Close()
 	return buf.String(), warnings, nil
+}
+
+// renderKernelSkeleton builds a REAL, official-syntax JSON skeleton for
+// sing-box / xray-core. It is deliberately NOT a complete runnable chain:
+// NGG wires the local inbound, the NGG DNS upstreams, references to the
+// enabled rule sets and a direct outbound. Node proxies / share links are not
+// translated, and the document has not passed the kernel's native validator.
+// Both limits are reported in warnings so the operator is never misled.
+func renderKernelSkeleton(c Config, in Inputs, kernel string) (string, []string, error) {
+	warnings := []string{
+		fmt.Sprintf("%s 目前只生成官方语法的配置骨架：已写入本地入站、NGG DNS 上游、已启用规则集的引用与直连出站。", kernel),
+		fmt.Sprintf("出口节点代理与 share-link 转译尚未接入，且该骨架未经 %s 原生校验器校验；应用时以内核的真实校验结果为准，失败会原样返回。", kernel),
+	}
+	listen := c.Inbound.Listen
+	if listen == "" {
+		listen = "127.0.0.1"
+	}
+	port := c.Inbound.Port
+	if port <= 0 {
+		port = 7891
+	}
+	upstream := normalizeUpstreams(in.DNSUpstream)
+	if len(upstream) == 0 {
+		upstream = []string{"223.5.5.5"}
+	}
+	sets := enabledRuleSets(in.RuleSets)
+
+	var doc map[string]any
+	switch kernel {
+	case "sing-box":
+		servers := make([]map[string]any, 0, len(upstream))
+		for i, u := range upstream {
+			servers = append(servers, map[string]any{"tag": fmt.Sprintf("dns-%d", i), "address": u, "detour": "direct"})
+		}
+		ruleSet := make([]map[string]any, 0, len(sets))
+		tags := make([]string, 0, len(sets))
+		for _, rs := range sets {
+			tag := sanitizeKernelTag(rs.ID)
+			ruleSet = append(ruleSet, map[string]any{
+				"type": "local", "tag": tag, "format": "source",
+				"path": "./ruleset/" + tag + ".json",
+			})
+			tags = append(tags, tag)
+		}
+		rules := []map[string]any{{"action": "sniff"}}
+		if len(tags) > 0 {
+			rules = append(rules, map[string]any{"rule_set": tags, "outbound": "direct"})
+		}
+		doc = map[string]any{
+			"log":       map[string]any{"level": "info"},
+			"dns":       map[string]any{"servers": servers, "strategy": "prefer_ipv4"},
+			"inbounds":  []map[string]any{{"type": "mixed", "tag": "ngg-in", "listen": listen, "listen_port": port}},
+			"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}, {"type": "block", "tag": "block"}},
+			"route":     map[string]any{"rules": rules, "rule_set": ruleSet, "final": "direct", "auto_detect_interface": true},
+		}
+	case "xray-core":
+		domains := make([]string, 0)
+		for _, rs := range sets {
+			for _, pr := range rs.Rules {
+				if pr.Type == "DOMAIN" || pr.Type == "DOMAIN-SUFFIX" {
+					domains = append(domains, pr.Value)
+				}
+				if len(domains) >= 200 {
+					break
+				}
+			}
+			if len(domains) >= 200 {
+				break
+			}
+		}
+		routingRules := []map[string]any{}
+		if len(domains) > 0 {
+			routingRules = append(routingRules, map[string]any{"type": "field", "domain": domains, "outboundTag": "direct"})
+		}
+		doc = map[string]any{
+			"log": map[string]any{"loglevel": "warning"},
+			"dns": map[string]any{"servers": append([]string{}, upstream...)},
+			"inbounds": []map[string]any{{
+				"tag": "ngg-in", "listen": listen, "port": port, "protocol": "socks",
+				"settings": map[string]any{"auth": "noauth", "udp": true},
+			}},
+			"outbounds": []map[string]any{{"tag": "direct", "protocol": "freedom"}, {"tag": "block", "protocol": "blackhole"}},
+			"routing":   map[string]any{"domainStrategy": "AsIs", "rules": routingRules},
+		}
+	default:
+		return "", warnings, fmt.Errorf("不支持的骨架内核 %q", kernel)
+	}
+	blob, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", warnings, fmt.Errorf("编码 %s 骨架失败: %w", kernel, err)
+	}
+	return string(blob) + "\n", warnings, nil
+}
+
+// sanitizeKernelTag turns a rule-set id into a safe kernel tag.
+func sanitizeKernelTag(id string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(id) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = "ruleset"
+	}
+	return out
 }
 
 func hostNames(list []hosts.Host) []string {

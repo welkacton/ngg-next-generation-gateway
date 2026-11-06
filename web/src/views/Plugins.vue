@@ -235,13 +235,7 @@ onMounted(refreshPlugins)
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>插件说明</template>
-      <span class="mono">kind</span> 为 <span class="mono">javascript</span> 或
-      <span class="mono">wasm</span>；安装时的 body 即插件 manifest。
-      <strong>WASM 插件需导出 <span class="mono">ngg_hook() -&gt; i32</span></strong> 供网关在 hook 时调用。
-    </NAlert>
-
+    
     <NCard size="small" title="插件列表（/plugins）" class="section-gap">
       <template #header-extra>
         <NButton size="small" type="primary" :loading="isBusy('reload')" @click="doReload">

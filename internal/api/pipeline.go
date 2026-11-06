@@ -133,7 +133,8 @@ func (s *Server) handlePipelineValidate(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// POST /api/v1/pipeline/render — dry run, returns the mihomo YAML.
+// POST /api/v1/pipeline/render — dry run: full mihomo YAML, or an honest
+// official-syntax JSON skeleton for sing-box / xray-core.
 func (s *Server) handlePipelineRender(w http.ResponseWriter, r *http.Request) {
 	if s.pipeline == nil {
 		writeErr(w, http.StatusServiceUnavailable, "pipeline store unavailable")

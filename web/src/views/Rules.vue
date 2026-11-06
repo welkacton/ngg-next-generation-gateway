@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ChainStrip from '../components/ChainStrip.vue'
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -10,6 +10,7 @@ import {
   NGrid,
   NInput,
   NInputNumber,
+  NModal,
   NSelect,
   NSpace,
   NSwitch,
@@ -20,7 +21,11 @@ import type {
   GitHubCatalog,
   GitHubMountResult,
   GitHubPreset,
+  KernelConfigField,
+  KernelConfigSchema,
+  ProfileKernelOption,
   Rule,
+  RuleDeleteResult,
   RuleSetDef,
   RuleSetParsePreview,
   RuleSetSource,
@@ -29,6 +34,23 @@ import { useApiAction } from '../composables/useApi'
 import { formatTime, prettyJson, toArray } from '../utils/format'
 
 const { isBusy, run } = useApiAction()
+
+const kernelOptions = ref<Array<{ label: string; value: string }>>([
+  { label: '自动', value: '' },
+])
+
+async function loadProfileOptions() {
+  const data = await run('profile-options', () => api.getProfileOptions())
+  if (data) {
+    kernelOptions.value = [
+      { label: '自动', value: '' },
+      ...(data.kernels ?? []).map((k: ProfileKernelOption) => ({
+        label: k.label,
+        value: k.kernel,
+      })),
+    ]
+  }
+}
 
 const RULE_TYPES = [
   'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'IP-CIDR',
@@ -204,13 +226,48 @@ function confirmDelete(id: string) {
   })
 }
 
-function deleteSelectedRule() {
-  const id = checkedRuleIds.value[0]
-  if (!id) {
-    window.$message?.warning('请先在规则表第一列勾选一条规则，或直接点击行内「删除」')
+function applyDeleteResult(r: RuleDeleteResult) {
+  rules.value = toArray<Rule>(r.rules ?? [])
+  defaultAction.value = String(r.default_action ?? '')
+  defaultCore.value = String(r.default_core ?? '')
+  checkedRuleIds.value = []
+  if (editingId.value && !rules.value.some((x) => x.id === editingId.value)) cancelEdit()
+  rulesResult.value = r
+}
+
+function confirmDeleteSelected() {
+  const ids = [...checkedRuleIds.value]
+  if (!ids.length) {
+    window.$message?.warning('请先勾选要删除的规则')
     return
   }
-  confirmDelete(id)
+  window.$dialog?.warning({
+    title: '删除选中规则',
+    content: `确定删除选中的 ${ids.length} 条规则吗？此操作立即生效。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      const r = await run('del-rules:selected', () => api.deleteRules({ ids }), '已删除选中规则')
+      if (r) applyDeleteResult(r)
+    },
+  })
+}
+
+function confirmDeleteAll() {
+  window.$dialog?.warning({
+    title: '全部删除',
+    content: '确定清空全部规则吗？此操作立即生效。',
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      const r = await run('del-rules:all', () => api.deleteRules({ all: true }), '已清空全部规则')
+      if (r) applyDeleteResult(r)
+    },
+  })
+}
+
+function deleteSelectedRule() {
+  confirmDeleteSelected()
 }
 
 /* ---- 启用 / 停用：单条、多选、全部 ---------------------------------- */
@@ -387,12 +444,172 @@ const setForm = ref({
   format: 'auto',
   enabled: true,
   filename: '' as string | undefined,
+  kernel: '' as string,
 })
 
 const formatOptions = () => [
   { label: '自动识别（推荐）', value: 'auto' },
   ...formats.value.map((f) => ({ label: `${f.id} — ${f.name}`, value: f.id })),
 ]
+
+const syntaxSchemas = ref<KernelConfigSchema[]>([])
+const syntaxFields = ref<Record<string, any>>({})
+
+const setKernelOptions = computed(() => [
+  { label: '自动', value: '' },
+  ...syntaxSchemas.value.map((s) => ({ label: s.label, value: s.kernel })),
+])
+const currentSchema = computed<KernelConfigSchema | null>(
+  () => syntaxSchemas.value.find((s) => s.kernel === setForm.value.kernel) ?? null,
+)
+
+function fieldOptions(f: KernelConfigField) {
+  return (f.options ?? []).map((o) => ({ label: o, value: o }))
+}
+
+function defaultFieldValue(f: KernelConfigField): any {
+  const raw = String(f.default ?? '')
+  switch (f.type) {
+    case 'bool':
+      return raw === 'true'
+    case 'number': {
+      const n = Number(raw)
+      return raw !== '' && Number.isFinite(n) ? n : null
+    }
+    default:
+      return raw
+  }
+}
+
+function resetSyntaxFields() {
+  const next: Record<string, any> = {}
+  const s = currentSchema.value
+  if (s) for (const f of s.fields) next[f.key] = defaultFieldValue(f)
+  syntaxFields.value = next
+}
+
+watch(() => setForm.value.kernel, () => resetSyntaxFields())
+
+async function loadSyntaxSchemas() {
+  const data = await run('ruleset-syntax', () => api.getRuleSetSyntax())
+  if (data) {
+    syntaxSchemas.value = data.schemas ?? []
+    resetSyntaxFields()
+  }
+}
+
+function genValue(v: unknown): string {
+  return v === null || v === undefined ? '' : String(v).trim()
+}
+function genNum(v: unknown, fallback: number): number {
+  const s = genValue(v)
+  if (!s) return fallback
+  const n = Number(s)
+  return Number.isFinite(n) ? n : fallback
+}
+function genPick(f: Record<string, any>, ...keys: string[]): any {
+  for (const k of keys) {
+    const v = f[k]
+    if (v !== undefined && v !== null && genValue(v) !== '') return v
+  }
+  for (const k of keys) {
+    for (const key of Object.keys(f)) {
+      if (key === k || key.endsWith('.' + k)) {
+        const v = f[key]
+        if (v !== undefined && v !== null && genValue(v) !== '') return v
+      }
+    }
+  }
+  return undefined
+}
+function genList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => genValue(x)).filter(Boolean)
+  return genValue(v).split(/[\n,]+/).map((x) => x.trim()).filter(Boolean)
+}
+function genNumOrStr(v: unknown): number | string | undefined {
+  const s = genValue(v)
+  if (!s) return undefined
+  const n = Number(s)
+  return Number.isFinite(n) ? n : s
+}
+
+function genMihomo(f: Record<string, any>): string {
+  const tag = genValue(genPick(f, 'tag', 'name')) || 'ruleset'
+  const policy = genValue(genPick(f, 'policy', 'action')) || 'PROXY'
+  const lines: string[] = ['rule-providers:', `  ${tag}:`]
+  const pairs: Array<[string, string]> = [
+    ['type', genValue(genPick(f, 'type')) || 'http'],
+    ['behavior', genValue(genPick(f, 'behavior')) || 'domain'],
+    ['format', genValue(genPick(f, 'format')) || 'yaml'],
+    ['url', genValue(genPick(f, 'url'))],
+    ['path', genValue(genPick(f, 'path'))],
+    ['interval', String(genNum(genPick(f, 'interval'), 86400))],
+  ]
+  for (const [k, v] of pairs) if (v) lines.push(`    ${k}: ${v}`)
+  lines.push('rules:', `  - RULE-SET,${tag},${policy}`)
+  return lines.join('\n')
+}
+
+function genSingBox(f: Record<string, any>): string {
+  const tag = genValue(genPick(f, 'tag', 'name')) || 'ruleset'
+  const ruleSet: Record<string, unknown> = { tag }
+  const t = genValue(genPick(f, 'type'))
+  if (t) ruleSet.type = t
+  const fmt = genValue(genPick(f, 'format'))
+  if (fmt) ruleSet.format = fmt
+  const url = genValue(genPick(f, 'url'))
+  if (url) ruleSet.url = url
+  const detour = genValue(genPick(f, 'download_detour'))
+  if (detour) ruleSet.download_detour = detour
+  const interval = genNumOrStr(genPick(f, 'update_interval'))
+  if (interval !== undefined) ruleSet.update_interval = interval
+  return JSON.stringify(
+    { route: { rule_set: [ruleSet], rules: [{ rule_set: [tag] }] } },
+    null,
+    2,
+  )
+}
+
+function genXray(f: Record<string, any>): string {
+  const domain = genList(genPick(f, 'domain'))
+  const ip = genList(genPick(f, 'ip'))
+  const geosite = genList(genPick(f, 'geosite'))
+  const geoip = genList(genPick(f, 'geoip'))
+  const domains = [...domain, ...geosite.map((x) => `geosite:${x}`)]
+  const ips = [...ip, ...geoip.map((x) => `geoip:${x}`)]
+  const rule: Record<string, unknown> = {}
+  if (domains.length) rule.domain = domains
+  if (ips.length) rule.ip = ips
+  rule.outboundTag = genValue(genPick(f, 'outboundTag', 'outbound_tag', 'outbound', 'action')) || 'proxy'
+  return JSON.stringify({ routing: { rules: [rule] } }, null, 2)
+}
+
+function generateSetSyntax(schema: KernelConfigSchema, fields: Record<string, any>): string {
+  try {
+    switch (schema.kernel) {
+      case 'mihomo':
+      case 'clash':
+        return genMihomo(fields)
+      case 'sing-box':
+      case 'singbox':
+        return genSingBox(fields)
+      case 'xray-core':
+      case 'xray':
+        return genXray(fields)
+      default:
+        return ''
+    }
+  } catch {
+    return ''
+  }
+}
+
+function applySyntaxToContent() {
+  const s = currentSchema.value
+  if (!s) return
+  const text = generateSetSyntax(s, syntaxFields.value)
+  if (text) setForm.value.content = text
+}
 
 async function refreshRuleSets() {
   const data = await run('rulesets', () => api.listRuleSets())
@@ -413,8 +630,9 @@ function resetSetForm() {
   setEditingId.value = null
   setForm.value = {
     id: '', name: '', description: '', source: 'inline', url: '',
-    content: '', format: 'auto', enabled: true, filename: undefined,
+    content: '', format: 'auto', enabled: true, filename: undefined, kernel: '',
   }
+  syntaxFields.value = {}
 }
 
 function startSetEdit(s: RuleSetDef) {
@@ -429,6 +647,7 @@ function startSetEdit(s: RuleSetDef) {
     format: s.format || 'auto',
     enabled: s.enabled,
     filename: s.filename,
+    kernel: s.kernel ?? '',
   }
   window.$message?.info('已载入规则集 ' + s.id + '，修改后点击「保存修改」')
 }
@@ -444,6 +663,7 @@ function buildRuleSetPayload(): Partial<RuleSetDef> {
     format: setForm.value.format,
     enabled: setForm.value.enabled,
     filename: setForm.value.filename,
+    kernel: setForm.value.kernel || undefined,
   }
 }
 
@@ -654,6 +874,11 @@ const ghAction = ref('DIRECT')
 const ghCore = ref('mihomo')
 const ghResult = ref<GitHubMountResult | null>(null)
 const ghError = ref('')
+const ghCustomRepos = ref<string[]>([])
+const showAddPreset = ref(false)
+const presetForm = ref({
+  repo: '', label: '', branch: '', formats: '', homepage: '', note: '',
+})
 
 const ghFormatOptions = computed(() =>
   (ghPresets.value.find((p) => p.repo === ghRepo.value)?.formats ?? ['Clash']).map((f) => ({
@@ -705,7 +930,100 @@ function clearGhSelection() {
 
 async function loadGhPresets() {
   const data = await run('gh-presets', () => api.getGitHubPresets())
-  if (data) ghPresets.value = data.presets ?? []
+  if (data) {
+    ghPresets.value = data.presets ?? []
+    const marked = ghPresets.value.filter((p) => p.custom).map((p) => p.repo)
+    ghCustomRepos.value = Array.from(new Set([...(data.custom ?? []), ...marked]))
+  }
+}
+
+function renderGhPresetOption(info: any) {
+  const repo = String(info.option?.value ?? '')
+  if (!ghCustomRepos.value.includes(repo)) return info.node
+  return h(
+    'div',
+    { style: 'display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%' },
+    [
+      h('div', { style: 'flex: 1; min-width: 0' }, info.node),
+      h(
+        NButton,
+        {
+          size: 'tiny',
+          quaternary: true,
+          type: 'error',
+          onClick: (e: MouseEvent) => {
+            e.stopPropagation()
+            e.preventDefault()
+            confirmDeletePreset(repo)
+          },
+        },
+        { default: () => '删除' },
+      ),
+    ],
+  )
+}
+
+function openAddPreset() {
+  presetForm.value = { repo: '', label: '', branch: '', formats: '', homepage: '', note: '' }
+  showAddPreset.value = true
+}
+
+async function submitAddPreset() {
+  const repo = presetForm.value.repo.trim()
+  if (!repo) {
+    window.$message?.warning('请填写 repo')
+    return
+  }
+  const formats = presetForm.value.formats
+    .split(/[,\s]+/)
+    .map((v) => v.trim())
+    .filter(Boolean)
+  const r = await run(
+    'add-gh-preset',
+    () =>
+      api.addGitHubPreset({
+        repo,
+        label: presetForm.value.label.trim() || undefined,
+        branch: presetForm.value.branch.trim() || undefined,
+        formats: formats.length ? formats : undefined,
+        homepage: presetForm.value.homepage.trim() || undefined,
+        note: presetForm.value.note.trim() || undefined,
+      }),
+    '来源已添加',
+  )
+  if (r) {
+    showAddPreset.value = false
+    await loadGhPresets()
+    ghRepo.value = repo
+    choosePreset(repo)
+  }
+}
+
+function confirmDeletePreset(repo: string) {
+  window.$dialog?.warning({
+    title: '删除来源',
+    content: `确定删除自定义来源 ${repo} 吗？`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      const r = await run(
+        'del-gh-preset:' + repo,
+        () => api.deleteGitHubPreset(repo),
+        '来源已删除',
+      )
+      if (r) {
+        await loadGhPresets()
+        if (ghRepo.value === repo) {
+          const first = ghPresets.value[0]
+          ghRepo.value = first?.repo ?? ''
+          ghCatalog.value = null
+          ghSelected.value = []
+          ghResult.value = null
+          if (first) choosePreset(first.repo)
+        }
+      }
+    },
+  })
 }
 
 async function loadGhCatalog(force = false) {
@@ -792,6 +1110,8 @@ onMounted(() => {
   refreshRules()
   refreshRuleSets()
   refreshFormats()
+  loadProfileOptions()
+  loadSyntaxSchemas()
   loadGhPresets().then(() => loadGhCatalog(false))
 })
 </script>
@@ -810,14 +1130,7 @@ onMounted(() => {
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>规则说明</template>
-      规则类型支持 DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / DOMAIN-REGEX / IP-CIDR /
-      DST-PORT / NETWORK / PROCESS-NAME / TENANT / MATCH；动作为 PROXY / DIRECT / REJECT / DNS-LOCAL。
-      「全量替换」会把当前表格中的全部规则连同默认动作、默认内核一次性提交。
-      规则集支持内联、URL 订阅与上传附件；上传后由后端自动识别格式、解析规则并直接附加到规则集栏。
-    </NAlert>
-
+    
     <NCard size="small" class="section-gap">
       <template #header>
         <div class="major-head">
@@ -830,10 +1143,12 @@ onMounted(() => {
         <NSelect
           :value="ghRepo"
           :options="ghPresetOptions"
+          :render-option="renderGhPresetOption"
           size="small"
           style="width: 250px"
           @update:value="choosePreset"
         />
+        <NButton size="small" @click="openAddPreset">添加来源</NButton>
         <NInput v-model:value="ghRepo" size="small" placeholder="owner/name" style="width: 220px" />
         <NInput v-model:value="ghBranch" size="small" placeholder="分支" style="width: 100px" />
         <NSelect v-model:value="ghFormat" :options="ghFormatOptions" size="small" style="width: 120px" />
@@ -891,7 +1206,7 @@ onMounted(() => {
         <span class="kv-label">动作</span>
         <NSelect v-model:value="ghAction" :options="ghActionOptions" size="small" style="width: 110px" />
         <span class="kv-label">执行内核</span>
-        <NInput v-model:value="ghCore" size="small" placeholder="mihomo" style="width: 120px" />
+        <NSelect v-model:value="ghCore" :options="kernelOptions" size="small" style="width: 140px" />
         <NButton size="small" type="primary" :loading="isBusy('gh-mount')" :disabled="!ghSelected.length" @click="mountGh">
           加载所选（{{ ghSelected.length }}）
         </NButton>
@@ -918,7 +1233,7 @@ onMounted(() => {
           <span class="hint">默认动作</span>
           <NInput v-model:value="defaultAction" size="small" style="width: 120px" placeholder="DIRECT" />
           <span class="hint">默认内核</span>
-          <NInput v-model:value="defaultCore" size="small" style="width: 120px" placeholder="mihomo" />
+          <NSelect v-model:value="defaultCore" :options="kernelOptions" size="small" style="width: 140px" />
           <NButton size="small" :loading="isBusy('replace-rules')" @click="replaceRulesAction">
             全量替换
           </NButton>
@@ -934,6 +1249,8 @@ onMounted(() => {
         <NButton size="small" :disabled="!checkedRuleIds.length" :loading="isBusy('toggle-rules:selected:off')" @click="applyRuleToggle(checkedRuleIds, false, false)">停用选中</NButton>
         <NButton size="small" :loading="isBusy('toggle-rules:all:on')" @click="applyRuleToggle([], true, true)">全部启用</NButton>
         <NButton size="small" :loading="isBusy('toggle-rules:all:off')" @click="applyRuleToggle([], true, false)">全部停用</NButton>
+        <NButton size="small" type="error" :disabled="!checkedRuleIds.length" :loading="isBusy('del-rules:selected')" @click="confirmDeleteSelected">删除选中</NButton>
+        <NButton size="small" type="error" :loading="isBusy('del-rules:all')" @click="confirmDeleteAll">全部删除</NButton>
       </div>
       <NDataTable
         v-model:checked-row-keys="checkedRuleIds"
@@ -979,7 +1296,7 @@ onMounted(() => {
               </NGi>
               <NGi>
                 <div class="kv-label">内核 core_id</div>
-                <NInput v-model:value="ruleForm.core_id" placeholder="留空 = 默认" />
+                <NSelect v-model:value="ruleForm.core_id" :options="kernelOptions" />
               </NGi>
               <NGi>
                 <div class="kv-label">链 chain</div>
@@ -1044,7 +1361,7 @@ onMounted(() => {
           <NButton size="small" @click="resetSetForm">新增规则集</NButton>
           <NButton v-if="setEditingId" size="small" @click="resetSetForm">取消编辑</NButton>
           <span class="hint">应用执行内核</span>
-          <NInput v-model:value="applyCore" size="small" style="width: 130px" placeholder="留空 = 规则表默认内核" />
+          <NSelect v-model:value="applyCore" :options="kernelOptions" size="small" style="width: 140px" />
         </NSpace>
       </template>
 
@@ -1056,18 +1373,7 @@ onMounted(() => {
         @change="onFileChange"
       />
 
-      <NAlert type="default" :bordered="false" style="margin-bottom: 12px">
-        <template #header>自动识别说明</template>
-        上传 <span class="mono">.yaml / .json / .txt / .list</span> 等文档后，后端会自动识别
-        Clash/Mihomo <span class="mono">payload:</span> / <span class="mono">rules:</span> YAML、
-        JSON 规则数组、逗号分隔规则行、纯域名列表、IP/CIDR 列表与 AdGuard
-        <span class="mono">||domain^</span> 语法；识别成功的规则集会<strong>直接附加到下方规则集栏</strong>，
-        无法识别的行只记为 warning，绝不伪装成规则。
-        <div v-if="formats.length" class="hint" style="margin-top: 6px">
-          支持的格式：{{ formats.map((f) => f.id).join(' / ') }}
-        </div>
-      </NAlert>
-
+      
       <NAlert
         v-if="parsePreview"
         type="success"
@@ -1120,6 +1426,10 @@ onMounted(() => {
         >
           <NSpace vertical :size="10" style="width: 100%">
             <NGrid cols="2" :x-gap="10" :y-gap="8">
+              <NGi :span="2">
+                <div class="kv-label">执行内核</div>
+                <NSelect v-model:value="setForm.kernel" :options="setKernelOptions" />
+              </NGi>
               <NGi>
                 <div class="kv-label">ID（必填）</div>
                 <NInput v-model:value="setForm.id" placeholder="rs-my-list" :disabled="!!setEditingId" />
@@ -1160,6 +1470,24 @@ onMounted(() => {
                 <NSwitch v-model:value="setForm.enabled" />
               </NGi>
             </NGrid>
+            <NSpace v-if="currentSchema" vertical :size="8" style="width: 100%">
+              <div class="mono">{{ currentSchema?.syntax }}</div>
+              <a :href="currentSchema?.doc_url" target="_blank" rel="noopener noreferrer">{{ currentSchema?.doc_name }}</a>
+              <pre class="mono output-block" style="max-height: 160px">{{ currentSchema?.example }}</pre>
+              <NGrid cols="2" :x-gap="10" :y-gap="8">
+                <template v-for="f in (currentSchema?.fields ?? [])" :key="f.key">
+                  <NGi :span="f.type === 'list' ? 2 : 1">
+                    <div class="kv-label">{{ f.label }}</div>
+                    <NInput v-if="f.type === 'text'" v-model:value="syntaxFields[f.key]" />
+                    <NInputNumber v-else-if="f.type === 'number'" v-model:value="syntaxFields[f.key]" style="width: 100%" />
+                    <NSwitch v-else-if="f.type === 'bool'" v-model:value="syntaxFields[f.key]" />
+                    <NSelect v-else-if="f.type === 'select'" v-model:value="syntaxFields[f.key]" :options="fieldOptions(f)" />
+                    <NInput v-else-if="f.type === 'list'" v-model:value="syntaxFields[f.key]" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
+                  </NGi>
+                </template>
+              </NGrid>
+              <NButton size="small" @click="applySyntaxToContent">按语法生成内容</NButton>
+            </NSpace>
             <NSpace :size="8">
               <NButton
                 size="small"
@@ -1194,5 +1522,31 @@ onMounted(() => {
         </NCard>
       </NGi>
     </NGrid>
+    <NModal
+      v-model:show="showAddPreset"
+      preset="card"
+      title="添加来源"
+      style="width: 480px"
+      :bordered="false"
+    >
+      <NSpace vertical :size="10" style="width: 100%">
+        <div class="kv-label">repo（必填）</div>
+        <NInput v-model:value="presetForm.repo" placeholder="owner/name" />
+        <div class="kv-label">label</div>
+        <NInput v-model:value="presetForm.label" />
+        <div class="kv-label">branch</div>
+        <NInput v-model:value="presetForm.branch" />
+        <div class="kv-label">formats</div>
+        <NInput v-model:value="presetForm.formats" placeholder="Clash, Surge" />
+        <div class="kv-label">homepage</div>
+        <NInput v-model:value="presetForm.homepage" />
+        <div class="kv-label">note</div>
+        <NInput v-model:value="presetForm.note" />
+        <NSpace :size="8">
+          <NButton size="small" type="primary" :loading="isBusy('add-gh-preset')" @click="submitAddPreset">添加</NButton>
+          <NButton size="small" @click="showAddPreset = false">取消</NButton>
+        </NSpace>
+      </NSpace>
+    </NModal>
   </div>
 </template>

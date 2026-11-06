@@ -521,11 +521,17 @@ export const useCoresStore = defineStore('cores', {
           }
           break
         }
+        case 'system.ready':
+          // Connection handshake: nothing to report, never a warning.
+          break
         case 'system.alert': {
           const text =
             typeof event.payload === 'string'
               ? event.payload
               : JSON.stringify(event.payload ?? {})
+          // v2.6.3 servers sent the handshake as system.alert; stay
+          // compatible with them so upgrading is not required first.
+          if (/event stream connected/i.test(text)) break
           if (window.$notification) {
             window.$notification.warning({
               title: '系统告警',

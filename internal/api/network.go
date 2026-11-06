@@ -2,16 +2,15 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/ngg-project/ngg/internal/atomicfile"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/pkg/contracts"
 )
@@ -20,7 +19,23 @@ import (
 // through Core Manager's Network() facade.
 
 func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.engine.NetworkStatus())
+	// Keep every field v2.6.3 already reports (running/stage/fail_closed/
+	// failover/ingress/tun/dns/...), then add the capability matrix fields.
+	status := s.engine.NetworkStatus()
+	if ne := s.engine.Network(); ne != nil {
+		cfg := ne.Config()
+		status["default_core"] = cfg.DefaultCore
+		status["direct_on_failure"] = cfg.DirectOnFailure
+		status["bypass_tun"] = cfg.Egress.BypassTUN
+		status["components"] = ne.Components()
+	} else {
+		// Honest degradation: no engine means no real running state to report.
+		status["default_core"] = ""
+		status["direct_on_failure"] = false
+		status["bypass_tun"] = false
+		status["components"] = []netengine.Component{}
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) handleNetworkStart(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +87,15 @@ func (s *Server) handleNetworkConfig(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
+	}
+	// default_core must be empty (auto) or a registered kernel id. Validate
+	// before touching cfg so a rejected request changes nothing at runtime.
+	if body.DefaultCore != nil {
+		core := strings.TrimSpace(*body.DefaultCore)
+		if core != "" && !s.isRegisteredCore(core) {
+			writeErr(w, http.StatusUnprocessableEntity, "default_core 不是已注册内核: "+core)
+			return
+		}
 	}
 	cfg := ne.Config()
 	old := *cfg
@@ -162,20 +186,9 @@ func (s *Server) handleNetworkConfig(w http.ResponseWriter, r *http.Request) {
 	persisted := false
 	persistPath := filepath.Join(s.cfg.Storage.Dir, "network-config.json")
 	if len(changed) > 0 {
-		if err := os.MkdirAll(s.cfg.Storage.Dir, 0o755); err != nil {
+		if _, err := s.persistNetworkConfig(cfg); err != nil {
 			*cfg = old
-			writeErr(w, http.StatusInternalServerError, "could not create data dir: "+err.Error())
-			return
-		}
-		blob, mErr := json.MarshalIndent(cfg, "", "  ")
-		if mErr != nil {
-			*cfg = old
-			writeErr(w, http.StatusInternalServerError, "could not encode network config: "+mErr.Error())
-			return
-		}
-		if wErr := os.WriteFile(persistPath, blob, 0o600); wErr != nil {
-			*cfg = old
-			writeErr(w, http.StatusInternalServerError, "could not persist network config: "+wErr.Error())
+			writeErr(w, http.StatusInternalServerError, "could not persist network config: "+err.Error())
 			return
 		}
 		persisted = true
@@ -195,6 +208,138 @@ func isLoopbackListen(host string) bool {
 }
 
 func goruntimeGOOS() string { return runtime.GOOS }
+
+// persistNetworkConfig is the ONE writer for the runtime network config.
+// Both PUT /network/config and POST /network/components/toggle go through it,
+// so there is never a second, divergent write path. Mode is 0600 and the
+// replacement is atomic; callers roll back their in-memory cfg on error.
+func (s *Server) persistNetworkConfig(cfg *netengine.Config) (string, error) {
+	path := filepath.Join(s.cfg.Storage.Dir, "network-config.json")
+	if err := atomicfile.WriteJSON(path, cfg); err != nil {
+		return path, err
+	}
+	return path, nil
+}
+
+// isRegisteredCore implements the default_core whitelist check.
+func (s *Server) isRegisteredCore(id string) bool {
+	for _, d := range s.engine.Registry() {
+		if string(d.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
+// POST /network/rules/delete — batch-delete rules. ids empty and all!=true
+// is a 400; all=true clears the entire table. Returns the post-delete table
+// plus the defaults so the UI never has to guess.
+func (s *Server) handleNetworkRulesDelete(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+		All bool     `json:"all"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if !body.All && len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids or all is required")
+		return
+	}
+	scope := "selected"
+	if body.All {
+		scope = "all"
+	}
+	rs := ne.Rules()
+	deleted := rs.RemoveMany(body.IDs, body.All)
+	action, core := rs.Defaults()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "deleted": deleted, "scope": scope, "rules": rs.List(),
+		"default_action": action, "default_core": core,
+	})
+}
+
+// POST /network/components/toggle — flip one of the eight capability keys.
+// Policy keys update the runtime cfg and take effect immediately. Component
+// keys only persist the intended Enabled: we do NOT claim the running
+// resource was started/stopped, and we return requires_restart=true.
+func (s *Server) handleNetworkComponentToggle(w http.ResponseWriter, r *http.Request) {
+	ne := s.engine.Network()
+	if ne == nil {
+		writeErr(w, http.StatusServiceUnavailable, "network engine not initialized")
+		return
+	}
+	var body struct {
+		Key     string `json:"key"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	key := strings.TrimSpace(body.Key)
+	cfg := ne.Config()
+	old := *cfg
+	strategy, label := false, ""
+	switch key {
+	case "fail_closed":
+		cfg.FailClosed = body.Enabled
+		strategy, label = true, "故障保护（断连不泄漏）"
+	case "failover":
+		cfg.Failover = body.Enabled
+		strategy, label = true, "内核故障自动切换"
+	case "direct_on_failure":
+		cfg.DirectOnFailure = body.Enabled
+		strategy, label = true, "故障直连"
+	case "bypass_tun":
+		cfg.Egress.BypassTUN = body.Enabled
+		strategy, label = true, "绕过 TUN"
+	case "ingress":
+		cfg.Ingress.Enabled = body.Enabled
+		label = "统一入口 Ingress"
+	case "dns":
+		cfg.DNS.Enabled = body.Enabled
+		label = "DNS 引擎"
+	case "tun":
+		cfg.TUN.AutoRoute = body.Enabled
+		label = "TUN 全局接管"
+	case "egress":
+		cfg.Egress.Enabled = body.Enabled
+		label = "出口调度 Egress"
+	default:
+		writeErr(w, http.StatusBadRequest, "unknown component key: "+key)
+		return
+	}
+	if _, err := s.persistNetworkConfig(cfg); err != nil {
+		*cfg = old
+		writeErr(w, http.StatusInternalServerError, "could not persist network config: "+err.Error())
+		return
+	}
+	running := false
+	for _, c := range ne.Components() {
+		if c.Key == key {
+			running = c.Running
+			break
+		}
+	}
+	requiresRestart := !strategy
+	message := fmt.Sprintf("%s 的启用状态已设为 %v 并写入 network-config.json", label, body.Enabled)
+	if strategy {
+		message += "；策略类配置已即时生效，无需重启。"
+	} else {
+		message += "；该组件在运行时并未被启停，需重启网络引擎后才会按新配置加载。"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "key": key, "enabled": body.Enabled, "running": running,
+		"requires_restart": requiresRestart, "message": message,
+	})
+}
 
 func (s *Server) handleNetworkRules(w http.ResponseWriter, r *http.Request) {
 	ne := s.engine.Network()

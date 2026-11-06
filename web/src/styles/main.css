@@ -1116,3 +1116,37 @@ body {
   font-size: 12px;
 }
 .gh-result-grid { max-height: 260px; }
+
+/* ------------------------------------------------------------------ *
+ * v2.6.4 · Apple minimalism: one global switch removes the explanatory
+ * layer. Labels, table headers, actions and data values stay visible.
+ * ------------------------------------------------------------------ */
+.page-subtitle,
+.hint,
+.major-sub,
+.pc-help,
+.pc-flow,
+.pc-code-note,
+.pc-section-hint,
+.pc-full-hint,
+.gh-tip,
+.brand-sub,
+.sider-footer .sider-footnote,
+.output-caption {
+  display: none !important;
+}
+
+/* Pinned action columns must never wrap several buttons into a broken row. */
+.row-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  align-items: center;
+  white-space: nowrap;
+}
+.n-data-table .n-data-table-td .row-actions { min-width: 0; }
+
+.n-card { box-shadow: none !important; }
+.gen-badge, .update-pill { border-radius: 10px !important; }
+.pc-flow span, .pc-full-chip { border-radius: 8px !important; }
+.pc-empty { border-style: solid !important; }

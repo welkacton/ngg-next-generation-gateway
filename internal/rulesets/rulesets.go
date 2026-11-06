@@ -57,6 +57,7 @@ type RuleSet struct {
 	Warnings    []string     `json:"warnings"`
 	RuleCount   int          `json:"rule_count"`
 	Enabled     bool         `json:"enabled"`
+	Kernel      string       `json:"kernel,omitempty"`
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
 }

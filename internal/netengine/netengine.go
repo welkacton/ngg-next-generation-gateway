@@ -423,6 +423,45 @@ func (e *Engine) relay(client, upstream net.Conn, rec *SessionRec) {
 	wg.Wait()
 }
 
+// Component is one row of the "take over globally" capability matrix.
+// Enabled reflects configuration; Running reflects the REAL runtime state.
+type Component struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Enabled     bool   `json:"enabled"`
+	Running     bool   `json:"running"`
+	Description string `json:"description"`
+}
+
+// Components returns all eight capability keys in a stable order. The four
+// policy keys take effect immediately; the four component keys are owned by
+// resources that only (re)start with the engine, so a toggle can never claim
+// to have started or stopped them at runtime.
+func (e *Engine) Components() []Component {
+	e.mu.RLock()
+	running, tunStarted := e.running, e.tunStarted
+	e.mu.RUnlock()
+	cfg := e.cfg
+	return []Component{
+		{Key: "ingress", Label: "统一入口 Ingress", Enabled: cfg.Ingress.Enabled, Running: e.ingress.IsRunning(),
+			Description: "SOCKS5 / SOCKS4a / HTTP CONNECT 本地统一入口；启停需重启网络引擎"},
+		{Key: "dns", Label: "DNS 引擎", Enabled: cfg.DNS.Enabled, Running: e.dnsEngine.IsRunning(),
+			Description: "NGG 自有 DNS 解析与 hosts/缓存；启停需重启网络引擎"},
+		{Key: "tun", Label: "TUN 全局接管", Enabled: cfg.TUN.AutoRoute, Running: tunStarted,
+			Description: "系统 TUN 与自动路由（Linux 需 /dev/net/tun 与 CAP_NET_ADMIN）；启停需重启"},
+		{Key: "egress", Label: "出口调度 Egress", Enabled: cfg.Egress.Enabled, Running: running,
+			Description: "统一出口绑定与链路调度；启停需重启网络引擎"},
+		{Key: "fail_closed", Label: "故障保护（断连不泄漏）", Enabled: cfg.FailClosed, Running: running,
+			Description: "无可用执行路径时丢弃连接、绝不泄漏；策略类，切换立即生效"},
+		{Key: "failover", Label: "内核故障自动切换", Enabled: cfg.Failover, Running: running,
+			Description: "内核异常时自动切换到健康内核；策略类，切换立即生效"},
+		{Key: "direct_on_failure", Label: "故障直连", Enabled: cfg.DirectOnFailure, Running: running,
+			Description: "内核全部不可用时降级为直连；策略类，切换立即生效"},
+		{Key: "bypass_tun", Label: "绕过 TUN", Enabled: cfg.Egress.BypassTUN, Running: running,
+			Description: "内核流量绕过 NGG TUN 直出以避免回环；策略类，切换立即生效"},
+	}
+}
+
 // Status is exposed by /api/v1/network/status.
 func (e *Engine) Status() map[string]any {
 	e.mu.RLock()

@@ -73,9 +73,15 @@ func (h *wsHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// A connection handshake is NOT an alert. v2.6.3 labelled it
+	// "system.alert", which made every client pop a "系统告警" toast right
+	// after login. Use a dedicated ready event; clients ignore it.
 	hello, _ := json.Marshal(contracts.Event{
-		Type: "system.alert", Timestamp: time.Now().UTC(),
-		Payload: map[string]any{"message": "NGG event stream connected (Stage 1)"},
+		Type: "system.ready", Timestamp: time.Now().UTC(),
+		Payload: map[string]any{
+			"message": "NGG event stream connected",
+			"stage":   1,
+		},
 	})
 	select {
 	case send <- hello:

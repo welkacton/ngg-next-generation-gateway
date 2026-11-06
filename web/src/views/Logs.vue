@@ -111,14 +111,7 @@ onMounted(async () => {
       </NTag>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      日志通过 <span class="mono">/api/v1/ws</span> 的
-      <span class="mono">core.log</span> 事件实时推送，断线按指数退避自动重连；
-      也可按 <span class="mono">after / limit</span> 拉取历史。
-      颜色区分：<span class="log-stdout">stdout</span> /
-      <span class="log-stderr">stderr</span> / <span class="log-ngg">ngg</span>。
-    </NAlert>
-
+    
     <NCard size="small" class="section-gap">
       <NSpace align="center" :wrap="true" :size="10">
         <span class="hint">内核</span>

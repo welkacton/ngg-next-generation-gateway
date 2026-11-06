@@ -105,13 +105,7 @@ onMounted(refreshPlatforms)
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>说明</template>
-      <span class="mono">POST /platforms/build</span> 的 body 为
-      <span class="mono">{"targets": ["linux/amd64", ...]}</span>，返回每个 target 的
-      ok / output / path。所有结果均来自后端真实构建，不做模拟。
-    </NAlert>
-
+    
     <NCard size="small" title="平台信息（/platforms）" class="section-gap">
       <NDescriptions bordered :column="2" size="small" label-placement="left">
         <NDescriptionsItem label="主机 host">

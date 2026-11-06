@@ -97,7 +97,9 @@ const modeOptions = [
   { label: '自动测速（url-test）', value: 'url-test' },
   { label: '故障回退（fallback）', value: 'fallback' },
 ]
-const kernelOptions = [{ label: 'mihomo（Clash.Meta）', value: 'mihomo' }]
+const kernelOptions = ref<{ label: string; value: string }[]>([
+  { label: 'mihomo（Clash.Meta）', value: 'mihomo' },
+])
 
 function statusClass(s: PipelineStepStatus) {
   return `step--${s}`
@@ -110,12 +112,19 @@ function goto(page: string) {
 async function loadAll() {
   loading.value = true
   try {
-    const [pv, hl, rl, ul] = await Promise.all([
+    const [pv, hl, rl, ul, opts] = await Promise.all([
       api.getPipeline(),
       api.listHosts('all'),
       api.listRuleSets(),
       api.listUsers('all'),
+      api.getProfileOptions().catch(() => null),
     ])
+    if (opts?.kernels?.length) {
+      kernelOptions.value = [
+        { label: '自动（按规则调度）', value: '' },
+        ...opts.kernels.map((k) => ({ label: k.label || k.kernel, value: k.kernel })),
+      ]
+    }
     view.value = pv
     steps.value = pv.steps ?? []
     form.value = JSON.parse(JSON.stringify(pv.config))
@@ -158,7 +167,10 @@ async function runValidate() {
     await api.savePipeline(form.value)
     const res = await api.validatePipeline()
     steps.value = res.steps
-    window.$message?.success(res.blocked ? '校验完成：存在阻断项' : '校验通过')
+    const warns = (res.steps ?? []).filter((s) => s.status === 'warn').length
+    if (res.blocked) window.$message?.error('校验完成：存在阻断项')
+    else if (warns) window.$message?.warning(`校验完成：${warns} 项注意（详见链路步骤）`)
+    else window.$message?.success('校验通过')
   } catch (e) {
     applyError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -173,7 +185,11 @@ async function runRender() {
     const res = await api.renderPipeline()
     yaml.value = res.content
     renderWarnings.value = res.warnings ?? []
-    window.$message?.success(`已生成 ${res.lines} 行内核配置`)
+    if (renderWarnings.value.length) {
+      window.$message?.warning(`已生成 ${res.lines} 行内核配置，后端返回 ${renderWarnings.value.length} 条警告`)
+    } else if (res.ok) {
+      window.$message?.success(`已生成 ${res.lines} 行内核配置`)
+    }
   } catch (e) {
     applyError.value = e instanceof Error ? e.message : String(e)
   } finally {

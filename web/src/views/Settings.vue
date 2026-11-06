@@ -205,16 +205,6 @@ onMounted(() => {
     </NCard>
 
     <NCard size="small" title="架构与安全说明">
-      <NAlert type="info" :bordered="false">
-        <ul class="hint" style="margin: 0; padding-left: 18px; line-height: 2">
-          <li><strong>Worker Mode</strong>：内核以独立 Worker 进程运行，由网关统一管理启停与生命周期。</li>
-          <li><strong>资源隔离</strong>：每个内核拥有独立的二进制、配置、端口分配与资源统计。</li>
-          <li><strong>仅本机访问</strong>：管理接口仅监听本机地址，不对外暴露。</li>
-          <li><strong>认证</strong>：控制台使用 HttpOnly 会话 Cookie（首次创建管理员，之后登录）；脚本可使用静态 API Token。</li>
-          <li><strong>配置事务</strong>：备份 → 原生校验 → 原子替换，任一步失败自动保留原配置。</li>
-          <li><strong>Phase 1 边界</strong>：统一 TUN / 规则引擎 / DNS 引擎属 Stage 2/3 预留。</li>
-        </ul>
-      </NAlert>
-    </NCard>
+          </NCard>
   </div>
 </template>

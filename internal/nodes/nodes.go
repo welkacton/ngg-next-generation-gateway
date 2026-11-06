@@ -40,6 +40,11 @@ type Node struct {
 	Params      map[string]any `json:"params" yaml:"params"`
 	Tags        []string       `json:"tags" yaml:"tags"`
 	Description string         `json:"description" yaml:"description"`
+	// Runtime fields: written by probe / key-pair / config-file endpoints and
+	// echoed back by GET /nodes.
+	Status     string `json:"status,omitempty" yaml:"status,omitempty"`
+	LastSeen   string `json:"last_seen,omitempty" yaml:"last_seen,omitempty"`
+	ConfigFile string `json:"config_file,omitempty" yaml:"config_file,omitempty"`
 }
 
 type ProtocolInfo struct {
@@ -189,6 +194,9 @@ func validate(n Node) error {
 	if n.Port < 0 || n.Port > 65535 {
 		return fmt.Errorf("port must be 0..65535")
 	}
+	if n.Status != "" && n.Status != "online" && n.Status != "offline" {
+		return fmt.Errorf("status must be online or offline")
+	}
 	if info.DefaultPort > 0 && n.Port == 0 {
 		return nil // default applied by the caller
 	}
@@ -213,6 +221,9 @@ func normalize(n *Node) {
 		n.Tags = []string{}
 	}
 	n.Address = strings.TrimSpace(n.Address)
+	n.Status = strings.TrimSpace(n.Status)
+	n.LastSeen = strings.TrimSpace(n.LastSeen)
+	n.ConfigFile = strings.TrimSpace(n.ConfigFile)
 }
 
 func (r *Registry) List(kind Kind) []Node {
@@ -264,6 +275,30 @@ func (r *Registry) Update(id string, n Node) (Node, error) {
 	old, exists := r.nodes[id]
 	if !exists {
 		return Node{}, fmt.Errorf("node %q not found", id)
+	}
+	r.nodes[id] = n
+	if err := r.persistLocked(); err != nil {
+		r.nodes[id] = old
+		return Node{}, fmt.Errorf("persist node: %w", err)
+	}
+	return n, nil
+}
+
+// Patch mutates one node in place under the write lock, re-normalizes and
+// validates it, then persists atomically. On any failure the previous value
+// is restored so a failed runtime update never corrupts the registry.
+func (r *Registry) Patch(id string, mutate func(*Node)) (Node, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n, ok := r.nodes[id]
+	if !ok {
+		return Node{}, fmt.Errorf("node %q not found", id)
+	}
+	old := n
+	mutate(&n)
+	normalize(&n)
+	if err := validate(n); err != nil {
+		return Node{}, err
 	}
 	r.nodes[id] = n
 	if err := r.persistLocked(); err != nil {

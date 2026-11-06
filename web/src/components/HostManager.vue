@@ -4,6 +4,8 @@ import {
   NAlert,
   NButton,
   NCard,
+  NDescriptions,
+  NDescriptionsItem,
   NDrawer,
   NDrawerContent,
   NEmpty,
@@ -132,6 +134,51 @@ const tagInput = ref('')
 const revealSecret = ref(false)
 const rawResult = ref<unknown>(null)
 
+/* ------------------------------------------------------------------ *
+ * v2.3.0 节点能力：配置文件 / 采集数据 / 密钥配对 / 连接测试
+ * 全部数值来自真实后端接口，密钥只在页面内展示、不落盘不写日志。
+ * ------------------------------------------------------------------ */
+const selectedHostId = ref('')
+const hostOptions = computed(() =>
+  hosts.value.map((h) => ({ label: `${h.name || h.id} (${h.id})`, value: h.id })),
+)
+const inboundHostOptions = computed(() =>
+  hosts.value
+    .filter((h) => h.role === 'inbound' || h.role === 'both')
+    .map((h) => ({ label: `${h.name || h.id} (${h.id})`, value: h.id })),
+)
+const outboundHostOptions = computed(() =>
+  hosts.value
+    .filter((h) => h.role === 'outbound' || h.role === 'both')
+    .map((h) => ({ label: `${h.name || h.id} (${h.id})`, value: h.id })),
+)
+const KERNEL_OPTIONS = [
+  { label: 'Mihomo', value: 'mihomo' },
+  { label: 'Xray-core', value: 'xray-core' },
+  { label: 'sing-box', value: 'sing-box' },
+]
+const KIND_OPTIONS = [
+  { label: 'WireGuard', value: 'wireguard' },
+  { label: 'UUID', value: 'uuid' },
+  { label: 'Password', value: 'password' },
+]
+const FORMAT_OPTIONS = [
+  { label: 'JSON', value: 'json' },
+  { label: 'YAML', value: 'yaml' },
+]
+
+const configCoreId = ref('sing-box')
+const configFileText = ref('')
+const configFileFormat = ref('json')
+const configFileResult = ref<api.NodeConfigFileResult | null>(null)
+const nodeMetrics = ref<api.NodeMetrics | null>(null)
+const keyKind = ref('wireguard')
+const keyPair = ref<api.NodeKeyPair | null>(null)
+const pairInboundId = ref('')
+const pairOutboundId = ref('')
+const pairResult = ref<api.NodePairResult | null>(null)
+const nodeProbeResult = ref<api.NodeProbeResult | null>(null)
+
 /** 网络引擎未启动时，0 字节不是「真实流量」，应如实显示未采集。 */
 const hasMetrics = computed(() => metrics.value?.network_running === true)
 
@@ -194,6 +241,7 @@ async function createHost() {
 
 function openDetail(h: HostView) {
   editingId.value = h.id
+  selectedHostId.value = h.id
   form.value = toForm(h)
   revealSecret.value = false
   newIP.value = ''
@@ -335,6 +383,90 @@ function cardStatusClass(h: HostView): string {
   return h.probe.online ? 'host-card--online' : 'host-card--offline'
 }
 
+/* ------------------------------------------------------------------ *
+ * 节点能力操作
+ * ------------------------------------------------------------------ */
+function requireHostId(): string | null {
+  if (!selectedHostId.value) {
+    window.$message?.warning('请先选择节点')
+    return null
+  }
+  return selectedHostId.value
+}
+
+/** getConfig 读的是内核当前配置，不是该节点已保存的配置文件，按钮文字已如实标明。 */
+async function loadConfigFile() {
+  const d = await run('cfgfile-load', () => api.getConfig(configCoreId.value))
+  if (d) {
+    configFileText.value = d.content ?? ''
+    const ext = (d.path || '').split('.').pop()?.toLowerCase()
+    if (ext === 'yaml' || ext === 'yml') configFileFormat.value = 'yaml'
+    else if (ext === 'json') configFileFormat.value = 'json'
+  }
+}
+
+async function saveConfigFile() {
+  const id = requireHostId()
+  if (!id) return
+  const r = await run(
+    'cfgfile-save',
+    () => api.saveNodeConfigFile(id, { content: configFileText.value, format: configFileFormat.value }),
+    '节点配置文件已保存',
+  )
+  if (r) configFileResult.value = r
+}
+
+async function refreshNodeMetrics() {
+  const id = requireHostId()
+  if (!id) return
+  const r = await run('node-metrics', () => api.getNodeMetrics(id))
+  if (r) nodeMetrics.value = r
+}
+
+async function generateKeys() {
+  const r = await run('keys-gen', () =>
+    api.generateNodeKeys({ kind: keyKind.value as 'wireguard' | 'uuid' | 'password' }),
+  )
+  if (r) keyPair.value = r
+}
+
+async function copyKeys() {
+  if (!keyPair.value) return
+  try {
+    await navigator.clipboard.writeText(prettyJson(keyPair.value))
+    window.$message?.success('密钥已复制')
+  } catch {
+    window.$message?.warning('浏览器未授予剪贴板权限')
+  }
+}
+
+async function pairKeys() {
+  if (!pairInboundId.value || !pairOutboundId.value) {
+    window.$message?.warning('请选择入口与出口节点')
+    return
+  }
+  const r = await run(
+    'keys-pair',
+    () => api.pairNodeKeys({
+      inbound_id: pairInboundId.value,
+      outbound_id: pairOutboundId.value,
+      kind: keyKind.value,
+    }),
+    '密钥已写入节点',
+  )
+  if (r) pairResult.value = r
+}
+
+async function probeNodeTcp() {
+  const id = requireHostId()
+  if (!id) return
+  const r = await run('node-probe', () => api.probeNode(id, { timeout_ms: 3000 }))
+  if (r) {
+    nodeProbeResult.value = r
+    await refresh()
+  }
+}
+
 onMounted(() => {
   void refresh()
   void loadOptions()
@@ -355,14 +487,6 @@ onMounted(() => {
         <NButton size="small" type="primary" @click="openAdd">＋ 新增节点</NButton>
       </NSpace>
     </div>
-
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>任意主机 · 任意角色</template>
-      可以把任意服务器、VPS、家用电脑或软路由添加为节点，然后随时把<strong>某一台设为出站</strong>、
-      <strong>另一台设为入站</strong>（也可一台兼具双向）。「在线」只来自 NGG 后端对该主机
-      <span class="mono">地址:端口</span> 的<strong>真实 TCP 探测</strong>；CPU、内存、单节点流量等
-      NGG 未采集的数据一律显示「未采集」，不会用模拟数值填充。
-    </NAlert>
 
     <!-- 统计条：全部为真实计数 / 真实网络指标 -->
     <NGrid cols="2 m:4" responsive="screen" :x-gap="12" :y-gap="12" class="section-gap">
@@ -463,6 +587,147 @@ onMounted(() => {
               <NButton size="tiny" quaternary type="error" @click="confirmDelete(h)">删除</NButton>
             </NSpace>
           </div>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <!-- ---------------------------------------------------------------- *
+     * v2.3.0 节点能力：配置文件 / 采集数据 / 密钥配对 / 连接测试
+     * ---------------------------------------------------------------- -->
+    <NCard size="small" class="section-gap">
+      <NSpace align="center" :size="10" :wrap="true">
+        <div class="kv-label" style="margin: 0">选中节点</div>
+        <NSelect
+          v-model:value="selectedHostId"
+          :options="hostOptions"
+          clearable
+          placeholder="选择节点"
+          style="width: 280px"
+        />
+        <NTag size="small" :bordered="false">{{ selectedHostId || '未选择' }}</NTag>
+      </NSpace>
+    </NCard>
+
+    <NGrid cols="1 m:2" responsive="screen" :x-gap="12" :y-gap="12" class="section-gap">
+      <NGi>
+        <NCard size="small" title="配置文件">
+          <NSpace :size="8" :wrap="true" align="center" style="margin-bottom: 10px">
+            <NSelect v-model:value="configCoreId" :options="KERNEL_OPTIONS" style="width: 150px" />
+            <NButton size="small" :loading="isBusy('cfgfile-load')" @click="loadConfigFile">
+              读取内核当前配置（非节点已存文件）
+            </NButton>
+          </NSpace>
+          <NInput v-model:value="configFileText" type="textarea" class="code-editor" :rows="8" />
+          <NSpace :size="8" align="center" style="margin-top: 10px">
+            <NSelect v-model:value="configFileFormat" :options="FORMAT_OPTIONS" style="width: 110px" />
+            <NButton
+              size="small"
+              type="primary"
+              :disabled="!selectedHostId"
+              :loading="isBusy('cfgfile-save')"
+              @click="saveConfigFile"
+            >保存</NButton>
+          </NSpace>
+          <div v-if="configFileResult" style="margin-top: 10px">
+            <NDescriptions :column="1" size="small" label-placement="left" bordered>
+              <NDescriptionsItem label="路径"><span class="mono">{{ configFileResult.path }}</span></NDescriptionsItem>
+              <NDescriptionsItem label="字节数">{{ configFileResult.bytes }}</NDescriptionsItem>
+              <NDescriptionsItem label="校验">{{ configFileResult.validated ? '通过' : '未通过' }}</NDescriptionsItem>
+            </NDescriptions>
+          </div>
+        </NCard>
+      </NGi>
+
+      <NGi>
+        <NCard size="small" title="采集数据">
+          <template #header-extra>
+            <NButton
+              size="small"
+              :disabled="!selectedHostId"
+              :loading="isBusy('node-metrics')"
+              @click="refreshNodeMetrics"
+            >刷新</NButton>
+          </template>
+          <template v-if="nodeMetrics">
+            <NSpace v-if="nodeMetrics.source === 'unavailable' || !nodeMetrics.ok" :size="6" align="center">
+              <NTag size="small" :bordered="false" type="warning">暂不可用</NTag>
+              <span>{{ nodeMetrics.note }}</span>
+            </NSpace>
+            <NDescriptions v-else :column="2" size="small" label-placement="left" bordered>
+              <NDescriptionsItem label="CPU">{{ nodeMetrics.cpu_percent }}%</NDescriptionsItem>
+              <NDescriptionsItem label="内存 RSS">{{ formatBytes(nodeMetrics.memory_rss) }}</NDescriptionsItem>
+              <NDescriptionsItem label="入流量">{{ formatBytes(nodeMetrics.bytes_in) }}</NDescriptionsItem>
+              <NDescriptionsItem label="出流量">{{ formatBytes(nodeMetrics.bytes_out) }}</NDescriptionsItem>
+              <NDescriptionsItem label="活跃会话">{{ nodeMetrics.active_sessions }}</NDescriptionsItem>
+              <NDescriptionsItem label="采样时间">{{ formatTime(nodeMetrics.sampled_at) }}</NDescriptionsItem>
+            </NDescriptions>
+          </template>
+        </NCard>
+      </NGi>
+
+      <NGi>
+        <NCard size="small" title="密钥配对">
+          <NSpace :size="8" :wrap="true" align="center" style="margin-bottom: 10px">
+            <NSelect v-model:value="keyKind" :options="KIND_OPTIONS" style="width: 140px" />
+            <NButton size="small" :loading="isBusy('keys-gen')" @click="generateKeys">生成</NButton>
+            <NButton size="small" :disabled="!keyPair" @click="copyKeys">复制</NButton>
+          </NSpace>
+          <NDescriptions v-if="keyPair" :column="1" size="small" label-placement="left" bordered>
+            <NDescriptionsItem label="kind">{{ keyPair.kind }}</NDescriptionsItem>
+            <NDescriptionsItem label="private_key"><span class="mono">{{ keyPair.private_key }}</span></NDescriptionsItem>
+            <NDescriptionsItem label="public_key"><span class="mono">{{ keyPair.public_key }}</span></NDescriptionsItem>
+            <NDescriptionsItem v-if="keyPair.uuid" label="uuid"><span class="mono">{{ keyPair.uuid }}</span></NDescriptionsItem>
+            <NDescriptionsItem v-if="keyPair.password" label="password"><span class="mono">{{ keyPair.password }}</span></NDescriptionsItem>
+            <NDescriptionsItem label="created_at">{{ formatTime(keyPair.created_at) }}</NDescriptionsItem>
+          </NDescriptions>
+          <div style="margin-top: 12px">
+            <div class="kv-label">入口节点</div>
+            <NSelect v-model:value="pairInboundId" :options="inboundHostOptions" clearable placeholder="选择入口节点" style="width: 100%" />
+          </div>
+          <div style="margin-top: 8px">
+            <div class="kv-label">出口节点</div>
+            <NSelect v-model:value="pairOutboundId" :options="outboundHostOptions" clearable placeholder="选择出口节点" style="width: 100%" />
+          </div>
+          <NSpace style="margin-top: 10px">
+            <NButton size="small" type="primary" :loading="isBusy('keys-pair')" @click="pairKeys">配对并写入</NButton>
+          </NSpace>
+          <div v-if="pairResult" style="margin-top: 10px">
+            <NSpace :size="6">
+              <NTag size="small" :bordered="false" :type="pairResult.paired ? 'success' : 'default'">
+                paired: {{ pairResult.paired ? '是' : '否' }}
+              </NTag>
+              <NTag size="small" :bordered="false" :type="pairResult.persisted ? 'success' : 'default'">
+                persisted: {{ pairResult.persisted ? '是' : '否' }}
+              </NTag>
+            </NSpace>
+          </div>
+        </NCard>
+      </NGi>
+
+      <NGi>
+        <NCard size="small" title="连接测试">
+          <NSpace :size="8" :wrap="true" align="center" style="margin-bottom: 10px">
+            <NButton
+              size="small"
+              :disabled="!selectedHostId"
+              :loading="isBusy('node-probe')"
+              @click="probeNodeTcp"
+            >节点级探测</NButton>
+            <NTag size="small" :bordered="false">{{ selectedHostId || '未选择节点' }}</NTag>
+          </NSpace>
+          <NDescriptions v-if="nodeProbeResult" :column="2" size="small" label-placement="left" bordered>
+            <NDescriptionsItem label="可达">
+              <NTag size="small" :bordered="false" :type="nodeProbeResult.reachable ? 'success' : 'error'">
+                {{ nodeProbeResult.reachable ? '是' : '否' }}
+              </NTag>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="延迟">{{ nodeProbeResult.latency_ms }} ms</NDescriptionsItem>
+            <NDescriptionsItem label="地址"><span class="mono">{{ nodeProbeResult.address }}</span></NDescriptionsItem>
+            <NDescriptionsItem label="端口">{{ nodeProbeResult.port }}</NDescriptionsItem>
+            <NDescriptionsItem v-if="nodeProbeResult.error" label="错误">
+              <span class="mono">{{ nodeProbeResult.error }}</span>
+            </NDescriptionsItem>
+          </NDescriptions>
         </NCard>
       </NGi>
     </NGrid>
@@ -605,12 +870,7 @@ onMounted(() => {
           <!-- 右栏 -->
           <NGi>
             <NCard size="small" title="系统信息" class="host-panel">
-              <NAlert type="default" :bordered="false" size="small">
-                <template #header>未采集，不伪造</template>
-                远端主机的 CPU / 内存 / 网卡型号需要该主机部署 NGG Agent 后才会上报。
-                当前 NGG 只做真实 TCP 连通性探测，因此这些指标显示「未采集」。
-              </NAlert>
-              <div class="host-kv"><span>CPU</span><span>未采集</span></div>
+                            <div class="host-kv"><span>CPU</span><span>未采集</span></div>
               <div class="host-kv"><span>内存</span><span>未采集</span></div>
               <div class="host-kv"><span>网络接口</span><span>未采集</span></div>
               <div class="host-kv"><span>在线时长</span><span>未采集</span></div>
@@ -680,10 +940,7 @@ onMounted(() => {
     <!-- 新增节点 -->
     <NModal v-model:show="showAdd" preset="card" title="新增节点（任意 VPS / 电脑 / 软路由）" style="width: 560px" :bordered="false">
       <NSpace vertical :size="10" style="width: 100%">
-        <NAlert type="info" :bordered="false" size="small">
-          登记后会立即对该主机执行一次真实 TCP 探测；不可达会如实显示「离线」，不会伪造在线。
-        </NAlert>
-        <NGrid cols="2" :x-gap="10" :y-gap="6">
+                <NGrid cols="2" :x-gap="10" :y-gap="6">
           <NGi>
             <div class="kv-label">ID（必填，唯一）</div>
             <NInput v-model:value="addForm.id" placeholder="us01" />

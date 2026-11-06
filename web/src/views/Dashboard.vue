@@ -78,13 +78,7 @@ onUnmounted(() => {
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>Phase 1 范围说明</template>
-      当前阶段交付「统一管理中心 + 内核引擎」：内核生命周期、配置事务、实时日志、版本与端口管理。
-      <strong>统一 TUN / 规则引擎 / DNS 引擎属于 Stage 2/3 预留能力，本阶段尚未启用</strong>；
-      页面所有数据均来自真实后端接口，不做任何模拟。
-    </NAlert>
-
+    
     <NGrid cols="1 s:2 m:4" responsive="screen" :x-gap="14" :y-gap="14" class="section-gap">
       <NGi>
         <NCard size="small" :bordered="true">

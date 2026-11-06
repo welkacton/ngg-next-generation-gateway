@@ -1,9 +1,13 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/ngg-project/ngg/internal/nodes"
+	"github.com/ngg-project/ngg/pkg/contracts"
 )
 
 // Config Engine: inbound / outbound node registry (encrypted protocol nodes).
@@ -211,4 +215,244 @@ func (s *Server) handleFromNative(w http.ResponseWriter, r *http.Request) {
 // load one with a single click. Content is the same as configs/examples/*.json.
 func (s *Server) handleNodeTemplates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nodes.Templates())
+}
+
+// ---------------------------------------------------------- 节点运行时端点 ---
+
+// GET /nodes/{id}/metrics — REAL process sample + REAL session traffic
+// aggregation. When the bound kernel has no running process we honestly
+// report source:"unavailable" with zeroed numbers and an explanatory note;
+// no CPU/memory value is ever invented.
+func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	reg := s.engine.Nodes()
+	if reg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "node registry not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	node, ok := reg.Get(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "node "+id+" not found")
+		return
+	}
+	out := nodes.NodeMetrics{OK: true, NodeID: id, SampledAt: time.Now().UTC().Format(time.RFC3339)}
+
+	var cpu float64
+	var mem uint64
+	haveProc := false
+	if node.CoreID != "" {
+		if st, err := s.engine.Stats(contracts.CoreID(node.CoreID)); err == nil {
+			cpu, mem, haveProc = st.CPUPercent, st.MemoryRSS, true
+		}
+	}
+
+	var bytesIn, bytesOut uint64
+	var active int
+	if ne := s.engine.Network(); ne != nil {
+		addr := strings.TrimSpace(node.Address)
+		for _, rec := range ne.Sessions().List(1000) {
+			matched := false
+			if addr != "" {
+				if rec.Session.Src != nil && strings.Contains(rec.Session.Src.String(), addr) {
+					matched = true
+				}
+				if !matched && rec.Session.Dst != nil && strings.Contains(rec.Session.Dst.String(), addr) {
+					matched = true
+				}
+			}
+			if !matched {
+				continue
+			}
+			bytesIn += rec.BytesIn
+			bytesOut += rec.BytesOut
+			if rec.State == "active" || rec.State == "establishing" {
+				active++
+			}
+		}
+	}
+
+	if !haveProc {
+		out.Source = "unavailable"
+		out.Note = fmt.Sprintf("节点绑定的内核 %q 当前没有可采样的进程（未运行或未注册），CPU/内存不可用；为避免伪造，所有数值返回 0。", node.CoreID)
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	out.Source = "local"
+	out.CPUPercent, out.MemoryRSS = cpu, mem
+	out.BytesIn, out.BytesOut, out.ActiveSessions = bytesIn, bytesOut, active
+	out.Note = fmt.Sprintf("CPU/内存来自内核 %q 的真实进程采样；bytes_in/out 与 active_sessions 来自 netengine 会话中匹配地址 %q 的真实聚合。", node.CoreID, node.Address)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// POST /nodes/keys/generate — private material is returned ONLY in the
+// response; it is never logged or written to disk here.
+func (s *Server) handleNodeKeysGenerate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Kind string `json:"kind"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	kp, err := nodes.GenerateKeyPair(strings.TrimSpace(body.Kind))
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, kp)
+}
+
+// POST /nodes/keys/pair — generate one pair, write private_key /
+// peer_public_key into the two nodes' Params, persist nodes-config.json.
+func (s *Server) handleNodeKeysPair(w http.ResponseWriter, r *http.Request) {
+	reg := s.engine.Nodes()
+	if reg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "node registry not initialized")
+		return
+	}
+	var body struct {
+		InboundID  string `json:"inbound_id"`
+		OutboundID string `json:"outbound_id"`
+		Kind       string `json:"kind"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	inID, outID := strings.TrimSpace(body.InboundID), strings.TrimSpace(body.OutboundID)
+	if inID == "" || outID == "" {
+		writeErr(w, http.StatusBadRequest, "inbound_id and outbound_id are required")
+		return
+	}
+	for _, id := range []string{inID, outID} {
+		if _, ok := reg.Get(id); !ok {
+			writeErr(w, http.StatusNotFound, "node "+id+" not found")
+			return
+		}
+	}
+	kind := strings.TrimSpace(body.Kind)
+	if kind == "" {
+		kind = "wireguard"
+	}
+	kp, err := nodes.GenerateKeyPair(kind)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	result := nodes.NewPairResult(kind, kp, inID, outID)
+	writeParam := func(n *nodes.Node, key, value string) {
+		if value == "" {
+			return
+		}
+		if n.Params == nil {
+			n.Params = map[string]any{}
+		}
+		n.Params[key] = value
+	}
+	if _, err := reg.Patch(inID, func(n *nodes.Node) {
+		writeParam(n, "private_key", kp.PrivateKey)
+		writeParam(n, "uuid", kp.UUID)
+		writeParam(n, "password", kp.Password)
+	}); err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, "persist inbound node: "+err.Error())
+		return
+	}
+	if _, err := reg.Patch(outID, func(n *nodes.Node) {
+		writeParam(n, "peer_public_key", kp.PublicKey)
+		writeParam(n, "uuid", kp.UUID)
+		writeParam(n, "password", kp.Password)
+	}); err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, "persist outbound node: "+err.Error())
+		return
+	}
+	result.Persisted = true
+	writeJSON(w, http.StatusOK, result)
+}
+
+// POST /nodes/{id}/probe — REAL TCP dial, then persist status / last_seen.
+func (s *Server) handleNodeProbe(w http.ResponseWriter, r *http.Request) {
+	reg := s.engine.Nodes()
+	if reg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "node registry not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	node, ok := reg.Get(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "node "+id+" not found")
+		return
+	}
+	var body struct {
+		TimeoutMS int `json:"timeout_ms"`
+	}
+	if r.ContentLength > 0 {
+		if err := decodeJSON(r, &body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+	checkedAt := time.Now().UTC().Format(time.RFC3339)
+	res := nodes.NodeProbeResult{
+		OK: true, NodeID: id, Address: node.Address, Port: node.Port, CheckedAt: checkedAt,
+	}
+	if strings.TrimSpace(node.Address) == "" || node.Port <= 0 {
+		res.Error = "node address or port is not configured"
+	} else {
+		lat, err := nodes.Probe(node.Address, node.Port, time.Duration(body.TimeoutMS)*time.Millisecond)
+		if err != nil {
+			res.Error = err.Error()
+		} else {
+			res.Reachable = true
+			res.LatencyMs = lat
+		}
+	}
+	status := "offline"
+	if res.Reachable {
+		status = "online"
+	}
+	if _, err := reg.Patch(id, func(n *nodes.Node) {
+		n.Status = status
+		if res.Reachable {
+			n.LastSeen = checkedAt
+		}
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not persist probe result: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// PUT /nodes/{id}/config-file — write <data>/node-configs/<id>.<ext> (0600)
+// and record the path on the node.
+func (s *Server) handleNodeConfigFile(w http.ResponseWriter, r *http.Request) {
+	reg := s.engine.Nodes()
+	if reg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "node registry not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	if _, ok := reg.Get(id); !ok {
+		writeErr(w, http.StatusNotFound, "node "+id+" not found")
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+		Format  string `json:"format"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	path, nbytes, validated, err := nodes.WriteConfigFile(s.cfg.Storage.Dir, id, body.Format, body.Content)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not write config file: "+err.Error())
+		return
+	}
+	if _, err := reg.Patch(id, func(n *nodes.Node) { n.ConfigFile = path }); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not persist node config_file: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, nodes.NodeConfigFileResult{
+		OK: true, NodeID: id, Path: path, Bytes: nbytes, Validated: validated,
+	})
 }

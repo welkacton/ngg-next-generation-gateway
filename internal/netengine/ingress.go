@@ -103,6 +103,13 @@ func (s *IngressServer) Addr() string {
 	return s.listener.Addr().String()
 }
 
+// IsRunning reports whether the ingress listener is actually bound.
+func (s *IngressServer) IsRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running
+}
+
 func isLoopbackHost(h string) bool {
 	if h == "" || h == "localhost" {
 		return true

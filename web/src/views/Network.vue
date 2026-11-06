@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
-  NAlert,
   NButton,
   NCard,
   NDataTable,
@@ -9,7 +8,6 @@ import {
   NDescriptionsItem,
   NGi,
   NGrid,
-  NInput,
   NInputNumber,
   NSelect,
   NSpace,
@@ -18,6 +16,7 @@ import {
 } from 'naive-ui'
 import * as api from '../api/ngg'
 import type {
+  NetworkComponent,
   NetworkConfig,
   NetworkEndpoint,
   NetworkSession,
@@ -48,6 +47,73 @@ const coreOptions = [
   { label: 'xray-core', value: 'xray-core' },
   { label: 'sing-box', value: 'sing-box' },
 ]
+
+const defaultCoreOptions = ref<{ label: string; value: string }[]>([
+  { label: '自动（按规则调度）', value: '' },
+])
+
+const POLICY_KEYS = ['fail_closed', 'failover', 'direct_on_failure', 'bypass_tun']
+const POLICY_LABELS: Record<string, string> = {
+  fail_closed: '故障保护（断连不泄漏）',
+  failover: '内核故障自动切换',
+  direct_on_failure: '直连兜底',
+  bypass_tun: '绕过 TUN',
+}
+
+interface ComponentRow {
+  key: string
+  label: string
+  enabled: boolean
+  running: boolean
+}
+
+function statusFlag(key: string): boolean {
+  const s = status.value
+  if (!s) return false
+  switch (key) {
+    case 'fail_closed': return !!s.fail_closed
+    case 'failover': return !!s.failover
+    case 'direct_on_failure': return !!s.direct_on_failure
+    case 'bypass_tun': return !!s.bypass_tun
+    default: return false
+  }
+}
+
+// 后端返回 components 时逐项渲染；缺失时降级为四个顶层策略开关，不伪造组件。
+const componentRows = computed<ComponentRow[]>(() => {
+  const s = status.value
+  const list: NetworkComponent[] = s && Array.isArray(s.components) ? s.components : []
+  if (list.length) {
+    return list.map((c) => ({
+      key: c.key,
+      label: POLICY_LABELS[c.key] || c.label || c.key,
+      enabled: !!c.enabled,
+      running: !!c.running,
+    }))
+  }
+  return POLICY_KEYS.map((key) => ({
+    key,
+    label: POLICY_LABELS[key],
+    enabled: statusFlag(key),
+    running: !!s?.running,
+  }))
+})
+
+async function loadOptions() {
+  const data = await run('options', () => api.getProfileOptions())
+  if (data) {
+    defaultCoreOptions.value = [
+      { label: '自动（按规则调度）', value: '' },
+      ...(data.kernels ?? []).map((k) => ({ label: k.label, value: k.kernel })),
+    ]
+  }
+}
+
+async function toggleComponent(key: string, enabled: boolean) {
+  const r = await run('cmp:' + key, () => api.toggleNetworkComponent({ key, enabled }))
+  if (r?.requires_restart) window.$message?.info('需重启网络引擎后生效')
+  await refreshStatus()
+}
 
 // 表单数字字段允许 null，以匹配 NInputNumber 的 number | null 模型
 const form = ref({
@@ -213,6 +279,7 @@ function onNetworkEvent() {
 
 onMounted(() => {
   refreshAll()
+  loadOptions()
   window.addEventListener('ngg-network-event', onNetworkEvent)
 })
 onUnmounted(() => {
@@ -234,13 +301,7 @@ onUnmounted(() => {
       </NSpace>
     </div>
 
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>能力边界说明</template>
-      「接管全局」提供两条真实路径：<strong>系统代理接管</strong>（Windows 用户态，立即生效，无需驱动与提权）与
-      <strong>TUN 虚拟网卡</strong>（需要 wintun 驱动 + 管理员权限）。后端会如实上报本机能力与原因，
-      无法创建时不会伪造网卡。页面所有数据均来自真实后端接口。
-    </NAlert>
-
+    
     <NCard size="small" title="接管全局" class="section-gap">
       <NGrid cols="1 s:2" responsive="screen" :x-gap="14" :y-gap="14">
         <NGi>
@@ -413,18 +474,38 @@ onUnmounted(() => {
             {{ status?.running ? '运行中' : '未运行' }}
           </NTag>
         </NDescriptionsItem>
-        <NDescriptionsItem label="阶段">{{ status?.stage ?? '—' }}</NDescriptionsItem>
-        <NDescriptionsItem label="失败关闭 fail_closed">
-          <NTag size="small" :bordered="false" :type="status?.fail_closed ? 'warning' : 'default'">
+        <NDescriptionsItem label="能力集">Stage {{ status?.stage }}</NDescriptionsItem>
+        <NDescriptionsItem label="故障保护（断连不泄漏）">
+          <NTag size="small" :bordered="false" :type="status?.fail_closed ? 'success' : 'default'">
             {{ status?.fail_closed ? '开启' : '关闭' }}
           </NTag>
         </NDescriptionsItem>
-        <NDescriptionsItem label="故障转移 failover">
+        <NDescriptionsItem label="内核故障自动切换">
           <NTag size="small" :bordered="false" :type="status?.failover ? 'success' : 'default'">
             {{ status?.failover ? '开启' : '关闭' }}
           </NTag>
         </NDescriptionsItem>
       </NDescriptions>
+
+      <NGrid cols="1 s:2 m:3" responsive="screen" :x-gap="12" :y-gap="12" style="margin-top: 14px">
+        <NGi v-for="row in componentRows" :key="row.key">
+          <div class="kv-label">{{ row.label }}</div>
+          <NSpace align="center" :size="8" style="margin-top: 6px">
+            <NSwitch
+              :value="row.enabled"
+              :loading="isBusy('cmp:' + row.key)"
+              @update:value="(v) => toggleComponent(row.key, !!v)"
+            />
+            <NTag
+              size="small"
+              :bordered="false"
+              :type="row.running ? 'success' : row.enabled ? 'info' : 'default'"
+            >
+              {{ row.running ? 'running' : row.enabled ? 'enabled' : 'stopped' }}
+            </NTag>
+          </NSpace>
+        </NGi>
+      </NGrid>
 
       <NGrid cols="1 s:2" responsive="screen" :x-gap="12" :y-gap="12" style="margin-top: 14px">
         <NGi>
@@ -535,7 +616,7 @@ onUnmounted(() => {
         </NGi>
         <NGi>
           <div class="kv-label">默认内核 default_core</div>
-          <NInput v-model:value="form.default_core" placeholder="例如 mihomo" />
+          <NSelect v-model:value="form.default_core" :options="defaultCoreOptions" />
         </NGi>
         <NGi>
           <div class="kv-label">出口标记 egress_mark</div>

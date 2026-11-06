@@ -58,6 +58,20 @@ const selectedTemplate = ref<string | null>(null)
 const jsonText = ref('{\n  "nodes": []\n}')
 const showGlobal = ref(false)
 
+// 最小补充：密钥生成 / 连接测试（不影响三种编辑模式）
+const capKind = ref('wireguard')
+const keyPair = ref<api.NodeKeyPair | null>(null)
+const probeNodeId = ref('')
+const probeResult = ref<api.NodeProbeResult | null>(null)
+const capKindOptions = [
+  { label: 'WireGuard', value: 'wireguard' },
+  { label: 'UUID', value: 'uuid' },
+  { label: 'Password', value: 'password' },
+]
+const capNodeOptions = computed(() =>
+  nodes.value.map((n) => ({ label: `${n.name || n.id} (${n.id})`, value: n.id })),
+)
+
 const editingId = ref<string | null>(null)
 const paramsText = ref('{}')
 const tagsText = ref('')
@@ -376,6 +390,31 @@ async function importNative() {
   }
 }
 
+async function generateKeys() {
+  const r = await run('keys-gen', () =>
+    api.generateNodeKeys({ kind: capKind.value as 'wireguard' | 'uuid' | 'password' }))
+  if (r) keyPair.value = r
+}
+
+async function copyKeys() {
+  if (!keyPair.value) return
+  try {
+    await navigator.clipboard.writeText(prettyJson(keyPair.value))
+    window.$message?.success('密钥已复制')
+  } catch {
+    window.$message?.warning('浏览器未授予剪贴板权限')
+  }
+}
+
+async function testConnection() {
+  if (!probeNodeId.value) {
+    window.$message?.warning('请先选择节点')
+    return
+  }
+  const r = await run('node-probe', () => api.probeNode(probeNodeId.value, { timeout_ms: 3000 }))
+  if (r) probeResult.value = r
+}
+
 onMounted(async () => {
   await refreshCatalog()
   await refresh()
@@ -397,14 +436,6 @@ onMounted(async () => {
         <NButton size="small" :loading="isBusy('list')" @click="refresh">刷新</NButton>
       </NSpace>
     </div>
-
-    <NAlert type="info" :bordered="false" class="section-gap">
-      <template #header>{{ props.kind === 'inbound' ? '入口协议节点' : '出口协议节点' }}</template>
-      可配置 Shadowsocks / VMess / VLESS+REALITY / Trojan / Hysteria2 / TUIC / WireGuard / OpenVPN / IPsec
-      等加密代理与 VPN 协议，以及 ML-KEM-768 混合后量子控制信道。节点定义保存在
-      <span class="mono">{{ storePath || 'data/nodes-config.json' }}</span>（0600）。
-      NGG 负责节点定义与内核原生配置片段生成，实际握手与隧道由内核执行，NGG 不重写协议栈。
-    </NAlert>
 
     <!-- ============================ 表单模式 ============================ -->
     <template v-if="mode === 'form'">
@@ -572,13 +603,7 @@ onMounted(async () => {
         <NButton size="small" :loading="isBusy('templates')" @click="applyTemplate">载入示例</NButton>
         <span class="hint">3X-UI 默认配置 / Xray 多入口 / Remnawave 节点配置</span>
       </NSpace>
-      <NAlert type="info" :bordered="false" style="margin-bottom: 10px">
-        可直接粘贴整份 Xray-core / sing-box JSON 或 Mihomo YAML（含 log / inbounds / outbounds / routing）。
-        带 @long-text: 或 &lt;long_text_quote&gt; 包裹的长文本会自动剥离。
-        「校验并应用」先备份当前有效配置，再调用内核自身校验器，通过才替换；重启内核后生效。
-        NGG 不改写协议栈，也不解析其中的凭据，请自行保管好密码与私钥。
-      </NAlert>
-      <NInput v-model:value="nativeText" type="textarea" class="code-editor" :rows="22" />
+            <NInput v-model:value="nativeText" type="textarea" class="code-editor" :rows="22" />
       <NSpace :size="8" :wrap="true" style="margin-top: 10px">
         <NButton size="small" :loading="isBusy('native-validate')" @click="validateNative">仅原生校验</NButton>
         <NButton size="small" type="primary" :loading="isBusy('native-apply')" @click="applyNative">
@@ -689,6 +714,18 @@ onMounted(async () => {
         </div>
       </template>
       <div v-else class="hint">点击「展开」编辑引擎级参数（监听端口、TUN、出口绑定、Fail-Closed 策略）。</div>
+    </NCard>
+
+    <NCard size="small" class="section-gap">
+      <NSpace :size="8" :wrap="true" align="center">
+        <NSelect v-model:value="capKind" :options="capKindOptions" style="width: 140px" />
+        <NButton size="small" :loading="isBusy('keys-gen')" @click="generateKeys">密钥生成</NButton>
+        <NButton size="small" :disabled="!keyPair" @click="copyKeys">复制</NButton>
+        <NSelect v-model:value="probeNodeId" :options="capNodeOptions" clearable placeholder="选择节点" style="width: 220px" />
+        <NButton size="small" :loading="isBusy('node-probe')" @click="testConnection">连接测试</NButton>
+      </NSpace>
+      <pre v-if="keyPair" class="mono" style="max-height: 180px; margin-top: 10px; overflow: auto; font-size: 12px">{{ prettyJson(keyPair) }}</pre>
+      <pre v-if="probeResult" class="mono" style="max-height: 160px; margin-top: 10px; overflow: auto; font-size: 12px">{{ prettyJson(probeResult) }}</pre>
     </NCard>
   </div>
 </template>
