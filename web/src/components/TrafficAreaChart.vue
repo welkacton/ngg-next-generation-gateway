@@ -300,7 +300,7 @@ const outPeak = computed(() => peak('out'))
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 200px;
+  min-height: 150px;
   color: #8e8e93;
   font-size: 13px;
   background: #fafafa;

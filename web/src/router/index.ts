@@ -15,6 +15,37 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '网络概览' },
   },
   {
+    path: '/gateway/wan',
+    name: 'gateway-wan',
+    component: () => import('../views/gateway/WanSettings.vue'),
+    meta: { title: 'WAN 设置' },
+  },
+  {
+    path: '/gateway/lan',
+    name: 'gateway-lan',
+    component: () => import('../views/gateway/LanSettings.vue'),
+    meta: { title: 'LAN 设置' },
+  },
+  {
+    path: '/gateway/dns',
+    name: 'gateway-dns',
+    component: () => import('../views/DNS.vue'),
+    meta: { title: 'DNS 设置' },
+  },
+  {
+    path: '/gateway/sdwan',
+    name: 'gateway-sdwan',
+    component: () => import('../views/SDWAN.vue'),
+    meta: { title: 'SD-WAN' },
+  },
+  {
+    path: '/gateway/firewall',
+    name: 'gateway-firewall',
+    component: () => import('../views/gateway/FirewallSettings.vue'),
+    meta: { title: '防火墙设置' },
+  },
+  { path: '/sdwan', redirect: { name: 'gateway-sdwan' } },
+  {
     path: '/cores',
     name: 'cores',
     component: () => import('../views/Cores.vue'),
@@ -103,12 +134,6 @@ const routes: RouteRecordRaw[] = [
     name: 'plugins',
     component: () => import('../views/Plugins.vue'),
     meta: { title: '插件运行时' },
-  },
-  {
-    path: '/sdwan',
-    name: 'sdwan',
-    component: () => import('../views/SDWAN.vue'),
-    meta: { title: 'SD-WAN' },
   },
   {
     path: '/platforms',

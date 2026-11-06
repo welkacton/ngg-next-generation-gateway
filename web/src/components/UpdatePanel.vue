@@ -9,6 +9,7 @@ import {
   NTag,
 } from 'naive-ui'
 import * as api from '../api/ngg'
+import { setMaintenance } from '../api/client'
 import type {
   UpdateCheckResult,
   UpdateDownloadResult,
@@ -176,6 +177,9 @@ async function quickUpdate() {
   restartNote.value = ''
   resetSteps()
   quickRunning.value = true
+  // Hold the silent mode from "apply" until the page reloads, so the restart
+  // window never spams the console with transport errors.
+  let holdMaintenance = false
   try {
     // 1. check
     setStep(0, 'running')
@@ -207,6 +211,8 @@ async function quickUpdate() {
       return
     }
     setStep(2, 'done', '后台脚本已启动')
+    setMaintenance(true)
+    holdMaintenance = true
 
     // 4. wait for the NEW version, then refresh the Web console
     setStep(3, 'running')
@@ -217,11 +223,14 @@ async function quickUpdate() {
     } else {
       setStep(3, 'fail', '90 秒内未检测到新版本')
       restartNote.value = '服务未在 90 秒内以新版本恢复，请查看更新日志并确认服务状态。'
+      setMaintenance(false)
+      holdMaintenance = false
     }
   } catch (e) {
     errorText.value = friendlyError('一键更新中断', e)
   } finally {
     quickRunning.value = false
+    if (!holdMaintenance) setMaintenance(false)
   }
 }
 
@@ -246,9 +255,13 @@ async function manualApply() {
     negativeText: '取消',
     onPositiveClick: async () => {
       const a = await doApply()
-      if (a?.started) void waitForRestart(r.release!.tag_name).then((ok) => {
-        if (ok) window.location.reload()
-      })
+      if (a?.started) {
+        setMaintenance(true)
+        void waitForRestart(r.release!.tag_name).then((ok) => {
+          if (ok) window.location.reload()
+          else setMaintenance(false)
+        })
+      }
     },
   })
 }

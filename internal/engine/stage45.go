@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ngg-project/ngg/internal/gateway"
 	"github.com/ngg-project/ngg/internal/hosts"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/nodes"
@@ -92,6 +93,11 @@ func (e *Engine) initStage45() {
 	if err := e.userReg.Load(); err != nil {
 		fmt.Printf("NGG: could not load persisted users: %v\n", err)
 	}
+	// 网关中心：WAN / LAN / 防火墙的声明式配置（持久化 + 真实网卡状态）。
+	e.gateway = gateway.NewStore(e.cfg.Storage.Dir)
+	if err := e.gateway.Load(); err != nil {
+		fmt.Printf("NGG: could not load persisted gateway config: %v\n", err)
+	}
 	if e.network != nil {
 		e.network.SetPluginHook(&pluginHookAdapter{m: e.plugins})
 		e.network.SetLinkSelector(e.sdwan)
@@ -109,6 +115,7 @@ func (e *Engine) Nodes() *nodes.Registry         { return e.nodeReg }
 func (e *Engine) Hosts() *hosts.Registry         { return e.hostReg }
 func (e *Engine) Users() *users.Registry         { return e.userReg }
 func (e *Engine) RuleSets() *rulesets.Registry   { return e.ruleSets }
+func (e *Engine) Gateway() *gateway.Store        { return e.gateway }
 
 // Stages reports the honest implementation status of every stage.
 func (e *Engine) Stages() map[string]any {

@@ -476,8 +476,8 @@ onUnmounted(() => {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
     'PingFang SC', 'Microsoft YaHei', sans-serif;
   background: #f5f5f7;
-  border-radius: 26px;
-  padding: 26px;
+  border-radius: 18px;
+  padding: 16px;
   color: #1d1d1f;
   min-height: calc(100vh - 120px);
 }
@@ -492,7 +492,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 18px;
   flex-wrap: wrap;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 .netov-eyebrow {
   font-size: 10.5px;
@@ -501,8 +501,8 @@ onUnmounted(() => {
   font-weight: 600;
 }
 .netov-title {
-  margin: 5px 0 4px;
-  font-size: 30px;
+  margin: 4px 0 2px;
+  font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.025em;
   line-height: 1.2;
@@ -577,7 +577,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .netov-refresh:disabled { opacity: .55; cursor: default; }
-.netov-alert { margin-bottom: 16px; border-radius: 14px !important; }
+.netov-alert { margin-bottom: 10px; border-radius: 14px !important; }
 
 .netov-hero {
   display: flex;
@@ -586,18 +586,18 @@ onUnmounted(() => {
   flex-wrap: wrap;
   background: linear-gradient(135deg, #ffffff 0%, #f2f7ff 100%);
   border: 1px solid #e8e8ed;
-  border-radius: 24px;
-  padding: 26px 28px;
+  border-radius: 16px;
+  padding: 16px 18px;
   box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 12px 32px rgba(0,0,0,.04);
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 .netov-hero__label { font-size: 12.5px; color: #6e6e73; font-weight: 500; }
 .netov-hero__value {
-  font-size: 46px;
+  font-size: 30px;
   font-weight: 650;
   letter-spacing: -0.035em;
   line-height: 1.15;
-  margin: 8px 0 12px;
+  margin: 6px 0 8px;
   font-variant-numeric: tabular-nums;
 }
 .netov-hero__meta { display: flex; gap: 22px; flex-wrap: wrap; font-size: 13px; color: #1d1d1f; }
@@ -610,11 +610,11 @@ onUnmounted(() => {
   align-items: center;
 }
 .netov-spark {
-  width: 180px;
+  width: 132px;
   background: rgba(255,255,255,.8);
   border: 1px solid #e8e8ed;
-  border-radius: 16px;
-  padding: 12px 14px 8px;
+  border-radius: 12px;
+  padding: 8px 10px 6px;
 }
 .netov-spark__head {
   display: flex;
@@ -624,7 +624,7 @@ onUnmounted(() => {
   color: #6e6e73;
   margin-bottom: 6px;
 }
-.netov-spark svg { width: 100%; height: 40px; display: block; }
+.netov-spark svg { width: 100%; height: 26px; display: block; }
 .netov-spark__line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .netov-spark__line--in { stroke: #0071e3; }
 .netov-spark__line--out { stroke: #ff9f0a; }
@@ -639,7 +639,7 @@ onUnmounted(() => {
 .netov-dot--in { background: #0071e3; }
 .netov-dot--out { background: #ff9f0a; }
 
-.netov-grid { display: grid; gap: 16px; margin-bottom: 16px; }
+.netov-grid { display: grid; gap: 10px; margin-bottom: 12px; }
 .netov-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .netov-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
@@ -647,10 +647,10 @@ onUnmounted(() => {
 .netov-card {
   background: #fff;
   border: 1px solid #e8e8ed;
-  border-radius: 20px;
+  border-radius: 14px;
   box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 8px 24px rgba(0,0,0,.035);
 }
-.netov-kpi { padding: 18px 20px 20px; }
+.netov-kpi { padding: 12px 14px 14px; }
 .netov-kpi__label {
   display: flex;
   align-items: center;
@@ -660,28 +660,28 @@ onUnmounted(() => {
   font-weight: 500;
 }
 .netov-kpi__value {
-  font-size: 29px;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.025em;
-  margin: 10px 0 6px;
+  margin: 6px 0 4px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.netov-kpi__value--sm { font-size: 24px; }
+.netov-kpi__value--sm { font-size: 18px; }
 .netov-kpi__sub { font-size: 11.5px; color: #8e8e93; line-height: 1.5; }
 
-.netov-card { padding: 20px 22px; }
+.netov-card { padding: 14px 16px; }
 .netov-card__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
-.netov-card__title { margin: 0; font-size: 16.5px; font-weight: 600; letter-spacing: -.01em; }
+.netov-card__title { margin: 0; font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; }
 .netov-card__sub { margin: 5px 0 0; font-size: 11.5px; color: #8e8e93; }
-.netov-chart-card { margin-bottom: 16px; }
+.netov-chart-card { margin-bottom: 12px; }
 .netov-chart-foot {
   display: flex;
   justify-content: space-between;
@@ -700,7 +700,7 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  padding: 10px 0;
+  padding: 7px 0;
   border-bottom: 1px solid #f2f2f4;
   font-size: 12.5px;
 }
@@ -716,7 +716,7 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 9px 0;
+  padding: 7px 0;
   border-bottom: 1px solid #f2f2f4;
   font-size: 12.5px;
 }

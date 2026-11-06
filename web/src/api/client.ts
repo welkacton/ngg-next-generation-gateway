@@ -32,6 +32,18 @@ const client = axios.create({
   withCredentials: true,
 })
 
+/**
+ * While the updater replaces the binary and restarts the service, every
+ * in-flight request fails with a transport error. Suppress those instead of
+ * showing one red toast per request.
+ */
+let maintenance = false
+let lastTransportToastAt = 0
+
+export function setMaintenance(active: boolean): void {
+  maintenance = active
+}
+
 function extractError(error: AxiosError): string {
   const data = error.response?.data as
     | { error?: string; message?: string }
@@ -61,7 +73,16 @@ client.interceptors.response.use(
       // 会话过期：交给 App 切回登录页，不弹通用错误提示。
       window.dispatchEvent(new Event('ngg-unauthorized'))
     } else if (!error.config?.silentError) {
-      if (window.$message) {
+      if (!error.response) {
+        // Service restarting / unreachable. One throttled notice for the whole
+        // burst, and a signal pages can use to pause polling.
+        window.dispatchEvent(new Event('ngg-backend-unreachable'))
+        const now = Date.now()
+        if (!maintenance && now - lastTransportToastAt > 8000) {
+          lastTransportToastAt = now
+          window.$message?.warning('后端服务暂时不可达，正在自动重连…', { duration: 4000 })
+        }
+      } else if (window.$message) {
         window.$message.error(msg, { duration: 6000, keepAliveOnHover: true })
       } else {
         console.error('[NGG API]', msg)

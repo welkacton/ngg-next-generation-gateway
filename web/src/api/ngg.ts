@@ -1912,3 +1912,99 @@ export const probeNode = (id: string, payload: { timeout_ms?: number } = {}) =>
   post<NodeProbeResult>(`/nodes/${encodeURIComponent(id)}/probe`, payload)
 export const saveNodeConfigFile = (id: string, payload: { content: string; format?: string }) =>
   put<NodeConfigFileResult>(`/nodes/${encodeURIComponent(id)}/config-file`, payload)
+
+/* ------------------------------------------------------------------ *
+ * 网关中心：WAN / LAN / 防火墙（声明式配置 + 真实网卡状态）
+ * ------------------------------------------------------------------ */
+
+export interface GatewayWAN {
+  mode: 'dhcp' | 'static' | 'pppoe'
+  interface: string
+  address: string
+  gateway: string
+  mtu: number
+  dns: string[]
+  ipv6: boolean
+  username?: string
+  /** 后端只回显是否已保存密码，绝不回显明文 */
+  password_set?: boolean
+  /** 仅写入时使用 */
+  password?: string
+}
+
+export interface GatewayLAN {
+  interface: string
+  address: string
+  netmask: string
+  dhcp_enabled: boolean
+  dhcp_start: string
+  dhcp_end: string
+  lease_minutes: number
+  domain: string
+}
+
+export interface FirewallRule {
+  id: string
+  name: string
+  action: 'accept' | 'drop' | 'reject'
+  protocol: 'tcp' | 'udp' | 'any'
+  src: string
+  dst: string
+  port: string
+  enabled: boolean
+}
+
+export interface PortForward {
+  id: string
+  name: string
+  protocol: 'tcp' | 'udp' | 'both'
+  ext_port: number
+  int_addr: string
+  int_port: number
+  enabled: boolean
+}
+
+export interface GatewayFirewall {
+  default_inbound: 'accept' | 'drop'
+  rules: FirewallRule[]
+  port_forwards: PortForward[]
+  upnp: boolean
+  conntrack: boolean
+}
+
+export interface GatewayConfig {
+  wan: GatewayWAN
+  lan: GatewayLAN
+  firewall: GatewayFirewall
+}
+
+export interface GatewayConfigResult {
+  config: GatewayConfig
+  updated_at: string
+  changed?: string[]
+  persisted?: boolean
+  warnings?: string[]
+}
+
+export interface GatewayInterfaceInfo {
+  name: string
+  hardware_addr: string
+  mtu: number
+  addresses: string[]
+  up: boolean
+}
+
+export interface GatewayStatus {
+  interfaces: GatewayInterfaceInfo[]
+  default_interface: string
+  default_address: string
+  default_gateway: string
+  dns: string[]
+  firewall_active: boolean
+  checked_at: string
+}
+
+export const getGatewayConfig = () => get<GatewayConfigResult>('/gateway/config')
+export const saveGatewayConfig = (config: GatewayConfig) =>
+  put<GatewayConfigResult>('/gateway/config', config)
+export const getGatewayStatus = () => get<GatewayStatus>('/gateway/status')

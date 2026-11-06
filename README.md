@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.6.4
+### 🏷️ Generation 2 / 第二代 · Release v2.6.5
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -28,10 +28,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.4.0 | 网络概览 + GitHub Release 上架 | 「概览」改名**系统概览**，新增 **网络概览**（Apple HIG 风格）：实时速率 Hero、下载/上传 KPI、纯 SVG 双系列流量面积图（速率 / 累计 / 连接三种视图、5/15/30 分钟窗口）、连接与策略、统一网络引擎状态；后端新增 `/network/metrics/history` 真实 2 秒采样（速率 = 真实计数差 ÷ 真实时间差，未运行不伪造曲线），并修复 `relay()` 把双向字节都记到 `BytesOut` 导致下载流量恒为 0 的缺陷；版本由 `scripts/release.mjs` 同步到仓库并打包上架 GitHub Release |
 | Gen 2 增补 | v2.5.0 | 接管全局 + 用户管理 | 系统更新去掉 GitHub Token，公开仓库自动检查/下载/应用；「网络引擎」改名**接管全局**并移入配置引擎（DNS 配置下方），新增 Windows 系统代理一键接管与解除（真实写 HKCU/Internet Settings 并广播，解除恢复原代理）、TUN 真实能力检测（管理员 / wintun.dll / 已装虚拟网卡，无能力时如实说明不伪造网卡）；**删除多租户**，在出口节点下新增**用户管理**（统计条 + 用户表 + 详情抽屉，Active/Expired/Limited/Disabled 由 enabled/到期/配额实时推导，用量只由数据面累加）；修复规则集与版本列表的长文本覆盖「操作」列，并加全局单元格裁切防御 |
 | Gen 2 增补 | v2.6.0 | 登录门禁 + 链路编排 + 真 TUN | 新增单管理员登录：首次打开必须手动创建账号（Argon2id / HttpOnly 会话 / 失败锁定），之后只有登录窗口，浏览器不再保存任何 API Token；配置引擎新增**链路编排**（协议 → 入口 → 规则 → DNS → 出口 → 用户 六段串联，真实校验、渲染 mihomo 配置、原生校验后热替换、SOCKS5 端到端真连测试），各二级页加入链路导航条；Windows **TUN 虚拟网卡彻底跑通**：自动下载并 SHA-256 + Authenticode 双重校验官方签名 wintun.dll，由 NGG 独占创建网卡并用 gVisor 用户态协议栈把 TCP 流量接入统一调度器，可选接管默认路由 |
-| **Gen 2（当前）** | **v2.6.4** | 规则集 / 接管全局 / DNS / 节点 / 链路编排 / 极简风 | 在 v2.6.3（登录门禁、链路编排、真 TUN、主机控制台、网络概览）之上：规则配置支持 GitHub 来源自定义增删、执行内核下拉、规则单条/多选/全选/全部删除、按三内核官方语法可视化新增规则集；接管全局状态可读化 + 八项组件逐项开关 + 默认内核可选；DNS 按三内核官方语法重布局；节点新增配置文件、采集数据、密钥配对、连通探测；链路承载内核显示全部内核；全站统一关闭说明文字层；网络概览增加组件状态、引擎启停、配置计数与快捷跳转 |
+| Gen 2 增补 | v2.6.4 | 规则集 / 接管全局 / DNS / 节点 / 链路编排 / 极简风 | 在 v2.6.3（登录门禁、链路编排、真 TUN、主机控制台、网络概览）之上：规则配置支持 GitHub 来源自定义增删、执行内核下拉、规则单条/多选/全选/全部删除、按三内核官方语法可视化新增规则集；接管全局状态可读化 + 八项组件逐项开关 + 默认内核可选；DNS 按三内核官方语法重布局；节点新增配置文件、采集数据、密钥配对、连通探测；链路承载内核显示全部内核；全站统一关闭说明文字层；网络概览增加组件状态、引擎启停、配置计数与快捷跳转 |
+| **Gen 2（当前）** | **v2.6.5** | 网关中心 + 更新体验 + 概览紧凑化 | 新增一级**网关中心**（WAN / LAN / DNS / SD-WAN / 防火墙），WAN 支持 DHCP / 静态 / PPPoE 与真实上行网卡状态，LAN 提供网段与 DHCP 池，防火墙提供默认入站策略、规则表、端口转发、UPnP / 连接跟踪；更新期间服务重启的请求失败改为维护模式静默 + 8 秒节流提示，不再逐条弹红；「新增规则集」自动滚动定位表单；网络概览卡片与图表整体紧凑化 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.6.4`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.6.5`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -44,23 +45,23 @@ GitHub 仓库：**https://github.com/welkacton/ngg-next-generation-gateway** · 
 仓库可见性由所有者在仓库设置中控制（public / private），部署到自己的服务器、电脑、NAS 或软路由时，
 请按当前可见性使用有权限的账号克隆或下载 Release 产物。
 
-> **当前 Release `v2.6.4`**：由 `git tag v2.6.4 && git push origin v2.6.4`
+> **当前 Release `v2.6.5`**：由 `git tag v2.6.5 && git push origin v2.6.5`
 > 触发 Release 工作流，自动交叉编译多平台、打包 Windows 安装包与 `SHA256SUMS` 并发布。
-> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.6.4>
-> → `NGG-Setup-v2.6.4.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.6.4-windows-amd64.zip`
+> **Windows 安装包直接下载**：<https://github.com/welkacton/ngg-next-generation-gateway/releases/tag/v2.6.5>
+> → `NGG-Setup-v2.6.5.exe`（双击，UAC 确认即可，无需命令行）或 `NGG-v2.6.5-windows-amd64.zip`
 > （解压后双击 `install.bat`）。附带 `SHA256SUMS`，运行前请校验。
-> 本次资产：多平台 `ngg-v2.6.4-<os>-<arch>.tar.gz`、`NGG-v2.6.4-windows-amd64.zip`、
-> `NGG-Setup-v2.6.4.exe` 及各自的 `.sha256` 与汇总 `SHA256SUMS`；运行前请校验摘要。
+> 本次资产：多平台 `ngg-v2.6.5-<os>-<arch>.tar.gz`、`NGG-v2.6.5-windows-amd64.zip`、
+> `NGG-Setup-v2.6.5.exe` 及各自的 `.sha256` 与汇总 `SHA256SUMS`；运行前请校验摘要。
 
 | 场景 | 最短路径 | 完整步骤 |
 | --- | --- | --- |
 | VPS / 云服务器（Docker） | `cp .env.example .env && docker compose up -d --build` | [`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md) 第 3 节 |
-| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.6.4 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
+| **VPS / 云服务器（systemd 原生，推荐）** | `sudo --preserve-env=GITHUB_TOKEN ./scripts/deploy-vps.sh install --version v2.6.5 --public` | **[`docs/DEPLOY-VPS.md`](docs/DEPLOY-VPS.md)** |
 | VPS 域名 + SSL | 同上再加 `--domain ngg.example.com --with-tls --email you@example.com` | `docs/DEPLOY-VPS.md` §5.3 |
 | VPS 用 Docker（含 Alpine） | `./scripts/deploy-vps.sh docker` | `docs/DEPLOY-VPS.md` §3 |
-| **Windows 安装程序** | 双击 `NGG-Setup-v2.6.4.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
+| **Windows 安装程序** | 双击 `NGG-Setup-v2.6.5.exe`，或 `powershell -File install.ps1 -Source .` | **[`docs/INSTALL-WINDOWS.md`](docs/INSTALL-WINDOWS.md)** |
 | Linux VPS（从源码构建） | `sudo bash scripts/install.sh` → `systemctl enable --now ngg` | `docs/04-installation.md` |
-| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.6.4` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
+| 本地电脑 / macOS / Linux | `bash scripts/quickstart.sh`（或 `--release v2.6.5` 下载预编译包） | `docs/DEPLOY.md` 第 4 节 |
 | 软路由 / OpenWrt | `platforms/openwrt/` 的 procd init + UCI 配置 | `platforms/openwrt/README.md` |
 
 `scripts/deploy-vps.sh` 直接安装 Release 预编译包（VPS 上**不需要 Go / Node**），自动完成：SHA256 校验 →
@@ -234,6 +235,7 @@ installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、�
 | `docs/11-protocol-center.md` | **协议配置**：只读官网协议目录（定时同步）+ 可编辑配置文件卡片（6 分区、按内核官方语法、带注释与校验） |
 | `docs/12-github-rulesets.md` | **GitHub 规则集挂载**：一次发现 668+ 分流规则分类，全选全部自动分批加载，批量侧挂载或自动导入实时规则表 |
 | `docs/13-kernel-install.md` | **内核安装**：异步后台任务、安装进度轮询、GitHub API 配额治理与 PAT 配置 |
+| `docs/16-v265-features.md` | **网关中心 / 更新体验 / 概览紧凑化**：WAN / LAN / DNS / SD-WAN / 防火墙，维护模式错误静默，概览尺寸调整 |
 | `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
 | `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 

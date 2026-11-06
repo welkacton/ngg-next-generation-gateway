@@ -134,6 +134,19 @@ function scrollToRuleForm() {
   document.getElementById('rule-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
+function scrollToRuleSetForm() {
+  // Let Vue render/reset the form before scrolling to it.
+  window.setTimeout(() => {
+    document.getElementById('ruleset-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 60)
+}
+
+/** "新增规则集" in the rule-set card header: reset and jump to the form. */
+function addNewRuleSet() {
+  resetSetForm()
+  scrollToRuleSetForm()
+}
+
 function startEdit(r: Rule) {
   editingId.value = r.id
   if (!checkedRuleIds.value.includes(r.id)) checkedRuleIds.value = [...checkedRuleIds.value, r.id]
@@ -1358,7 +1371,7 @@ onMounted(() => {
       <template #header-extra>
         <NSpace :size="8" :wrap="true" align="center">
           <NButton size="small" type="primary" @click="pickFile">上传文档附件（自动识别）</NButton>
-          <NButton size="small" @click="resetSetForm">新增规则集</NButton>
+          <NButton size="small" @click="addNewRuleSet">新增规则集</NButton>
           <NButton v-if="setEditingId" size="small" @click="resetSetForm">取消编辑</NButton>
           <span class="hint">应用执行内核</span>
           <NSelect v-model:value="applyCore" :options="kernelOptions" size="small" style="width: 140px" />
@@ -1421,6 +1434,7 @@ onMounted(() => {
     <NGrid cols="1 m:2" responsive="screen" :x-gap="14" :y-gap="14" class="section-gap">
       <NGi>
         <NCard
+          id="ruleset-form-card"
           size="small"
           :title="setEditingId ? '编辑规则集 ' + setEditingId + '（PUT /rulesets/{id}）' : '新增规则集（POST /rulesets）'"
         >

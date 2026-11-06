@@ -21,6 +21,7 @@ import { themeOverrides } from './styles/theme'
 import { useCoresStore } from './stores/cores'
 import { useWebSocket } from './composables/useWebSocket'
 import * as api from './api/ngg'
+import { setMaintenance } from './api/client'
 import type {
   AuthState,
   UpdateCheckResult,
@@ -128,14 +129,19 @@ function menuIcon() {
 
 const MENU_EXPANDED_KEY = 'ngg_menu_expanded'
 const AUTO_CHECK_KEY = 'ngg_auto_update_check'
-const defaultExpanded = ['group-core-engine', 'group-config-engine']
+const defaultExpanded = ['group-gateway', 'group-core-engine', 'group-config-engine']
 
 function loadExpandedKeys(): string[] {
   try {
     const raw = localStorage.getItem(MENU_EXPANDED_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) return parsed.map(String)
+      if (Array.isArray(parsed)) {
+        const keys = parsed.map(String)
+        // v2.6.5 added a first-level group; expand it once for existing users.
+        if (!keys.includes('group-gateway')) keys.push('group-gateway')
+        return keys
+      }
     }
   } catch {
     // 损坏的本地偏好回退到默认展开，不写入任何模拟状态
@@ -157,6 +163,18 @@ function handleExpandedKeys(keys: (string | number)[]) {
 const menuOptions: MenuOption[] = [
   { label: '系统概览', key: 'dashboard', icon: menuIcon },
   { label: '网络概览', key: 'network-overview', icon: menuIcon },
+  {
+    label: '网关中心',
+    key: 'group-gateway',
+    icon: menuIcon,
+    children: [
+      { label: 'WAN 设置', key: 'gateway-wan', icon: menuIcon },
+      { label: 'LAN 设置', key: 'gateway-lan', icon: menuIcon },
+      { label: 'DNS 设置', key: 'gateway-dns', icon: menuIcon },
+      { label: 'SD-WAN', key: 'gateway-sdwan', icon: menuIcon },
+      { label: '防火墙设置', key: 'gateway-firewall', icon: menuIcon },
+    ],
+  },
   { type: 'divider', key: 'divider-top' },
   {
     label: '内核引擎',
@@ -193,7 +211,6 @@ const menuOptions: MenuOption[] = [
     children: [
       { label: '后量子', key: 'pq', icon: menuIcon },
       { label: '插件运行时', key: 'plugins', icon: menuIcon },
-      { label: 'SD-WAN', key: 'sdwan', icon: menuIcon },
       { label: '跨平台构建', key: 'platforms', icon: menuIcon },
       { label: '阶段总览', key: 'stages', icon: menuIcon },
     ],
@@ -285,8 +302,14 @@ async function maybeAutoApply() {
     await api.downloadUpdate(target)
     const applied = await api.applyUpdate(target)
     autoApplyResult.value = applied
-    if (applied.started) window.$message?.info('已自动开始应用更新，约 30 秒后刷新页面')
-    else window.$message?.warning('自动应用在当前平台需执行终端命令，详见更新面板')
+    if (applied.started) {
+      // The service is about to restart: silence transport errors until reload.
+      setMaintenance(true)
+      window.$message?.info('已自动开始应用更新，约 30 秒后刷新页面')
+      window.setTimeout(() => window.location.reload(), 30000)
+    } else {
+      window.$message?.warning('自动应用在当前平台需执行终端命令，详见更新面板')
+    }
   } catch {
     autoApplyResult.value = null
     window.$message?.warning('自动更新失败（下载校验或应用脚本未就绪），可在更新面板手动重试')

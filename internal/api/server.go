@@ -19,6 +19,7 @@ import (
 	"github.com/ngg-project/ngg/internal/auth"
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
+	"github.com/ngg-project/ngg/internal/gateway"
 	"github.com/ngg-project/ngg/internal/pipeline"
 	"github.com/ngg-project/ngg/internal/profiles"
 	"github.com/ngg-project/ngg/internal/protocols"
@@ -41,6 +42,7 @@ type Server struct {
 	sampler      *metricsSampler
 	auth         *auth.Store
 	pipeline     *pipeline.Store
+	gateway      *gateway.Store
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -66,6 +68,11 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 		updater: update.New(dataDir), catalog: catalog, profileStore: store,
 		githubIndex: rulesets.NewGitHubIndex(dataDir, gitToken),
 		installs:    newInstallManager(),
+	}
+	// 网关中心 shares the store owned by Core Manager so a save through the
+	// API and the persisted file can never drift apart.
+	if eng != nil {
+		s.gateway = eng.Gateway()
 	}
 	// User-defined GitHub rule sources live beside the cached catalogs. A
 	// read failure must not take down the control plane; built-ins stay usable.
@@ -198,6 +205,11 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/network/config", s.handleNetworkConfig)
 	m.HandleFunc("PUT /api/v1/network/config", s.handleNetworkConfig)
 	m.HandleFunc("GET /api/v1/network/rules", s.handleNetworkRules)
+
+	// 网关中心：WAN / LAN / 防火墙（声明式配置 + 真实网卡状态）
+	m.HandleFunc("GET /api/v1/gateway/config", s.handleGatewayConfigGet)
+	m.HandleFunc("PUT /api/v1/gateway/config", s.handleGatewayConfigPut)
+	m.HandleFunc("GET /api/v1/gateway/status", s.handleGatewayStatus)
 
 	// Config Engine: custom rule sets (URL / upload / inline)
 	m.HandleFunc("GET /api/v1/rulesets", s.handleRuleSets)

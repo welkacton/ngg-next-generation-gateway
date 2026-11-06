@@ -638,3 +638,17 @@ DNS 则转发到 `network.dns.upstreams[0]`，保证域名解析在隧道内可�
 
 `GET /network/status` 增加 `default_core`、`direct_on_failure`、`bypass_tun` 与 `components`；`PUT /network/config` 对 `default_core` 做注册表白名单校验。
 详见 [`15-v264-features.md`](15-v264-features.md)（本版能力说明与验证口径）。
+
+---
+
+## v2.6.5 新增端点：网关中心
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/gateway/config` | WAN / LAN / 防火墙配置；PPPoE 密码只返回 `password_set`，不回显明文 |
+| PUT | `/gateway/config` | 校验并持久化（0600 原子写），返回 `changed` / `persisted` / `warnings` |
+| GET | `/gateway/status` | 真实网卡列表、默认上行接口与地址、默认网关（Linux）、防火墙状态 |
+
+配置结构：`wan{mode,interface,address,gateway,mtu,dns[],ipv6,username,password_set}`、
+`lan{interface,address,netmask,dhcp_enabled,dhcp_start,dhcp_end,lease_minutes,domain}`、
+`firewall{default_inbound,rules[],port_forwards[],upnp,conntrack}`。
