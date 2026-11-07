@@ -480,7 +480,7 @@ wscat -c "ws://127.0.0.1:9090/api/v1/ws?token=$TOKEN"
 | `POST` | `/api/v1/hosts/{id}/probe` | 单主机真实 TCP 探测 |
 | `POST` | `/api/v1/hosts/{id}/role` | body `{"role":"outbound"}`，任意切换入站 / 出站 / 双向 |
 | `GET` / `PUT` / `DELETE` | `/api/v1/hosts/{id}` | 读取 / 修改 / 删除 |
-| `GET` / `POST` / `DELETE` | `/api/v1/hosts/{id}/deploy` | 读取 / 生成 / 丢弃节点部署方案（生成时签发节点证书，脚本由面板渲染） |
+| `GET` / `POST` / `DELETE` | `/api/v1/hosts/{id}/deploy` | 读取 / 生成 / 丢弃节点部署方案（生成时签发节点证书，脚本由面板渲染）。**v2.13.1 起**管理端口用 2222 时返回 `warning`，旧探针方案返回 `legacy:true` 且不回传脚本 |
 | `GET` | `/api/v1/hosts/{id}/deploy/script` | 下载部署脚本（`text/x-shellscript`，含节点证书与私钥） |
 | `POST` | `/api/v1/hosts/{id}/node/connect` | 连入节点（双向 TLS）：健康检查 → 下发内核配置 → 读指标，结果落盘 |
 | `GET` | `/api/v1/hosts/{id}/node/status` | 节点状态（读缓存 + 最近一次连接结果）：`node_url` / `online` / `metrics` / `health` / `warning` |
