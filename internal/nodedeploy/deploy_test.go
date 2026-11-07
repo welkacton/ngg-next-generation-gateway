@@ -513,3 +513,33 @@ func TestScriptFollowsProfilePortsAndSelfSignsCertificates(t *testing.T) {
 		}
 	}
 }
+
+// The API unit template used to contain a raw ${NODE_DIR} instead of the
+// {{NODE_DIR}} placeholder. The script runs under `set -u`, so expanding an
+// undefined NODE_DIR aborted the heredoc, the old v2.12 ngg-node.service stayed
+// in place and the panel ended up talking to Xray on :3372. Guard both halves:
+// the variable is defined, and the unit carries a resolved path.
+func TestScriptWritesUnitsWithResolvedPaths(t *testing.T) {
+	s := mustPrepare(t, Spec{HostID: "01", Address: "50.118.185.194"})
+	script, err := Script(s)
+	if err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	if strings.Contains(script, "ReadWritePaths=${NODE_DIR}") {
+		t.Fatal("unit template still uses an undefined ${NODE_DIR}")
+	}
+	if !strings.Contains(script, `NODE_DIR="`+NodeDir+`"`) {
+		t.Fatalf("script does not define NODE_DIR=%q", NodeDir)
+	}
+	if !strings.Contains(script, "ReadWritePaths="+NodeDir+" /run") {
+		t.Fatalf("unit does not carry the resolved directory %q", NodeDir)
+	}
+	for _, want := range []string{
+		`[ -s "/etc/systemd/system/${API_UNIT}" ] || die 9`,
+		`[ -s "/etc/systemd/system/${CORE_UNIT}" ] || die 10`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing unit-write guard %q", want)
+		}
+	}
+}

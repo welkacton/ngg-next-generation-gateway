@@ -313,3 +313,42 @@ profile 模式和内置模式一样自包含：
 
 **注意**：证书只是「能不能启动」的问题。一个 `clients: []` 全空的档案即使部署成功，也没有任何
 客户端能连上——那属于「协议配置」内容问题，不是部署问题。
+
+
+---
+
+## 13. v2.13.4 · 单元模板 `${NODE_DIR}` 未定义，旧单元没被覆盖
+
+第三次现场日志里最关键的一行不是 Xray 的报错，而是：
+
+```
+NGG_STEP 9 写入节点证书并启动 ngg-node.service
+[NGG] 证书已写入：CN = NGG Node, CN = 01
+-bash: NODE_DIR: unbound variable
+NGG_OK 9
+NGG_NOTE systemctl enable ngg-node.service 失败，重启后 API 不会自动拉起
+...
+systemd[1]: Started ngg-node.service.
+NGG Node vps-main (reality :3372).
+xray[1973291]: Xray 26.10.31 ...
+NGG_FAIL 10 节点 API 未进入 active（当前：inactive）
+```
+
+`ngg-node.service` 的 `Description` 还是 **v2.12 的 `NGG Node vps-main (reality :3372)`**，进程是 Xray。
+也就是说新单元**根本没写进去**，服务器上跑的还是旧单元。
+
+根因：API 单元模板里 `ReadWritePaths=${NODE_DIR} /run` 把模板占位符 `{{NODE_DIR}}` 误写成了
+shell 变量 `${NODE_DIR}`，而脚本里没有这个变量、又开着 `set -u`，heredoc 展开时直接
+`unbound variable`；脚本头是 `set -uo pipefail`（没有 `-e`），所以错误被吞掉，继续打印 `NGG_OK 9`。
+
+修复：
+
+| 项 | 说明 |
+| --- | --- |
+| 占位符 | `ReadWritePaths={{NODE_DIR}} /run`，渲染后是 `ReadWritePaths=/etc/ngg /run` |
+| 变量 | 脚本显式定义 `NODE_DIR="{{NODE_DIR}}"`，即使别处再写 `${NODE_DIR}` 也不会炸 |
+| 写入校验 | 两个 `cat > /etc/systemd/system/*.service` 之后都加 `[ -s ... ] || die 9 / die 10`，写不进去立刻停，不再静默继续 |
+| 回归测试 | `TestScriptWritesUnitsWithResolvedPaths` 断言不出现 `${NODE_DIR}`、`NODE_DIR` 有定义、单元里是解析后的绝对路径、两处写入校验存在 |
+
+> 旧单元与新 API 单元同名（`ngg-node.service`），修复后 `cat >` 会直接覆盖，`daemon-reload` +
+> `restart` 即可把 :3372 的 Xray 换成 :2244 的 ngg-node。

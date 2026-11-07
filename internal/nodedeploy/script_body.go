@@ -212,13 +212,14 @@ RestartSec=3
 ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=${NODE_DIR} /run
+ReadWritePaths={{NODE_DIR}} /run
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 NGG_API_UNIT
+[ -s "/etc/systemd/system/${API_UNIT}" ] || die 9 "节点 API 单元写入失败（${API_UNIT} 为空）"
 chmod 644 "/etc/systemd/system/${API_UNIT}"
 ok 9
 
@@ -245,6 +246,7 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 NGG_CORE_UNIT
+[ -s "/etc/systemd/system/${CORE_UNIT}" ] || die 10 "内核单元写入失败（${CORE_UNIT} 为空）"
 chmod 644 "/etc/systemd/system/${CORE_UNIT}"
 systemctl daemon-reload || die 10 "systemctl daemon-reload 失败"
 
