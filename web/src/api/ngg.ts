@@ -2496,6 +2496,153 @@ export const provisionHost = (
   },
 ) => post<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`, payload)
 
+/* ------------------------------------------------------------------ *
+ * 节点部署（Remnawave 风格：控制面 → 节点）
+ * 方案由后端生成并落盘；执行是后台任务，前端轮询 job 渲染真实步骤日志。
+ * ------------------------------------------------------------------ */
+
+export type NodeDeployMode = 'reality' | 'vless-tls' | 'trojan-tls' | 'profile'
+
+export interface NodeDeploySpec {
+  host_id: string
+  host_name: string
+  address: string
+  port: number
+  mode: NodeDeployMode
+  sni: string
+  uuid?: string
+  /** REALITY 公钥（pbk），客户端需要；私钥永不下发。 */
+  reality_public?: string
+  short_id?: string
+  profile_id?: string
+  profile_name?: string
+  kernel?: string
+  panel_url?: string
+  generated_at: string
+}
+
+export interface NodeDeployStep {
+  index: number
+  title: string
+  status: 'running' | 'done' | 'failed'
+  detail?: string
+}
+
+export interface NodeDeployReady {
+  node_id: string
+  port: number
+  mode: string
+  listening: boolean
+  config_sha: string
+  /** up=已连上面板 / down=探针在跑但连不上 / off=未配置上报地址 */
+  probe?: 'up' | 'down' | 'off'
+}
+
+export interface NodeDeployRun {
+  id: string
+  state: 'idle' | 'running' | 'done' | 'failed'
+  started_at: string
+  finished_at?: string
+  exit_code: number
+  duration_ms: number
+  steps: NodeDeployStep[]
+  notes?: string[]
+  ready?: NodeDeployReady
+  stdout?: string
+  stderr?: string
+  error?: string
+}
+
+export interface NodeDeployView {
+  host_id: string
+  spec: NodeDeploySpec
+  /** 仅生成接口返回；列表接口不带脚本内容。 */
+  script?: string
+  generated_at: string
+  last_run?: NodeDeployRun
+  /** 客户端连接参数（后端按协议生成，前端只展示）。 */
+  params: string[]
+}
+
+export interface NodeDeployRequest {
+  mode?: NodeDeployMode
+  port?: number
+  sni?: string
+  profile_id?: string
+  panel_url?: string
+  /** 重新生成节点凭据（会让已配置的客户端失效）。 */
+  rotate?: boolean
+  /** true = 立即通过 SSH 在节点服务器上执行。 */
+  execute?: boolean
+}
+
+/** 探针上报的节点段（节点自己读 /etc/ngg/node.json 得到，非面板推测）。 */
+export interface NodeReportedState {
+  node_id: string
+  mode: string
+  protocol: string
+  port: number
+  unit: string
+  unit_state: string
+  listening: boolean
+  config_path: string
+  config_sha256: string
+  kernel_version: string
+  collected_at: string
+  error?: string
+}
+
+/**
+ * 节点实时状态：来源是节点探针的主动上报（agent registry），
+ * 面板不再通过 SSH 连进去读。
+ */
+export interface NodeStatusResponse {
+  host_id: string
+  checked_at: string
+  installed: boolean
+  source: 'agent'
+  verified?: boolean
+  online?: boolean
+  status?: AgentStatus
+  last_seen?: string
+  hostname?: string
+  os?: string
+  arch?: string
+  agent_version?: string
+  /** 面板为该节点分配的探针编号（远程节点列表里能看到同一条记录）。 */
+  agent_id?: string
+  /** agent.conf 里写死的上报地址。 */
+  report_url?: string
+  spec?: NodeDeploySpec
+  metrics?: AgentMetrics | null
+  node?: NodeReportedState | null
+  warning?: string
+  error?: string
+}
+
+/** 读取已保存的部署方案；404 表示还没生成过。 */
+export const getNodeDeploy = (id: string) =>
+  get<NodeDeployView>(`/hosts/${encodeURIComponent(id)}/deploy`, { silentError: true })
+
+/** 生成方案；execute=true 时同时开始后台执行。 */
+export const deployNode = (id: string, payload: NodeDeployRequest) =>
+  post<NodeDeployView | { host_id: string; spec: NodeDeploySpec; params: string[]; job: NodeDeployRun }>(
+    `/hosts/${encodeURIComponent(id)}/deploy`,
+    payload,
+  )
+
+/** 轮询执行进度（内存中的实时状态，结束后回落到落盘记录）。 */
+export const getNodeDeployJob = (id: string) =>
+  get<NodeDeployRun>(`/hosts/${encodeURIComponent(id)}/deploy/job`, { silentError: true })
+
+/** 通过 SSH 读取节点实时状态并校验节点令牌。 */
+export const getNodeStatus = (id: string) =>
+  get<NodeStatusResponse>(`/hosts/${encodeURIComponent(id)}/node/status`, { silentError: true })
+
+/** 脚本下载地址（含节点凭据，只在已登录会话下可用）。 */
+export const nodeDeployScriptUrl = (id: string) =>
+  `/api/v1/hosts/${encodeURIComponent(id)}/deploy/script`
+
 export type SubscriptionTarget = 'clash' | 'surge' | 'singbox' | 'v2ray' | 'socks' | 'substore'
 
 export interface UserSubscription {

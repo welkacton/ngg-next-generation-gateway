@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.11.0
+### 🏷️ Generation 2 / 第二代 · Release v2.12.0
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -38,11 +38,13 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.9.0 | 链路编排重做 | 六张链路大卡改成一行可点的六段状态条（绿/黄/红点，点任意一段跳对应页面）；参数从平铺 11 个字段改为 **1 → 6 编号步骤**（协议 / 入口 / 规则 / DNS / 出口 / 用户），每步标题带一句「做什么」+ 跳转，该段的阻断原因直接红字显示在步骤下方；右侧收敛为「执行」四行（校验 / 生成 / 应用 / 连通）+ 折叠的配置预览 + 代理顺序；删除底部重复的「待处理提示」卡 |
 | Gen 2 增补 | v2.10.0 | Sub-Store 互通 | 订阅从 5 种格式扩到 **6 种**：新增 `target=substore`，正文就是 Sub-Store 自己 `target=json` 的 plain JSON（proxy 对象数组），把它填进 Sub-Store 的「订阅」即可由其转换成 QX / Loon / Stash / Egern 等格式；反方向新增 `internal/substore` 解析包与 `POST /api/v1/substore/parse|import`，节点管理加「从 Sub-Store 导入」：兼容 plain JSON / Clash-mihomo YAML / base64 订阅 / 节点链接，顺带处理 JSON5 注释与尾逗号、BOM+CRLF、字符串型 port/tls、`cipher`↔`method`、`sni`↔`servername`、`ws-opts` 与 `ws-path` 两套写法、`vmess://base64` 的 `ps/add/id` 词汇、base64 型 `ss://` userinfo、重复条目折叠；坏条目逐条告警跳过（不整体失败），vmess / hysteria2 / tuic / wireguard 保留原类型并说明不可导入，文档上限 4 MiB / 2000 条 / base64 3 层；预览不回传凭据（`has_secret`），原 5 种订阅格式与链接形状零改动 |
 | Gen 2 增补 | v2.10.1 | 节点管理再精简 | 工具栏只保留「刷新 / ＋ 新增节点」，「重新探测 / 从 Sub-Store 导入 / JSON 导入导出」三个按钮移出（批量导入收进新增节点弹窗底部，功能不丢）；新增节点表单的 **Node Port 默认改为 3372**（Sub-Store 导入同步），删掉「内部名称 / 服务端口」两栏与「直连 · 添加一跳」链式代理卡片；「部署到 VPS」统一改名 **部署到 节点服务器**，弹窗里「协议 / 端口 / SNI」三栏（含选中配置文件后的「端口（可空） / SNI（可空）」）全部移除，端口与 SNI 一律由配置文件推断，未选文件时按默认 VLESS:443 生成最小配置 |
-| **Gen 2（当前）** | **v2.11.0** | 节点管理重设计 + 真实系统信息 | 用 UI/UX 设计引擎推导的 Dashboard/Data 风格重排节点卡（身份 → 绑定 → 资源 → 操作，保留项目蓝色 token 与 P0 无障碍门禁）；**协议配置文件绑定**贯穿卡片 / 新增 / 详情，部署脚本自动沿用；新增 `internal/hostmon` 通过 SSH **只读命令**采集 VPS 的真实 CPU / 内存 / 硬盘 / 流量（累计 + 速率），TOFU 主机指纹校验、凭据 0600 本地存储且不进仓库、密码不回显不入日志，未采集时显示「未采集」而非伪造数值；用户抽屉删「连接信息 / 设备与标签 / 内部分组 / 真实状态」，表格删两列并把 scroll-x 收敛到 1240 修复操作列挤压；新增节点弹窗删掉 Sub-Store / JSON 批量导入入口（后端 API 保留） |
+| Gen 2 增补 | v2.11.0 | 节点管理重设计 + 真实系统信息 | 用 UI/UX 设计引擎推导的 Dashboard/Data 风格重排节点卡（身份 → 绑定 → 资源 → 操作，保留项目蓝色 token 与 P0 无障碍门禁）；**协议配置文件绑定**贯穿卡片 / 新增 / 详情，部署脚本自动沿用；新增 `internal/hostmon` 通过 SSH **只读命令**采集 VPS 的真实 CPU / 内存 / 硬盘 / 流量（累计 + 速率），TOFU 主机指纹校验、凭据 0600 本地存储且不进仓库、密码不回显不入日志，未采集时显示「未采集」而非伪造数值；用户抽屉删「连接信息 / 设备与标签 / 内部分组 / 真实状态」，表格删两列并把 scroll-x 收敛到 1240 修复操作列挤压；新增节点弹窗删掉 Sub-Store / JSON 批量导入入口（后端 API 保留） |
+
+| **Gen 2（当前）** | **v2.12.0** | 节点部署（控制面 → 节点，节点主动上报） | 参考 Remnawave 的「面板生成配置、节点只跑内核」拆分，把**信息通道**换成哪吒探针模式：节点上跑 `ngg-probe`，每 10 秒把真实指标 + 节点状态 POST 到面板 `/v1/agent/report`（`X-NGG-Agent-Token`），面板**从不连入节点** —— 不需要入站管理端口、不需要 SSH 读状态，NAT 后面也能上报；`POST /api/v1/hosts/{id}/deploy` 渲染 33 KB 自包含 bash 脚本并可**在节点上真正执行**，12 个步骤（预检 / 依赖 / 内核 / 清单 / 凭据 / 配置 / 校验 / 启动 / 放通 / 探针 / CLI / 自检）逐步回传 `NGG_STEP\|OK\|FAIL\|NODE_READY` 标记，面板后台任务 + 轮询渲染真实日志；默认 VLESS + REALITY（面板侧生成 X25519 密钥对，节点用 `xray x25519 -i` 反推公钥校验），另有 VLESS-TLS / Trojan-TLS 与「档案原样写入」模式；节点侧 `/etc/ngg` + `ngg-node.service` + `ngg-probe.service` 独立单元，不碰 `/usr/local/etc/xray` 与机器上其它面板；`GET /hosts/{id}/node/status` 读探针上报（`online/offline/never`、CPU / 内存 / 磁盘 / 累计流量、单元状态 / 端口监听 / 配置指纹），探针令牌只存 SHA-256 且恒定时间比对；幂等重部署默认不轮换凭据 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
 
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.11.0`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.12.0`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。

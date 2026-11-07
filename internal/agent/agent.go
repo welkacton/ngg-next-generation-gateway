@@ -93,6 +93,32 @@ type AgentMetrics struct {
 	Note      string `json:"note,omitempty"`
 }
 
+// NodeState is the proxy-node section a probe reports when the machine also
+// runs an NGG node (模式 / 端口 / systemd 单元 / 配置指纹). It is optional and
+// purely additive: a plain metrics agent sends no node section, and the stored
+// Agent.Node stays nil instead of being filled with fabricated values.
+//
+// This is the Nezha-style contract: the node-side probe reads its own
+// /etc/ngg/node.json and pushes these facts OUT to the panel, so the panel
+// never has to dial into the machine to learn them.
+type NodeState struct {
+	NodeID      string `json:"node_id"`
+	Mode        string `json:"mode"`
+	Protocol    string `json:"protocol"`
+	Port        int    `json:"port"`
+	Unit        string `json:"unit"`
+	UnitState   string `json:"unit_state"`
+	Listening   bool   `json:"listening"`
+	ConfigPath  string `json:"config_path"`
+	ConfigSHA   string `json:"config_sha256"`
+	KernelVer   string `json:"kernel_version"`
+	CollectedAt string `json:"collected_at"`
+
+	// Error is set when the probe could not read the node at all (missing
+	// manifest, unreadable config). The panel shows it verbatim.
+	Error string `json:"error,omitempty"`
+}
+
 // AgentSample is one point of the in-memory history ring.
 type AgentSample struct {
 	SampledAt string  `json:"sampled_at"`
@@ -134,6 +160,10 @@ type Agent struct {
 	Updated  time.Time `json:"updated_at"`
 
 	Metrics *AgentMetrics `json:"metrics,omitempty"`
+
+	// Node is the node section of the last report; nil when the agent never
+	// sent one (plain metrics host) or sent none in its newest report.
+	Node *NodeState `json:"node,omitempty"`
 }
 
 // Bound reports whether the agent has ever authenticated successfully.
@@ -183,6 +213,10 @@ type AgentView struct {
 	// Metrics is nil until the agent reports for the first time. It is never
 	// substituted with a zero value.
 	Metrics *AgentMetrics `json:"metrics"`
+
+	// Node is the node section of the last report; nil when this agent has
+	// never reported one.
+	Node *NodeState `json:"node"`
 }
 
 func fmtTime(t time.Time) string {
@@ -201,6 +235,7 @@ func (a *Agent) view(now time.Time) AgentView {
 		OS: a.OS, Arch: a.Arch, Hostname: a.Hostname, AgentVersion: a.AgentVersion,
 		LastSeen: fmtTime(a.LastSeen), CreatedAt: fmtTime(a.Created), UpdatedAt: fmtTime(a.Updated),
 		Metrics: a.Metrics,
+		Node:    a.Node,
 	}
 }
 

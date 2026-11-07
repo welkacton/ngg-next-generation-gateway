@@ -22,6 +22,7 @@ import (
 	"github.com/ngg-project/ngg/internal/gateway"
 	"github.com/ngg-project/ngg/internal/hostmon"
 	"github.com/ngg-project/ngg/internal/netengine"
+	"github.com/ngg-project/ngg/internal/nodedeploy"
 	"github.com/ngg-project/ngg/internal/pipeline"
 	"github.com/ngg-project/ngg/internal/profiles"
 	"github.com/ngg-project/ngg/internal/protocols"
@@ -51,6 +52,9 @@ type Server struct {
 	subs         *subscriptionHandlers
 	subRenderer  *subscription.Renderer
 	monitor      *hostmon.Monitor
+	// 节点部署（Remnawave 风格 控制面 → 节点）：方案与脚本落盘，执行为后台任务。
+	deploy     *nodedeploy.Store
+	deployJobs *nodeDeployJobs
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -139,6 +143,8 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 	}
 	s.monitor = mon
 	mon.Start(hostMonitorInterval)
+	s.deploy = nodedeploy.NewStore(dataDir)
+	s.deployJobs = newNodeDeployJobs()
 	s.routes()
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Listen, cfg.Server.Port),
@@ -326,6 +332,12 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/hosts/export", s.handleHostExport)
 	m.HandleFunc("PUT /api/v1/hosts/import", s.handleHostImport)
 	m.HandleFunc("POST /api/v1/hosts/{id}/probe", s.handleHostProbe)
+	// 节点部署：方案 / 脚本下载 / 运行日志 / 节点实时状态
+	m.HandleFunc("GET /api/v1/hosts/{id}/deploy", s.handleNodeDeploy)
+	m.HandleFunc("POST /api/v1/hosts/{id}/deploy", s.handleNodeDeploy)
+	m.HandleFunc("GET /api/v1/hosts/{id}/deploy/script", s.handleNodeDeployScript)
+	m.HandleFunc("GET /api/v1/hosts/{id}/deploy/job", s.handleNodeDeployJob)
+	m.HandleFunc("GET /api/v1/hosts/{id}/node/status", s.handleNodeStatus)
 	m.HandleFunc("GET /api/v1/hosts/{id}/provision", s.handleHostProvision)
 	m.HandleFunc("POST /api/v1/hosts/{id}/provision", s.handleHostProvision)
 	m.HandleFunc("POST /api/v1/hosts/{id}/role", s.handleHostRole)

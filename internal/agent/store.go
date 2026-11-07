@@ -328,6 +328,9 @@ type ReportPayload struct {
 	AgentVersion string       `json:"agent_version"`
 	IntervalSec  int          `json:"interval_sec"`
 	Metrics      AgentMetrics `json:"metrics"`
+
+	// Node is optional: only probes that also run an NGG node send it.
+	Node *NodeState `json:"node,omitempty"`
 }
 
 // Report applies a metrics payload after verifying the agent token.
@@ -384,6 +387,9 @@ func (s *Store) ReportFull(p ReportPayload, token string) error {
 		m.Interfaces = []AgentInterface{}
 	}
 	a.Metrics = &m
+	// The node section is replaced wholesale, never merged: a probe that stops
+	// sending one must not leave stale facts on screen.
+	a.Node = sanitizeNode(p.Node)
 
 	s.agents[p.AgentID] = a
 	if err := s.persistLocked(); err != nil {
@@ -459,4 +465,42 @@ func firstNonEmpty(v, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// Sanitizer limits for the optional node section. A public endpoint must not be
+// able to push unbounded strings into agents.json through a forged body.
+const nodeFieldMax = 128
+
+// sanitizeNode trims and bounds every field of a reported node section. Ports
+// outside the valid range become 0 (surfaced as "unknown" by the console)
+// rather than being silently clamped to a port the node is not using.
+func sanitizeNode(n *NodeState) *NodeState {
+	if n == nil {
+		return nil
+	}
+	out := NodeState{
+		NodeID:      clipField(n.NodeID),
+		Mode:        clipField(n.Mode),
+		Protocol:    clipField(n.Protocol),
+		Unit:        clipField(n.Unit),
+		UnitState:   clipField(n.UnitState),
+		ConfigPath:  clipField(n.ConfigPath),
+		ConfigSHA:   clipField(n.ConfigSHA),
+		KernelVer:   clipField(n.KernelVer),
+		CollectedAt: clipField(n.CollectedAt),
+		Error:       clipField(n.Error),
+		Listening:   n.Listening,
+	}
+	if n.Port >= 1 && n.Port <= 65535 {
+		out.Port = n.Port
+	}
+	return &out
+}
+
+func clipField(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > nodeFieldMax {
+		return s[:nodeFieldMax]
+	}
+	return s
 }

@@ -26,6 +26,10 @@ import type {
   HostRole,
   HostStats,
   HostView,
+  NodeDeployMode,
+  NodeDeployRun,
+  NodeDeployView,
+  NodeStatusResponse,
   ProvisionProtocol,
   RemoteHost,
 } from '../api/ngg'
@@ -79,6 +83,17 @@ const MAX_CHAIN_HOPS = 8
 function flag(code: string): string {
   const c = String(code || '').toUpperCase()
   return c && c !== 'OTHER' ? c : '—'
+}
+/** 秒 → 天/小时/分钟，用于节点运行时长。 */
+function formatUptime(sec: number): string {
+  const n = Number(sec || 0)
+  if (!n) return '—'
+  const d = Math.floor(n / 86400)
+  const h = Math.floor((n % 86400) / 3600)
+  const m = Math.floor((n % 3600) / 60)
+  if (d > 0) return `${d} 天 ${h} 小时`
+  if (h > 0) return `${h} 小时 ${m} 分`
+  return `${m} 分钟`
 }
 function roleLabel(role: string): string {
   return role === 'inbound' ? '入站' : role === 'outbound' ? '出站' : '双向'
@@ -602,12 +617,20 @@ function openDeploy(h: HostView): void {
     deploySni.value = saved.endpoint.sni === 'www.bing.com' ? '' : saved.endpoint.sni
   } else {
     deployProtocol.value = 'vless'
-    deployPort.value = PROVISION_DEFAULT_PORT.vless
+    // 默认用节点登记的端口（新增节点时默认 3372）：443 往往已被网站或别家面板占用。
+    deployPort.value = h.node_port || PROVISION_DEFAULT_PORT.vless
     deploySni.value = ''
   }
   showDeploy.value = true
+  deployPlan.value = null
+  deployJob.value = null
+  nodeStatus.value = null
+  deployPanelURL.value = ''
+  stopJobPolling()
   void loadDeployProfiles()
   void loadProvision(h.id)
+  void loadDeployPlan(h.id).then(() => loadPanelURLDefault())
+  void loadNodeStatus(h.id)
 }
 
 async function generateProvision(): Promise<void> {
@@ -650,6 +673,153 @@ async function copyText(text: string, ok: string): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 节点部署（Remnawave 风格：控制面 → 节点）
+ * 面板生成方案 → 在节点上执行 → 节点装好探针后主动上报。
+ * 进度完全来自 NGG_STEP / NGG_OK / NGG_FAIL 行，状态来自探针上报。
+ * ------------------------------------------------------------------ */
+
+const DEPLOY_MODE_OPTIONS: Array<{ label: string; value: NodeDeployMode }> = [
+  { label: 'VLESS + REALITY（推荐 · 无需证书）', value: 'reality' },
+  { label: 'VLESS + TLS（自签证书）', value: 'vless-tls' },
+  { label: 'Trojan + TLS（自签证书）', value: 'trojan-tls' },
+]
+
+const deployMode = ref<NodeDeployMode>('reality')
+const deployPlan = ref<NodeDeployView | null>(null)
+const deployJob = ref<NodeDeployRun | null>(null)
+const nodeStatus = ref<NodeStatusResponse | null>(null)
+const deployStatusBusy = ref(false)
+/** 面板上报地址：节点探针 POST 的目标，必须是节点能访问到的地址。 */
+const deployPanelURL = ref('')
+let jobTimer: number | undefined
+
+const deployHasProfile = computed(() => !!deployProfileId.value)
+const deployProfileKernel = computed(() => (selectedProfile.value?.kernel ?? '').toLowerCase())
+/** 在线部署只支持 xray-core：mihomo / sing-box 档案走手动脚本。 */
+const deployKernelOk = computed(() => !deployHasProfile.value || deployProfileKernel.value === 'xray-core')
+
+const jobRunning = computed(() => deployJob.value?.state === 'running')
+const jobDone = computed(() => deployJob.value?.state === 'done')
+const jobFailed = computed(() => deployJob.value?.state === 'failed')
+
+function stopJobPolling(): void {
+  if (jobTimer !== undefined) {
+    window.clearInterval(jobTimer)
+    jobTimer = undefined
+  }
+}
+
+function startJobPolling(id: string): void {
+  stopJobPolling()
+  jobTimer = window.setInterval(() => void pollJob(id), 1500)
+}
+
+async function pollJob(id: string): Promise<void> {
+  try {
+    const run = await api.getNodeDeployJob(id)
+    if (!run || run.state === 'idle') return
+    deployJob.value = run
+    if (run.state === 'running') return
+    stopJobPolling()
+    if (run.state === 'done') {
+      window.$message?.success(`节点已就绪：${run.ready?.node_id ?? id} : ${run.ready?.port ?? ''}`)
+      void loadNodeStatus(id)
+      void refresh()
+    } else {
+      window.$message?.error(run.error || '部署失败，请查看步骤日志')
+    }
+  } catch {
+    stopJobPolling()
+  }
+}
+
+/** 读取已保存的方案；404 表示还没生成过，必须静默。 */
+async function loadDeployPlan(id: string): Promise<void> {
+  try {
+    const plan = await api.getNodeDeploy(id)
+    deployPlan.value = plan ?? null
+    if (plan?.spec?.mode && plan.spec.mode !== 'profile') deployMode.value = plan.spec.mode
+    if (plan?.spec?.panel_url) deployPanelURL.value = plan.spec.panel_url
+    if (plan?.last_run && plan.last_run.state !== 'idle') {
+      deployJob.value = plan.last_run
+      if (plan.last_run.state === 'running') startJobPolling(id)
+    }
+  } catch {
+    deployPlan.value = null
+  }
+}
+
+/**
+ * 预填面板上报地址：优先用「远程节点 → 服务设置」里的 public_url，
+ * 监听在具体 IP 上时退回 http://ip:port；0.0.0.0 不作猜测（节点连不上）。
+ */
+async function loadPanelURLDefault(): Promise<void> {
+  if (deployPanelURL.value) return
+  try {
+    const cfg = await api.getAgentServer()
+    if (cfg.public_url) {
+      deployPanelURL.value = cfg.public_url
+    } else if (cfg.listen && cfg.listen !== '0.0.0.0' && cfg.listen !== '::') {
+      deployPanelURL.value = `http://${cfg.listen}:${cfg.port}`
+    }
+  } catch {
+    // 面板端点未初始化：留空，方案里会标注「未配置上报地址」
+  }
+}
+
+async function loadNodeStatus(id: string): Promise<void> {
+  if (!id) return
+  deployStatusBusy.value = true
+  try {
+    nodeStatus.value = await api.getNodeStatus(id)
+  } catch {
+    nodeStatus.value = null
+  } finally {
+    deployStatusBusy.value = false
+  }
+}
+
+async function startNodeDeploy(execute: boolean): Promise<void> {
+  const h = deployHost.value
+  if (!h) return
+  const port = Number(deployPort.value ?? 0)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    window.$message?.warning('端口需在 1–65535')
+    return
+  }
+  if (execute && !deployKernelOk.value) {
+    window.$message?.warning('绑定的配置文件内核不是 xray-core，请改用「生成部署脚本」手动执行')
+    return
+  }
+  const payload: api.NodeDeployRequest = {
+    mode: deployHasProfile.value ? 'profile' : deployMode.value,
+    port,
+    sni: deploySni.value.trim(),
+    profile_id: deployProfileId.value ?? '',
+    panel_url: deployPanelURL.value.trim(),
+    execute,
+  }
+  const res = await run(
+    execute ? 'deploy-run' : 'deploy-plan',
+    () => api.deployNode(h.id, payload),
+    execute ? '已开始在节点服务器上执行' : '部署方案已生成',
+  )
+  if (!res) return
+  if ('job' in res) {
+    deployJob.value = res.job
+    deployPlan.value = {
+      host_id: h.id,
+      spec: res.spec,
+      params: res.params,
+      generated_at: res.spec.generated_at,
+    }
+    startJobPolling(h.id)
+    return
+  }
+  deployPlan.value = res
+}
+
 onMounted(() => {
   void refresh()
   void loadOptions()
@@ -658,6 +828,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (monitorTimer !== undefined) window.clearInterval(monitorTimer)
+  stopJobPolling()
 })
 </script>
 
@@ -1025,8 +1196,180 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- 节点主动上报：面板不连入，节点把真实状态推上来（哪吒探针同模式） -->
+        <div class="deploy-online">
+          <div class="deploy-online__head">
+            <span class="deploy-block__title">在线部署（节点主动上报 · 无需 SSH 读取）</span>
+            <NTag v-if="nodeStatus?.status === 'online'" size="tiny" type="success">探针在线</NTag>
+            <NTag v-else-if="nodeStatus?.status === 'offline'" size="tiny" type="warning">探针离线</NTag>
+            <NTag v-else-if="nodeStatus?.status === 'never'" size="tiny">未上报</NTag>
+            <NTag v-else-if="nodeStatus && !nodeStatus.installed" size="tiny">未部署</NTag>
+            <NTag v-if="jobRunning" size="tiny" type="info">部署中</NTag>
+          </div>
+          <div class="hint">
+            「部署并执行」会用已保存的 SSH 凭据在节点上跑这一次脚本（仅执行，不用它读状态）；
+            也可以只生成脚本，复制到节点上以 root 执行。脚本会装独立内核（ngg-node.service）与上报探针
+            （ngg-probe.service），不修改机器上已有的服务。之后节点每 10 秒把真实指标与节点状态推给面板
+            —— 面板从不连进来，不需要入站管理端口，节点在 NAT 后面也能上报。
+          </div>
+          <NGrid cols="1 m:3" responsive="screen" :x-gap="10" :y-gap="8" style="margin-top: 8px">
+            <NGi>
+              <div class="kv-label">传输方式</div>
+              <NSelect
+                v-model:value="deployMode"
+                :options="DEPLOY_MODE_OPTIONS"
+                :disabled="deployHasProfile"
+                size="small"
+              />
+              <div v-if="deployHasProfile" class="hint" style="margin-top: 4px">
+                已绑定配置文件，传输方式由文件内容决定（内核 {{ deployProfileKernel || '未知' }}）
+              </div>
+            </NGi>
+            <NGi>
+              <div class="kv-label">节点端口（客户端连接端口）</div>
+              <NInputNumber v-model:value="deployPort" size="small" :min="1" :max="65535" style="width: 100%" />
+              <div class="hint" style="margin-top: 4px">默认取节点登记的端口；443 常被已有网站占用</div>
+            </NGi>
+            <NGi>
+              <div class="kv-label">面板上报地址</div>
+              <NInput v-model:value="deployPanelURL" size="small" placeholder="http://面板公网IP:9191" />
+              <div class="hint" style="margin-top: 4px">
+                节点必须能访问该地址（默认取「远程节点 → 服务设置」的 public_url）；留空则节点不上报
+              </div>
+            </NGi>
+          </NGrid>
+          <NAlert v-if="!deployKernelOk" type="warning" :bordered="false" style="margin-top: 8px">
+            绑定的配置文件内核是 {{ deployProfileKernel }}，在线部署只支持 xray-core；
+            请改用下面的「生成部署脚本」手动执行。
+          </NAlert>
+          <NSpace align="center" :size="10" :wrap="true" style="margin-top: 10px">
+            <NButton
+              size="small"
+              type="primary"
+              :disabled="!deployKernelOk || jobRunning"
+              :loading="isBusy('deploy-run')"
+              @click="startNodeDeploy(true)"
+            >
+              部署并执行
+            </NButton>
+            <NButton size="small" :loading="isBusy('deploy-plan')" @click="startNodeDeploy(false)">只生成方案</NButton>
+            <NButton
+              v-if="deployPlan"
+              size="small"
+              text
+              tag="a"
+              :href="api.nodeDeployScriptUrl(deployPlan.host_id)"
+              target="_blank"
+            >
+              下载脚本
+            </NButton>
+            <span class="hint">
+              上报目标：<span class="mono">{{ deployPanelURL || '未配置' }}</span>
+            </span>
+          </NSpace>
+
+          <!-- 执行日志：全是节点输出，失败时给出原文 -->
+          <div v-if="deployJob && deployJob.state !== 'idle'" class="deploy-steps">
+            <div class="deploy-steps__head">
+              <span class="deploy-block__title">执行日志</span>
+              <NTag size="tiny" :type="jobFailed ? 'error' : jobDone ? 'success' : 'info'">
+                {{ jobFailed ? '失败' : jobDone ? '完成' : '执行中' }} · {{ deployJob.steps.length }} 步
+              </NTag>
+              <span class="hint">{{ formatTime(deployJob.started_at) }}</span>
+            </div>
+            <ol class="deploy-step-list">
+              <li v-for="s in deployJob.steps" :key="s.index" :class="`is-${s.status}`">
+                <span class="deploy-step__idx">{{ s.status === 'done' ? '✓' : s.status === 'failed' ? '✕' : s.index }}</span>
+                <span class="deploy-step__title">{{ s.title }}</span>
+                <span v-if="s.detail" class="deploy-step__detail">{{ s.detail }}</span>
+              </li>
+            </ol>
+            <div v-if="deployJob.notes?.length" class="deploy-notes-wrap">
+              <div v-for="(n, i) in deployJob.notes" :key="i" class="deploy-note">{{ n }}</div>
+            </div>
+            <div v-if="deployJob.error" class="deploy-error">{{ deployJob.error }}</div>
+            <pre v-if="jobFailed && deployJob.stdout" class="mono deploy-pre deploy-pre--small">{{ deployJob.stdout }}</pre>
+          </div>
+
+          <!-- 节点实时状态：全部来自探针最近一次上报，面板不连入节点 -->
+          <NCard v-if="nodeStatus?.installed" size="small" title="节点实时状态（探针上报）" class="deploy-status">
+            <NDescriptions
+              :column="2"
+              size="small"
+              label-placement="left"
+              :label-style="{ whiteSpace: 'nowrap' }"
+              bordered
+            >
+              <NDescriptionsItem label="上报状态">
+                <NTag
+                  size="tiny"
+                  :type="nodeStatus.status === 'online' ? 'success' : nodeStatus.status === 'offline' ? 'warning' : 'error'"
+                >
+                  {{ nodeStatus.status === 'online' ? '在线' : nodeStatus.status === 'offline' ? '离线' : '从未上报' }}
+                </NTag>
+              </NDescriptionsItem>
+              <NDescriptionsItem label="最近上报">
+                {{ nodeStatus.last_seen ? formatTime(nodeStatus.last_seen) : '—' }}
+              </NDescriptionsItem>
+              <NDescriptionsItem label="节点单元">
+                <NTag
+                  size="tiny"
+                  :type="nodeStatus.node?.unit_state === 'active' ? 'success' : 'default'"
+                >
+                  {{ nodeStatus.node?.unit_state || '未知' }}
+                </NTag>
+              </NDescriptionsItem>
+              <NDescriptionsItem label="端口监听">
+                {{ nodeStatus.node ? (nodeStatus.node.listening ? `是 · ${nodeStatus.node.port}` : '否') : '—' }}
+              </NDescriptionsItem>
+              <NDescriptionsItem label="配置指纹">
+                <span class="mono">{{ (nodeStatus.node?.config_sha256 || '').slice(0, 16) || '—' }}</span>
+              </NDescriptionsItem>
+              <NDescriptionsItem label="内核版本">
+                <span class="mono">{{ nodeStatus.node?.kernel_version || '—' }}</span>
+              </NDescriptionsItem>
+              <NDescriptionsItem label="主机" :span="2">
+                <span class="mono">{{ nodeStatus.hostname || '—' }}</span>
+                <span v-if="nodeStatus.os" class="hint">
+                  · {{ nodeStatus.os }}/{{ nodeStatus.arch }} · 探针 {{ nodeStatus.agent_version || '—' }}
+                </span>
+              </NDescriptionsItem>
+              <template v-if="nodeStatus.metrics">
+                <NDescriptionsItem label="CPU">
+                  {{ nodeStatus.metrics.cpu_pct.toFixed(1) }}%
+                  <span class="hint"> · {{ nodeStatus.metrics.cpu_cores }} 核 · load {{ nodeStatus.metrics.load1 }}</span>
+                </NDescriptionsItem>
+                <NDescriptionsItem label="内存">
+                  {{ formatBytes(nodeStatus.metrics.mem_used) }} / {{ formatBytes(nodeStatus.metrics.mem_total) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem label="累计流量">
+                  ↓ {{ formatBytes(nodeStatus.metrics.rx_bytes) }} · ↑ {{ formatBytes(nodeStatus.metrics.tx_bytes) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem label="运行时长">{{ formatUptime(nodeStatus.metrics.uptime_sec) }}</NDescriptionsItem>
+              </template>
+              <NDescriptionsItem label="上报地址" :span="2">
+                <span class="mono">{{ nodeStatus.report_url || '未配置' }}</span>
+                <span v-if="nodeStatus.agent_id" class="hint"> · 探针 {{ nodeStatus.agent_id }}</span>
+              </NDescriptionsItem>
+              <NDescriptionsItem v-if="nodeStatus.warning" label="提示" :span="2">{{ nodeStatus.warning }}</NDescriptionsItem>
+              <NDescriptionsItem v-if="nodeStatus.error" label="错误" :span="2">{{ nodeStatus.error }}</NDescriptionsItem>
+            </NDescriptions>
+            <NSpace :size="8" style="margin-top: 8px">
+              <NButton size="tiny" :loading="deployStatusBusy" @click="loadNodeStatus(deployHost?.id ?? '')">
+                刷新状态
+              </NButton>
+              <span class="hint">数据来自探针最近一次上报，面板不连入节点</span>
+            </NSpace>
+          </NCard>
+          <NAlert v-else type="info" :bordered="false" class="deploy-status">
+            {{ nodeStatus?.error || '还没有为该节点生成部署方案：先生成方案并执行一次部署' }}
+          </NAlert>
+        </div>
+
+        <div class="deploy-sep"><span>或手动执行</span></div>
+
         <NSpace align="center" :size="10" :wrap="true">
-          <NButton size="small" type="primary" :loading="isBusy('deploy-gen')" @click="generateProvision">
+          <NButton size="small" :loading="isBusy('deploy-gen')" @click="generateProvision">
             生成部署脚本
           </NButton>
           <span class="hint">目标机器：<span class="mono">{{ deployHost?.address ?? '—' }}</span></span>
@@ -1445,6 +1788,134 @@ onUnmounted(() => {
 }
 .deploy-notes li {
   margin-bottom: 2px;
+}
+
+/* ------------------------------------------------------------------ *
+ * 在线部署（控制面 → 节点）
+ * ------------------------------------------------------------------ */
+.deploy-online {
+  padding: 12px;
+  border: 1px solid #e6e8ec;
+  border-radius: 12px;
+  background: #fafbfc;
+}
+.deploy-online__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.deploy-steps {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #ececf0;
+  border-radius: 10px;
+  background: #fff;
+}
+.deploy-steps__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.deploy-step-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.deploy-step-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #3a3a3c;
+  min-width: 0;
+}
+.deploy-step__idx {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #eef0f4;
+  color: #6e6e73;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.deploy-step-list li.is-done .deploy-step__idx { background: #e3f6e9; color: #1f8a43; }
+.deploy-step-list li.is-failed .deploy-step__idx { background: #fdeaea; color: #c4342b; }
+.deploy-step-list li.is-running .deploy-step__idx { background: #e6f0fd; color: #0b63ce; }
+.deploy-step__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deploy-step__detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c4342b;
+  font-size: 11px;
+}
+.deploy-notes-wrap {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e6e8ec;
+}
+.deploy-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: #6e6e73;
+}
+.deploy-note::before {
+  content: '· ';
+  color: #b0b0b8;
+}
+.deploy-error {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fdeaea;
+  color: #a3241c;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.deploy-pre--small {
+  max-height: 200px;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.deploy-status {
+  margin-top: 10px;
+}
+.deploy-sep {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 14px 0 4px;
+  color: #a1a1a6;
+  font-size: 11px;
+}
+.deploy-sep::before,
+.deploy-sep::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #ececf0;
+}
+.deploy-sep span {
+  padding: 0 10px;
+  white-space: nowrap;
 }
 
 </style>

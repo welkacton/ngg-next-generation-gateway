@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.11.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.12.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.11.0），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.12.0），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -476,6 +476,10 @@ wscat -c "ws://127.0.0.1:9090/api/v1/ws?token=$TOKEN"
 | `POST` | `/api/v1/hosts/{id}/probe` | 单主机真实 TCP 探测 |
 | `POST` | `/api/v1/hosts/{id}/role` | body `{"role":"outbound"}`，任意切换入站 / 出站 / 双向 |
 | `GET` / `PUT` / `DELETE` | `/api/v1/hosts/{id}` | 读取 / 修改 / 删除 |
+| `GET` / `POST` | `/api/v1/hosts/{id}/deploy` | 读取 / 生成节点部署方案（`execute=true` 时 202 + job，在节点上真正执行） |
+| `GET` | `/api/v1/hosts/{id}/deploy/script` | 下载部署脚本（`text/x-shellscript`，含节点凭据） |
+| `GET` | `/api/v1/hosts/{id}/deploy/job` | 轮询执行进度（`NGG_STEP/OK/FAIL/NOTE/NODE_READY` 解析结果） |
+| `GET` | `/api/v1/hosts/{id}/node/status` | 节点实时状态，**读探针上报**（不 SSH）：`status` / `last_seen` / `metrics` / `node` |
 | `GET` | `/api/v1/hosts/export` | 导出全量 JSON |
 | `PUT` | `/api/v1/hosts/import` | 全量替换，任一条校验失败则整个节点库保持不变 |
 
