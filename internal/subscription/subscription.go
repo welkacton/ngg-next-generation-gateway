@@ -1004,13 +1004,13 @@ func (r *Renderer) renderSocks(n node) (string, []string, error) {
 // being silently dropped.
 func (r *Renderer) renderSubstore(u users.User, n node, warns []string) (string, []string, error) {
 	sn := substore.Node{
-		Name:       clashProxyName(u, n),
-		Server:     n.Address,
-		Port:       n.Port,
-		Protocol:   n.Protocol,
-		TLS:        n.TLS,
-		SNI:        n.SNI,
-		Transport:  n.Transport,
+		Name:      clashProxyName(u, n),
+		Server:    n.Address,
+		Port:      n.Port,
+		Protocol:  n.Protocol,
+		TLS:       n.TLS,
+		SNI:       n.SNI,
+		Transport: n.Transport,
 	}
 	if n.Protocol == users.ProtocolShadowsocks {
 		method, password, ok := splitShadowsocksCredential(n)
