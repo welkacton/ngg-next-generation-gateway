@@ -197,7 +197,18 @@ func (s *Server) handleNodeDeploy(w http.ResponseWriter, r *http.Request) {
 		if spec.NodePort == 2222 {
 			portHint = nodePort2222Warning
 		}
-		view.Warning = joinWarnings(portHint, profileFileWarning(spec.ProfileContent))
+		// A deployed node is also an egress candidate. Persist its share link so
+		// the chain page can turn it into a proxy without asking the operator to
+		// retype UUID / REALITY keys. Never overwrite a link that is already set:
+		// the operator may have pointed the host somewhere else on purpose.
+		linkHint := ""
+		if uri := spec.ShareURI(); uri != "" && strings.TrimSpace(host.ProxyURL) == "" {
+			host.ProxyURL = uri
+			if _, uerr := reg.Update(host.ID, host); uerr != nil {
+				linkHint = "节点已生成方案，但出口分享链接未能写回节点记录：" + uerr.Error()
+			}
+		}
+		view.Warning = joinWarnings(portHint, profileFileWarning(spec.ProfileContent), linkHint)
 		writeJSON(w, http.StatusOK, view)
 
 	case http.MethodDelete:

@@ -352,3 +352,23 @@ shell 变量 `${NODE_DIR}`，而脚本里没有这个变量、又开着 `set -u`
 
 > 旧单元与新 API 单元同名（`ngg-node.service`），修复后 `cat >` 会直接覆盖，`daemon-reload` +
 > `restart` 即可把 :3372 的 Xray 换成 :2244 的 ngg-node。
+
+
+---
+
+## 14. v2.13.5 · 部署即产出可用的出口链接
+
+需求是「新增节点 → 部署 → 把出口流量导到那台服务器」。此前部署方案只在弹窗里显示客户端参数，
+节点记录里的 `proxy_url` 仍是空的；链路编排的 `proxyFor()` 虽然有 `ParseShare` 分支，却没有链接可解析，
+于是 REALITY 的 `pbk` / `sid` / `sni` 无从获得，出口渲染不出来。
+
+`POST /hosts/{id}/deploy` 成功后现在会：
+
+- 用 `Spec.ShareURI()` 生成该节点的分享链接（REALITY → `vless://…&security=reality&pbk=…&sid=…`；
+  TLS → `vless://…&allowInsecure=1`；Trojan → `trojan://…`）；
+- 仅在主机记录的 `proxy_url` **为空**时写入（不覆盖操作者手工设置的链接），
+  写回失败会作为 warning 显示在弹窗里。
+
+之后「链路编排 → 出口」勾选这台节点、内核选 mihomo，`proxyFor()` 就能通过
+`ParseShare()` 得到完整参数并渲染成代理；xray-core / sing-box 仍是骨架（节点代理转译未接入），
+这一点没有变化。
