@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.9.0
+### 🏷️ Generation 2 / 第二代 · Release v2.10.0
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -28,18 +28,19 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.5.0 | 接管全局 + 用户管理 | 系统更新去掉 GitHub Token，公开仓库自动检查/下载/应用；「网络引擎」改名**接管全局**并移入配置引擎（DNS 配置下方），新增 Windows 系统代理一键接管与解除（真实写 HKCU/Internet Settings 并广播，解除恢复原代理）、TUN 真实能力检测（管理员 / wintun.dll / 已装虚拟网卡，无能力时如实说明不伪造网卡）；**删除多租户**，在出口节点下新增**用户管理**（统计条 + 用户表 + 详情抽屉，Active/Expired/Limited/Disabled 由 enabled/到期/配额实时推导，用量只由数据面累加）；修复规则集与版本列表的长文本覆盖「操作」列，并加全局单元格裁切防御 |
 | Gen 2 增补 | v2.6.0 | 登录门禁 + 链路编排 + 真 TUN | 新增单管理员登录：首次打开必须手动创建账号（Argon2id / HttpOnly 会话 / 失败锁定），之后只有登录窗口，浏览器不再保存任何 API Token；配置引擎新增**链路编排**（协议 → 入口 → 规则 → DNS → 出口 → 用户 六段串联，真实校验、渲染 mihomo 配置、原生校验后热替换、SOCKS5 端到端真连测试），各二级页加入链路导航条；Windows **TUN 虚拟网卡彻底跑通**：自动下载并 SHA-256 + Authenticode 双重校验官方签名 wintun.dll，由 NGG 独占创建网卡并用 gVisor 用户态协议栈把 TCP 流量接入统一调度器，可选接管默认路由 |
 | Gen 2 增补 | v2.6.4 | 规则集 / 接管全局 / DNS / 节点 / 链路编排 / 极简风 | 在 v2.6.3（登录门禁、链路编排、真 TUN、主机控制台、网络概览）之上：规则配置支持 GitHub 来源自定义增删、执行内核下拉、规则单条/多选/全选/全部删除、按三内核官方语法可视化新增规则集；接管全局状态可读化 + 八项组件逐项开关 + 默认内核可选；DNS 按三内核官方语法重布局；节点新增配置文件、采集数据、密钥配对、连通探测；链路承载内核显示全部内核；全站统一关闭说明文字层；网络概览增加组件状态、引擎启停、配置计数与快捷跳转 |
-| Gen 2 增补 | v2.7.1 | 总控启用 / 内核可靠性 / VPS 节点 / 用户订阅 | 总控「应用接管」改为一步「保存并接管」，不再因 master.enabled=false 空转；内核启动增加预检（`<binary> version`）与 3 秒快速失败，崩溃提示改为 `core.state` 且去重，端口与配置漂移时自动校准（备份 + 原生校验），内核管理新增诊断面板（二进制 / 版本 / 配置 / 端口占用 / 日志）；节点新增「部署到 VPS」一键脚本（VLESS / Trojan / Shadowsocks）；用户管理可绑定节点 + 协议 + 规则集 + DNS，生成 Clash / Surge / sing-box / v2ray / SOCKS5 五种订阅链接。
+| Gen 2 增补 | v2.7.1 | 总控启用 / 内核可靠性 / VPS 节点 / 用户订阅 | 总控「应用接管」改为一步「保存并接管」，不再因 master.enabled=false 空转；内核启动增加预检（`<binary> version`）与 3 秒快速失败，崩溃提示改为 `core.state` 且去重，端口与配置漂移时自动校准（备份 + 原生校验），内核管理新增诊断面板（二进制 / 版本 / 配置 / 端口占用 / 日志）；节点新增「部署到 VPS」一键脚本（VLESS / Trojan / Shadowsocks）；用户管理可绑定节点 + 协议 + 规则集 + DNS，生成 Clash / Surge / sing-box / v2ray / SOCKS5 五种订阅链接（v2.10.0 起追加 Sub-Store）。
 | Gen 2 增补 | v2.7.2 | 控制中心：网卡 → 全量接管 → WAN 出口 | 把配置引擎的「接管全局」与网关中心的「总控设置」合并为 **网关中心 → 控制中心**（`/gateway/master`），按固定顺序编排：① 启动 NGG 虚拟网卡（TUN 默认名由 `ngg0` 改为 **NGG**，网卡名下拉**自动识别**本机已创建的虚拟网卡并可手输，旧网卡会在启动时清理其默认路由）② 强制接管全部网卡的全部流量（接口优先级 + 默认路由，`metric=0` 自动映射为 1，避免被 netsh 当作 automatic 而接管失败）③ WAN 出口选择物理网卡走本地运营商（`network.egress.interface` **即时生效**，无需重启引擎，同时回写 WAN 接口）；新增 `GET /gateway/control`、`POST /gateway/control/start|stop`、`GET /network/adapters`（含虚拟网卡识别与默认出口标记）；接管失败时 `master.enabled` 保持 false，不谎报已接管；原「接管全局」页面收敛为「高级诊断」（运行状态 / 会话 / 自检 / 原始配置） |
 | Gen 2 增补 | v2.7.4 | 修复 TUN 只收不发 + 紧凑流量面板 | **根因修复**：Windows TUN 的写回协程用 `channel.Endpoint.Read()`（非阻塞，空队列立即返回 nil），启动瞬间就退出，导致网卡只收不发（「已发送 16 MB / 已接收 0」、浏览器超时）。改为 `ReadContext` 后 TCP/UDP 回包真实写回网卡，并新增注入真实 IP 包的数据面回归测试（旧代码必失败）；TUN 内 DNS 改走引擎固定网卡的出口拨号器，避免接管默认路由后 DNS 查询绕回自身形成环路；**接管幂等**：`netsh add route` 返回「对象已存在」不再判定为失败（撤销时「找不到元素」同样按成功处理），「一键启动」不会因路由已存在而中断；**流量面板**按需求收紧（速率区 18px、迷你图 20px、趋势图固定 148px），坐标轴整轴统一单位并支持小数，不再出现「1 B/s / 1 B/s / 1 B/s」重复刻度；`/network/metrics/history` 新增 `source/tun_open/tun_bytes_*/tun_rate_*`，虚拟网卡在线时图表与速率直接读取**网卡级真实收发字节**（整机流量），未创建时回落到会话计数，界面明确标注数据源；**速率与趋势改为 1:1 两等分短卡**（各 50%、高 208px、画布 118px）；**发布收敛为 Windows 独占**：工作流改为 `windows-latest` 单作业，只产出 `NGG-Setup-*.exe` / `NGG-Core-*.exe` / `NGG-Agent-*.exe` 与 `SHA256SUMS`，不再构建 Linux/macOS/FreeBSD，也不再产出 zip/tar.gz，发布前一旦发现非 `.exe` 资产即中止 |
 | Gen 2 增补 | v2.7.5 | 数据面性能与丢包归因 | **UDP 不再静默丢弃**：TUN 里的非 53 UDP（QUIC / HTTP-3）改为用户态双向中继（空闲 90s 回收），只有需要代理的 UDP 才立即关闭——旧实现让每个 QUIC 流空占 30 秒 endpoint，浏览器因此等 QUIC 超时，表现为「延迟高、丢包」；**丢弃计数不再重复累加**（dispatcher 与 reject 各记一次导致显示约两倍），新增 `drop_reasons` 按原因拆解、`udp_flows` 统计真实中继流，界面在「连接与策略」直接列出直连失败 / 无可用内核 / 规则拦截等；**网络组件卡收敛为 4 个真实组件**（Ingress / DNS / TUN / Egress，带说明与状态），删除与「统一网络引擎 → 安全策略」重复的 4 条策略行；状态徽标可点击刷新，启动 / 停止改为真实按钮并按引擎状态禁用 |标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
 | Gen 2 增补 | v2.8.0 | 节点管理合并 + 绑定配置文件部署 | **入口节点与出口节点合并为「节点管理」**（`/nodes`，菜单位于协议配置正下方，角色变成同一份节点库上的字段，旧地址 `/inbound` `/outbound` 301 到 `/nodes`）；「新增节点（任意 VPS / 电脑 / 软路由）」统一改名 **新增节点**；**部署 VPS 可绑定「协议配置」里的配置文件**：`POST /hosts/{id}/provision` 接受 `profile_id`，脚本安装档案对应内核（mihomo / sing-box / xray-core）并把渲染后的内容原样写入，端口与 SNI 缺省时从文件推断，启动前先跑内核自带校验；删除节点详情里与协议配置 / 网络概览重复的「配置文件 / 采集数据 / 密钥配对 / 连接测试」四张卡 |
 | Gen 2 增补 | v2.8.1 | 节点详情只留有用信息 | 节点详情抽屉再精简：删除 **流量与计费**（倍率 / 提供商 / 跟踪流量，本产品未启用计费）、**核心配置**（档案绑定已由「部署到 VPS」承担）、**链式代理**（链路编排里已有出口顺序）；标签与备注保留为独立的「标签与备注」卡，探测结果改为 可达 / 延迟 / 目标 键值展示 |
 | Gen 2 增补 | v2.8.2 | 节点详情重排 | 详情抽屉按需重排为单列表单（宽 580px）：删除 **IP 地址**、**标签与备注**、**Secret Key / 代理 URL / 协议 / 插件**；保留「角色与状态」+「节点信息」两段，在线状态与延迟移到抽屉标题，节点 ID / 创建时间 / 探测目标收进底部一行元信息 |
-| **Gen 2（当前）** | **v2.9.0** | 链路编排重做 | 六张链路大卡改成一行可点的六段状态条（绿/黄/红点，点任意一段跳对应页面）；参数从平铺 11 个字段改为 **1 → 6 编号步骤**（协议 / 入口 / 规则 / DNS / 出口 / 用户），每步标题带一句「做什么」+ 跳转，该段的阻断原因直接红字显示在步骤下方；右侧收敛为「执行」四行（校验 / 生成 / 应用 / 连通）+ 折叠的配置预览 + 代理顺序；删除底部重复的「待处理提示」卡 |
+| Gen 2 增补 | v2.9.0 | 链路编排重做 | 六张链路大卡改成一行可点的六段状态条（绿/黄/红点，点任意一段跳对应页面）；参数从平铺 11 个字段改为 **1 → 6 编号步骤**（协议 / 入口 / 规则 / DNS / 出口 / 用户），每步标题带一句「做什么」+ 跳转，该段的阻断原因直接红字显示在步骤下方；右侧收敛为「执行」四行（校验 / 生成 / 应用 / 连通）+ 折叠的配置预览 + 代理顺序；删除底部重复的「待处理提示」卡 |
+| **Gen 2（当前）** | **v2.10.0** | Sub-Store 互通 | 订阅从 5 种格式扩到 **6 种**：新增 `target=substore`，正文就是 Sub-Store 自己 `target=json` 的 plain JSON（proxy 对象数组），把它填进 Sub-Store 的「订阅」即可由其转换成 QX / Loon / Stash / Egern 等格式；反方向新增 `internal/substore` 解析包与 `POST /api/v1/substore/parse|import`，节点管理加「从 Sub-Store 导入」：兼容 plain JSON / Clash-mihomo YAML / base64 订阅 / 节点链接，顺带处理 JSON5 注释与尾逗号、BOM+CRLF、字符串型 port/tls、`cipher`↔`method`、`sni`↔`servername`、`ws-opts` 与 `ws-path` 两套写法、`vmess://base64` 的 `ps/add/id` 词汇、base64 型 `ss://` userinfo、重复条目折叠；坏条目逐条告警跳过（不整体失败），vmess / hysteria2 / tuic / wireguard 保留原类型并说明不可导入，文档上限 4 MiB / 2000 条 / base64 3 层；预览不回传凭据（`has_secret`），原 5 种订阅格式与链接形状零改动 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
 
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.9.0`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.10.0`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -249,6 +250,7 @@ installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、�
 | `docs/17-v267-features.md` | **多 WAN / 企业网关 DNS / 路由器密度**：6 口 WAN（本地 / 国际代理意图）、独立网关 DNS、网关页与概览重排 |
 | `docs/18-v270-features.md` | **远程出口节点 / 网关总控 / 客户端接入**：Agent 插件采集系统指标、链式代理、虚拟网卡接管与智能分流、iPhone / Windows / Mac 客户端配置与订阅 |
 | `docs/19-v271-features.md` | **总控启用 / 内核可靠性 / VPS 节点 / 用户订阅**：预检与端口校准、诊断面板、VPS 部署脚本、五种订阅链接 |
+| `docs/20-v2100-substore.md` | **Sub-Store 互通**：`target=substore` 输出、`/substore/parse|import` 输入、格式差异与异常处理清单、API 契约 |
 | `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
 | `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 

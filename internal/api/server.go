@@ -315,6 +315,10 @@ func (s *Server) routes() {
 	m.HandleFunc("PUT /api/v1/hosts/{id}", s.handleHostByID)
 	m.HandleFunc("DELETE /api/v1/hosts/{id}", s.handleHostByID)
 
+	// 配置引擎 · Sub-Store 互通：解析对方导出的订阅，并把可识别的节点登记进来
+	m.HandleFunc("POST /api/v1/substore/parse", s.handleSubStoreParse)
+	m.HandleFunc("POST /api/v1/substore/import", s.handleSubStoreImport)
+
 	// 配置引擎 · 用户管理（本地账号目录，替代已移除的多租户）
 	m.HandleFunc("GET /api/v1/users", s.handleUsers)
 	m.HandleFunc("POST /api/v1/users", s.handleUsers)

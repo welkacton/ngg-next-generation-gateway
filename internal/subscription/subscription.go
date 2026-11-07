@@ -1,6 +1,6 @@
-// Package subscription renders one user's client configuration for the five
+// Package subscription renders one user's client configuration for the six
 // subscription formats the console offers (Clash / Surge / sing-box / v2rayN /
-// plain SOCKS).
+// plain SOCKS / Sub-Store plain JSON).
 //
 // A subscription is a binding, not a template: user → node (an entry of the
 // host registry) → protocol → rule sets → DNS policy. Every field comes from a
@@ -32,20 +32,24 @@ import (
 	"github.com/ngg-project/ngg/internal/gateway"
 	"github.com/ngg-project/ngg/internal/hosts"
 	"github.com/ngg-project/ngg/internal/rulesets"
+	"github.com/ngg-project/ngg/internal/substore"
 	"github.com/ngg-project/ngg/internal/users"
 )
 
 // Target names accepted by RenderToken / Links.
 const (
-	TargetClash   = "clash"
-	TargetSurge   = "surge"
-	TargetSingbox = "singbox"
-	TargetV2ray   = "v2ray"
-	TargetSocks   = "socks"
+	TargetClash    = "clash"
+	TargetSurge    = "surge"
+	TargetSingbox  = "singbox"
+	TargetV2ray    = "v2ray"
+	TargetSocks    = "socks"
+	TargetSubstore = "substore"
 )
 
-// Targets is the canonical order used by the UI and by Build.
-var Targets = []string{TargetClash, TargetSurge, TargetSingbox, TargetV2ray, TargetSocks}
+// Targets is the canonical order used by the UI and by Build. Sub-Store comes
+// last: it is the format an operator adds to a subscription manager, not one a
+// device imports directly.
+var Targets = []string{TargetClash, TargetSurge, TargetSingbox, TargetV2ray, TargetSocks, TargetSubstore}
 
 func ValidTarget(t string) bool {
 	for _, x := range Targets {
@@ -60,7 +64,7 @@ func ValidTarget(t string) bool {
 // plain text except sing-box, which is JSON by definition.
 func ContentTypeFor(target string) string {
 	switch target {
-	case TargetSingbox:
+	case TargetSingbox, TargetSubstore:
 		return "application/json; charset=utf-8"
 	case TargetClash:
 		return "text/yaml; charset=utf-8"
@@ -115,13 +119,14 @@ func New(o Options) *Renderer {
 	return &Renderer{opts: o}
 }
 
-// Links carries the five subscription URLs of one user.
+// Links carries the six subscription URLs of one user.
 type Links struct {
-	Clash   string `json:"clash"`
-	Surge   string `json:"surge"`
-	Singbox string `json:"singbox"`
-	V2ray   string `json:"v2ray"`
-	Socks   string `json:"socks"`
+	Clash    string `json:"clash"`
+	Surge    string `json:"surge"`
+	Singbox  string `json:"singbox"`
+	V2ray    string `json:"v2ray"`
+	Socks    string `json:"socks"`
+	Substore string `json:"substore"`
 }
 
 // Payload is everything the console needs to render the subscription drawer.
@@ -260,6 +265,8 @@ func setLink(l *Links, target, v string) {
 		l.V2ray = v
 	case TargetSocks:
 		l.Socks = v
+	case TargetSubstore:
+		l.Substore = v
 	}
 }
 
@@ -277,6 +284,8 @@ func (p Payload) LinksFor(target string) string {
 		return p.Links.V2ray
 	case TargetSocks:
 		return p.Links.Socks
+	case TargetSubstore:
+		return p.Links.Substore
 	}
 	return ""
 }
@@ -464,6 +473,8 @@ func (r *Renderer) render(u users.User, n node, target string) (string, []string
 		return r.renderV2ray(u, n)
 	case TargetSocks:
 		return r.renderSocks(n)
+	case TargetSubstore:
+		return r.renderSubstore(u, n, setWarnings)
 	default:
 		return "", nil, fmt.Errorf("%w: %q", ErrUnknownTarget, target)
 	}
@@ -979,6 +990,43 @@ func (r *Renderer) renderSocks(n node) (string, []string, error) {
 		warnings = append(warnings, "节点没有凭据：SOCKS 行中的用户名 / 密码为空")
 	}
 	return fmt.Sprintf("%s:%d:%s:%s\n", n.Address, n.Port, user, pass), warnings, nil
+}
+
+// --- Sub-Store plain JSON ------------------------------------------
+
+// renderSubstore emits the document Sub-Store ingests: a plain JSON array of
+// proxy objects using its normalized key names (the shape of its own
+// `target=json` output). Sub-Store accepts that as a "Clash Proxy JSON" source,
+// so the link can be added to a Sub-Store subscription with no conversion.
+//
+// The format describes nodes and nothing else: rules and DNS live in
+// Sub-Store's own operator chain, so they are reported as a warning instead of
+// being silently dropped.
+func (r *Renderer) renderSubstore(u users.User, n node, warns []string) (string, []string, error) {
+	sn := substore.Node{
+		Name:       clashProxyName(u, n),
+		Server:     n.Address,
+		Port:       n.Port,
+		Protocol:   n.Protocol,
+		TLS:        n.TLS,
+		SNI:        n.SNI,
+		Transport:  n.Transport,
+	}
+	if n.Protocol == users.ProtocolShadowsocks {
+		method, password, ok := splitShadowsocksCredential(n)
+		if !ok {
+			warns = append(warns, "节点凭据未携带加密方式（期望 method:password），已按 aes-256-gcm 渲染，请核对节点实际加密方式")
+		}
+		sn.Method, sn.Credential = method, password
+	} else {
+		sn.Credential = n.Credential
+	}
+	body, err := substore.Render(sn)
+	if err != nil {
+		return "", nil, err
+	}
+	warns = append(warns, "Sub-Store 格式只包含节点本身：规则分流与 DNS 请在 Sub-Store 的脚本操作中配置，NGG 的规则集引用不会随此格式传递")
+	return string(body), warns, nil
 }
 
 // ------------------------------------------------------------------ *

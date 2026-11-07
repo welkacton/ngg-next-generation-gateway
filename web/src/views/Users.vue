@@ -305,6 +305,7 @@ const TARGETS: TargetSpec[] = [
   { key: 'singbox', label: 'sing-box', ext: '.json' },
   { key: 'v2ray', label: 'v2rayN', ext: '.txt' },
   { key: 'socks', label: 'SOCKS5', ext: '.txt' },
+  { key: 'substore', label: 'Sub-Store', ext: '.json' },
 ]
 
 const subWarnings = computed<string[]>(() => sub.value?.warnings ?? [])
@@ -758,6 +759,11 @@ onMounted(refresh)
               <NButton size="tiny" :disabled="!row.link" @click="copyText(row.link, '订阅链接已复制')">复制链接</NButton>
               <NButton size="tiny" :disabled="!row.link" @click="downloadTarget(row)">下载配置</NButton>
             </NSpace>
+          </div>
+          <div class="hint" style="margin-top: 10px">
+            Sub-Store 链接返回的是它自己的 plain JSON（节点数组），在 Sub-Store
+            新建「订阅」时把地址填进去即可，它会把该节点再转换成 QX / Loon / Stash / Egern 等格式。
+            该格式只带节点，DNS 与规则请在 Sub-Store 的脚本操作里配置。
           </div>
         </NCard>
       </NDrawerContent>

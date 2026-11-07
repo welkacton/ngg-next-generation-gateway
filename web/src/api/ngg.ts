@@ -2439,7 +2439,7 @@ export const provisionHost = (
   },
 ) => post<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`, payload)
 
-export type SubscriptionTarget = 'clash' | 'surge' | 'singbox' | 'v2ray' | 'socks'
+export type SubscriptionTarget = 'clash' | 'surge' | 'singbox' | 'v2ray' | 'socks' | 'substore'
 
 export interface UserSubscription {
   user_id: string
@@ -2468,6 +2468,67 @@ export const saveUserSubscription = (
 ) => put<UserSubscription>(`/users/${encodeURIComponent(id)}/subscription`, payload)
 export const rotateUserSubscription = (id: string) =>
   post<UserSubscription>(`/users/${encodeURIComponent(id)}/subscription/rotate`)
+
+/* ------------------------------------------------------------------ *
+ * Sub-Store 互通 —— 解析对方导出的订阅，把可识别的节点登记为远程主机
+ * ------------------------------------------------------------------ */
+
+/** 一条可导入的节点预览。凭据不回传，只报告是否存在。 */
+export interface SubStoreProxy {
+  name: string
+  type: string
+  raw_type?: string
+  server: string
+  port: number
+  method?: string
+  tls?: boolean
+  sni?: string
+  transport?: string
+  path?: string
+  host?: string
+  udp?: boolean
+  has_secret: boolean
+}
+
+/** 导入后会创建的节点（预览，不含凭据）。 */
+export interface SubStoreDraft {
+  id: string
+  name: string
+  address: string
+  svc_port: number
+  protocol: string
+  role: string
+  note: string
+}
+
+export type SubStoreFormat = 'json' | 'yaml' | 'base64' | 'uri'
+
+export interface SubStoreResult {
+  dry_run: boolean
+  format: SubStoreFormat | string
+  source: 'text' | 'url' | string
+  bytes: number
+  parsed: number
+  skipped: number
+  hosts: SubStoreDraft[]
+  failed: string[]
+  warnings: string[]
+}
+
+export interface SubStoreRequest {
+  text?: string
+  url?: string
+  role?: HostRole
+  dry_run?: boolean
+}
+
+/** 只解析不落库：返回识别到的节点与全部告警。 */
+export const parseSubStore = (payload: SubStoreRequest) =>
+  post<SubStoreResult>('/substore/parse', payload)
+
+/** 解析并登记节点；dry_run 为 true 时只返回预览。 */
+export const importSubStore = (payload: SubStoreRequest) =>
+  post<SubStoreResult>('/substore/import', payload)
 
 /* ------------------------------------------------------------------ *
  * 控制中心 /gateway/control —— 网卡 → 全量接管 → WAN 出口

@@ -33,7 +33,7 @@ import type {
 } from '../api/ngg'
 import client from '../api/client'
 import { useApiAction } from '../composables/useApi'
-import { formatBytes, formatTime, prettyJson } from '../utils/format'
+import { formatBytes, formatTime } from '../utils/format'
 
 const props = defineProps<{
   role: HostRole | 'all'
@@ -249,49 +249,71 @@ const tagInput = ref('')
 const revealSecret = ref(false)
 
 /* ------------------------------------------------------------------ *
- * v2.3.0 节点能力：配置文件 / 采集数据 / 密钥配对 / 连接测试
- * 全部数值来自真实后端接口，密钥只在页面内展示、不落盘不写日志。
+ * Sub-Store 导入：粘贴对方的导出内容或填订阅地址，先预览再落库。
+ * 凭据只在后端过一遍（预览接口不回传），前端拿到的只有节点元信息。
  * ------------------------------------------------------------------ */
-const selectedHostId = ref('')
-const hostOptions = computed(() =>
-  hosts.value.map((h) => ({ label: `${h.name || h.id} (${h.id})`, value: h.id })),
-)
-const inboundHostOptions = computed(() =>
-  hosts.value
-    .filter((h) => h.role === 'inbound' || h.role === 'both')
-    .map((h) => ({ label: `${h.name || h.id} (${h.id})`, value: h.id })),
-)
-const outboundHostOptions = computed(() =>
-  hosts.value
-    .filter((h) => h.role === 'outbound' || h.role === 'both')
-    .map((h) => ({ label: `${h.name || h.id} (${h.id})`, value: h.id })),
-)
-const KERNEL_OPTIONS = [
-  { label: 'Mihomo', value: 'mihomo' },
-  { label: 'Xray-core', value: 'xray-core' },
-  { label: 'sing-box', value: 'sing-box' },
-]
-const KIND_OPTIONS = [
-  { label: 'WireGuard', value: 'wireguard' },
-  { label: 'UUID', value: 'uuid' },
-  { label: 'Password', value: 'password' },
-]
-const FORMAT_OPTIONS = [
-  { label: 'JSON', value: 'json' },
-  { label: 'YAML', value: 'yaml' },
-]
+const showSubStore = ref(false)
+const ssMode = ref<'url' | 'text'>('url')
+const ssURL = ref('')
+const ssText = ref('')
+const ssRole = ref<HostRole>(defaultRole())
+const ssResult = ref<api.SubStoreResult | null>(null)
 
-const configCoreId = ref('sing-box')
-const configFileText = ref('')
-const configFileFormat = ref('json')
-const configFileResult = ref<api.NodeConfigFileResult | null>(null)
-const nodeMetrics = ref<api.NodeMetrics | null>(null)
-const keyKind = ref('wireguard')
-const keyPair = ref<api.NodeKeyPair | null>(null)
-const pairInboundId = ref('')
-const pairOutboundId = ref('')
-const pairResult = ref<api.NodePairResult | null>(null)
-const nodeProbeResult = ref<api.NodeProbeResult | null>(null)
+/** 告警可能很多（每条跳过都有原因），抽屉里只展示前 12 条。 */
+const SS_WARNING_LIMIT = 12
+const ssWarnings = computed<string[]>(() => {
+  const all = ssResult.value?.warnings ?? []
+  return all.length > SS_WARNING_LIMIT
+    ? [...all.slice(0, SS_WARNING_LIMIT), `……还有 ${all.length - SS_WARNING_LIMIT} 条告警`]
+    : all
+})
+
+function openSubStore(): void {
+  ssMode.value = 'url'
+  ssURL.value = ''
+  ssText.value = ''
+  ssRole.value = defaultRole()
+  ssResult.value = null
+  showSubStore.value = true
+}
+
+function ssInputMissing(): boolean {
+  if (ssMode.value === 'text') {
+    if (!ssText.value.trim()) {
+      window.$message?.warning('请先粘贴 Sub-Store 配置内容')
+      return true
+    }
+    return false
+  }
+  if (!ssURL.value.trim()) {
+    window.$message?.warning('请先填写订阅地址')
+    return true
+  }
+  return false
+}
+
+function ssPayload(dryRun: boolean): api.SubStoreRequest {
+  const payload: api.SubStoreRequest = { role: ssRole.value, dry_run: dryRun }
+  if (ssMode.value === 'text') payload.text = ssText.value
+  else payload.url = ssURL.value.trim()
+  return payload
+}
+
+async function previewSubStore(): Promise<void> {
+  if (ssInputMissing()) return
+  const res = await run('ss-preview', () => api.parseSubStore(ssPayload(true)))
+  if (res) ssResult.value = res
+}
+
+async function commitSubStore(): Promise<void> {
+  if (ssInputMissing()) return
+  const res = await run('ss-import', () => api.importSubStore(ssPayload(false)))
+  if (!res) return
+  ssResult.value = res
+  window.$message?.success(`已导入 ${res.hosts.length} 个节点`)
+  await refresh()
+}
+
 
 /** 网络引擎未启动时，0 字节不是「真实流量」，应如实显示未采集。 */
 const hasMetrics = computed(() => metrics.value?.network_running === true)
@@ -361,7 +383,6 @@ async function createHost() {
 
 function openDetail(h: HostView) {
   editingId.value = h.id
-  selectedHostId.value = h.id
   form.value = toForm(h)
   revealSecret.value = false
   newIP.value = ''
@@ -647,90 +668,6 @@ async function copyText(text: string, ok: string): Promise<void> {
   }
 }
 
-/* ------------------------------------------------------------------ *
- * 节点能力操作
- * ------------------------------------------------------------------ */
-function requireHostId(): string | null {
-  if (!selectedHostId.value) {
-    window.$message?.warning('请先选择节点')
-    return null
-  }
-  return selectedHostId.value
-}
-
-/** getConfig 读的是内核当前配置，不是该节点已保存的配置文件，按钮文字已如实标明。 */
-async function loadConfigFile() {
-  const d = await run('cfgfile-load', () => api.getConfig(configCoreId.value))
-  if (d) {
-    configFileText.value = d.content ?? ''
-    const ext = (d.path || '').split('.').pop()?.toLowerCase()
-    if (ext === 'yaml' || ext === 'yml') configFileFormat.value = 'yaml'
-    else if (ext === 'json') configFileFormat.value = 'json'
-  }
-}
-
-async function saveConfigFile() {
-  const id = requireHostId()
-  if (!id) return
-  const r = await run(
-    'cfgfile-save',
-    () => api.saveNodeConfigFile(id, { content: configFileText.value, format: configFileFormat.value }),
-    '节点配置文件已保存',
-  )
-  if (r) configFileResult.value = r
-}
-
-async function refreshNodeMetrics() {
-  const id = requireHostId()
-  if (!id) return
-  const r = await run('node-metrics', () => api.getNodeMetrics(id))
-  if (r) nodeMetrics.value = r
-}
-
-async function generateKeys() {
-  const r = await run('keys-gen', () =>
-    api.generateNodeKeys({ kind: keyKind.value as 'wireguard' | 'uuid' | 'password' }),
-  )
-  if (r) keyPair.value = r
-}
-
-async function copyKeys() {
-  if (!keyPair.value) return
-  try {
-    await navigator.clipboard.writeText(prettyJson(keyPair.value))
-    window.$message?.success('密钥已复制')
-  } catch {
-    window.$message?.warning('浏览器未授予剪贴板权限')
-  }
-}
-
-async function pairKeys() {
-  if (!pairInboundId.value || !pairOutboundId.value) {
-    window.$message?.warning('请选择入口与出口节点')
-    return
-  }
-  const r = await run(
-    'keys-pair',
-    () => api.pairNodeKeys({
-      inbound_id: pairInboundId.value,
-      outbound_id: pairOutboundId.value,
-      kind: keyKind.value,
-    }),
-    '密钥已写入节点',
-  )
-  if (r) pairResult.value = r
-}
-
-async function probeNodeTcp() {
-  const id = requireHostId()
-  if (!id) return
-  const r = await run('node-probe', () => api.probeNode(id, { timeout_ms: 3000 }))
-  if (r) {
-    nodeProbeResult.value = r
-    await refresh()
-  }
-}
-
 onMounted(() => {
   void refresh()
   void loadOptions()
@@ -746,6 +683,7 @@ onMounted(() => {
       </div>
       <NSpace :size="8" :wrap="true">
         <NButton size="small" :loading="isBusy('probe-all')" @click="probeAll">重新探测</NButton>
+        <NButton size="small" @click="openSubStore">从 Sub-Store 导入</NButton>
         <NButton size="small" @click="openJson">JSON 导入 / 导出</NButton>
         <NButton size="small" :loading="isBusy('list')" @click="refresh">刷新</NButton>
         <NButton size="small" type="primary" @click="openAdd">＋ 新增节点</NButton>
@@ -1171,6 +1109,80 @@ onMounted(() => {
         </NSpace>
       </template>
     </NModal>
+
+    <!-- Sub-Store 导入 -->
+    <NModal v-model:show="showSubStore" preset="card" title="从 Sub-Store 导入节点" style="width: 720px" :bordered="false">
+      <NSpace vertical :size="12" style="width: 100%">
+        <div class="hint">
+          支持 Sub-Store 的 plain JSON（target=json）、Clash / mihomo YAML、base64 订阅与纯节点链接。
+          只会识别节点本身；无法表达为 NGG 节点的条目（vmess / hysteria2 / tuic / wireguard 等）逐条列出后跳过，不会硬塞成 vless。
+        </div>
+
+        <NSpace :size="8" align="center" :wrap="true">
+          <NRadioGroup v-model:value="ssMode" size="small">
+            <NRadioButton value="url">订阅地址</NRadioButton>
+            <NRadioButton value="text">粘贴内容</NRadioButton>
+          </NRadioGroup>
+          <NSelect v-model:value="ssRole" size="small" :options="ROLE_OPTIONS" style="width: 250px" />
+        </NSpace>
+
+        <NInput
+          v-if="ssMode === 'url'"
+          v-model:value="ssURL"
+          placeholder="http://127.0.0.1:3000/api/sub/name?target=json"
+        />
+        <NInput
+          v-else
+          v-model:value="ssText"
+          type="textarea"
+          :autosize="{ minRows: 8, maxRows: 16 }"
+          class="mono"
+          placeholder='[{"type":"ss","name":"HK-01","server":"1.2.3.4","port":8388,"cipher":"aes-256-gcm","password":"…"}]'
+        />
+
+        <NSpace :size="8" align="center">
+          <NButton size="small" :loading="isBusy('ss-preview')" @click="previewSubStore">解析预览</NButton>
+          <NButton
+            size="small"
+            type="primary"
+            :loading="isBusy('ss-import')"
+            :disabled="!ssResult || !ssResult.hosts.length"
+            @click="commitSubStore"
+          >导入 {{ ssResult?.hosts.length ?? 0 }} 个节点</NButton>
+          <span class="hint">先预览再导入，避免把错误格式一次性写进节点库。</span>
+        </NSpace>
+
+        <template v-if="ssResult">
+          <NSpace :size="6" align="center" :wrap="true">
+            <NTag size="small" :bordered="false">格式 {{ ssResult.format }}</NTag>
+            <NTag size="small" :bordered="false">识别 {{ ssResult.parsed }}</NTag>
+            <NTag size="small" :bordered="false" type="warning">跳过 {{ ssResult.skipped }}</NTag>
+            <NTag size="small" :bordered="false" type="success">可导入 {{ ssResult.hosts.length }}</NTag>
+          </NSpace>
+
+          <div v-if="ssResult.hosts.length" class="ss-list">
+            <div v-for="d in ssResult.hosts" :key="d.id" class="ss-row">
+              <span class="ss-row__proto">{{ d.protocol }}</span>
+              <span class="ss-row__name">{{ d.name || d.id }}</span>
+              <span class="mono ss-row__addr">{{ d.address }}:{{ d.svc_port }}</span>
+            </div>
+          </div>
+          <NAlert v-else type="warning" :bordered="false">没有可导入的节点，原因见下方告警。</NAlert>
+
+          <NAlert v-for="(f, i) in ssResult.failed" :key="'ss-f' + i" type="error" :bordered="false">
+            {{ f }}
+          </NAlert>
+          <NAlert v-for="(w, i) in ssWarnings" :key="'ss-w' + i" type="warning" :bordered="false">
+            {{ w }}
+          </NAlert>
+        </template>
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton size="small" @click="showSubStore = false">关闭</NButton>
+        </NSpace>
+      </template>
+    </NModal>
   </div>
 </template>
 
@@ -1380,5 +1392,42 @@ onMounted(() => {
 }
 .deploy-notes li {
   margin-bottom: 2px;
+}
+
+/* Sub-Store 导入预览：一行一个节点，协议用短标签区分。 */
+.ss-list {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #ececf0;
+  border-radius: 10px;
+  background: #fff;
+}
+.ss-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f4f4f6;
+  font-size: 12px;
+}
+.ss-row:last-child {
+  border-bottom: none;
+}
+.ss-row__proto {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #0071e3;
+  text-transform: uppercase;
+}
+.ss-row__name {
+  color: #1d1d1f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ss-row__addr {
+  color: #6e6e73;
+  font-size: 11px;
 }
 </style>

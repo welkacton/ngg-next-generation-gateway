@@ -16,6 +16,7 @@ import (
 	"github.com/ngg-project/ngg/internal/gateway"
 	"github.com/ngg-project/ngg/internal/hosts"
 	"github.com/ngg-project/ngg/internal/rulesets"
+	"github.com/ngg-project/ngg/internal/substore"
 	"github.com/ngg-project/ngg/internal/users"
 )
 
@@ -184,6 +185,23 @@ func TestBuildRendersEveryTarget(t *testing.T) {
 	// Plain SOCKS is host:port:user:pass.
 	if got := strings.TrimSpace(p.Body[TargetSocks]); got != "127.0.0.1:8443:"+testUUID+":" {
 		t.Fatalf("socks body = %q", got)
+	}
+
+	// Sub-Store is its plain JSON array of proxy objects, and it has to survive
+	// a round trip through the parser the import path uses.
+	var store []map[string]any
+	if err := json.Unmarshal([]byte(p.Body[TargetSubstore]), &store); err != nil {
+		t.Fatalf("substore body is not a JSON array: %v\n%s", err, p.Body[TargetSubstore])
+	}
+	if len(store) != 1 || store[0]["type"] != "vless" || store[0]["uuid"] != testUUID {
+		t.Fatalf("substore entry wrong: %v", store)
+	}
+	back, err := substore.Parse([]byte(p.Body[TargetSubstore]))
+	if err != nil {
+		t.Fatalf("substore body must re-parse: %v", err)
+	}
+	if len(back.Proxies) != 1 || back.Proxies[0].Type != substore.TypeVLESS {
+		t.Fatalf("substore round trip failed: %+v", back.Proxies)
 	}
 }
 
