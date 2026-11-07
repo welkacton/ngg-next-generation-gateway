@@ -21,7 +21,9 @@ import (
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
 	"github.com/ngg-project/ngg/internal/gateway"
+	"github.com/ngg-project/ngg/internal/mcatalog"
 	"github.com/ngg-project/ngg/internal/mnode"
+	"github.com/ngg-project/ngg/internal/module"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/nodedeploy"
 	"github.com/ngg-project/ngg/internal/nodepki"
@@ -59,6 +61,10 @@ type Server struct {
 	nodeMetrics *nodeMetricsCache
 	// 规划 1：模块节点（空白节点 + 自动凭据 + 部署 + 连接探测）
 	mnodes *mnode.Store
+	// 规划 2~9：独立库（内核/协议组/规则/规则集/DNS/策略组/用户/链接）
+	mcat *mcatalog.Store
+	// 规划 7：模块聚合根
+	modules *module.Store
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -154,6 +160,19 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 	} else {
 		s.mnodes = mnodes
 	}
+	// 规划 2~10：模块库与模块聚合根（独立文件）
+	mcat, cerr := mcatalog.NewStore(dataDir)
+	if cerr != nil {
+		log.Printf("module catalog unavailable: %v", cerr)
+	} else {
+		s.mcat = mcat
+	}
+	mods, moderr := module.NewStore(dataDir)
+	if moderr != nil {
+		log.Printf("module store unavailable: %v", moderr)
+	} else {
+		s.modules = mods
+	}
 	// 节点指标：面板主动连入每个已部署节点拉取，替代原先的 SSH 采集。
 	s.nodeMetrics = newNodeMetricsCache()
 	s.nodeMetrics.start(nodePollInterval, s.pollAllNodes)
@@ -248,6 +267,21 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/v1/mnodes/{id}", s.handleMNode)
 	m.HandleFunc("GET /api/v1/mnodes/{id}/script", s.handleMNodeScript)
 	m.HandleFunc("POST /api/v1/mnodes/{id}/probe", s.handleMNodeProbe)
+
+	// 规划 2~10：模块架构统一入口
+	m.HandleFunc("GET /api/v1/mcat", s.handleMCat)
+	m.HandleFunc("PUT /api/v1/mcat/items/{kind}", s.handleMCatItem)
+	m.HandleFunc("DELETE /api/v1/mcat/items/{kind}/{id}", s.handleMCatItem)
+	m.HandleFunc("POST /api/v1/mcat/kernels/{action}", s.handleMCatKernels)
+	m.HandleFunc("POST /api/v1/mcat/dns/resolve", s.handleMCatDNSResolve)
+	m.HandleFunc("GET /api/v1/mcat/modules", s.handleMCatModules)
+	m.HandleFunc("POST /api/v1/mcat/modules", s.handleMCatModules)
+	m.HandleFunc("DELETE /api/v1/mcat/modules/{id}", s.handleMCatModule)
+	m.HandleFunc("POST /api/v1/mcat/modules/{id}/validate", s.handleMCatModule)
+	m.HandleFunc("GET /api/v1/mcat/users/{id}/links", s.handleMCatUserLinks)
+	m.HandleFunc("POST /api/v1/mcat/users/{id}/links", s.handleMCatUserLinks)
+	m.HandleFunc("GET /api/v1/mcat/master", s.handleMCatMaster)
+	m.HandleFunc("POST /api/v1/mcat/master", s.handleMCatMaster)
 
 	m.HandleFunc("GET /api/v1/registry", s.handleRegistry)
 	m.HandleFunc("POST /api/v1/registry/reload", s.handleRegistryReload)

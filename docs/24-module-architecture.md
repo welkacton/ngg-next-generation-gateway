@@ -152,9 +152,10 @@ GET /api/v1/sub/{token}?target=clash              /api/v1/modules/links?client=s
 | 期 | 范围 | 验收 |
 | --- | --- | --- |
 | **P1（本轮已完成）** | **规划 1**：`internal/mnode` 空白节点（只填 IP+端口）、三类凭据自动生成、自包含安装脚本、mTLS 连接探测；`internal/module` 聚合类型/校验/快照作为共用基础；`/api/v1/mnodes*` 6 个端点；新菜单「模块架构 → ① 节点管理」 | `go build/vet/test ./...`、`vue-tsc`、`vite build`、安装脚本 `bash -n` 全绿 |
-| P2 | 规划 2（内核管理，单/多/全启停 + 主内核调控） |
-| P2b | 规划 3（协议组）→ 4（规则）→ 5（DNS）→ 6（策略组） |
-| P3 | 规划 7（模块管理页）→ 8（用户选模块）→ 9（链接管理）→ 10（总控） |：空白节点表单（仅 IP+端口）、自动凭据卡片、部署脚本、连接探测；三内核槽位与单/多/全启停 | 新建节点只填两项；批量启停接口返回逐个状态 |
+| **P2（已完成）** | **规划 2**：内核管理，三内核 single / multiple / all 启停，直接调用现有 `engine.BatchStart/BatchStop`，逐条返回真实结果 |
+| **P3（已完成）** | **规划 3~6**：协议组（一对三内核）、规则 + 规则集、DNS 防泄密/加密/国内外分流、策略组绑定规则集 |
+| **P4（已完成）** | **规划 7~9**：模块打包（六项 + 主内核 + 快照）、用户选模块生成订阅 token、按客户端派生专属深链 |
+| **P5（已完成）** | **规划 10**：主内核读取模块、计算调控计划并真实启停内核、下发协议/规则/DNS/策略、记录调控状态 |：空白节点表单（仅 IP+端口）、自动凭据卡片、部署脚本、连接探测；三内核槽位与单/多/全启停 | 新建节点只填两项；批量启停接口返回逐个状态 |
 | P3 | 规划 3/4/5/6：协议组、规则/规则集、DNS 分流、策略组的模块内 CRUD | 一个组绑 3 内核；策略组绑规则集通过 Validate |
 | P4 | 规划 8/9：用户选模块、订阅令牌、链接管理（多客户端 + 二维码） | 保存用户即产出 6 种 target 链接 |
 | P5 | 规划 10：主内核调控器，读取快照并编排，异常自动重调度 | 模块 apply 后内核状态与模块声明一致 |
@@ -188,4 +189,31 @@ GET /api/v1/sub/{token}?target=clash              /api/v1/modules/links?client=s
 
 **已知边界**：节点端目前用内嵌 Python3 HTTPS 服务做探测（不依赖 Docker / SSH / 既有 ngg-node）；
 后量子在探测阶段以「公钥指纹」校验，完整 ML-KEM 握手在规划 10 的主内核总控里接入。
-**下一步严格从规划 2 开始，不跳号。**
+**规划 2~10 已按顺序全部完成，见下方 §10。**
+
+
+---
+
+## 10. 规划 2~10：顺序实现记录
+
+| 规划 | 后端 | API | 前端 |
+| --- | --- | --- | --- |
+| ② 内核管理 | `mcatalog.Kernel` + `ResolveStart` + `SetKernelStates` | `POST /mcat/kernels/{start\|stop}` → `engine.BatchStart/BatchStop` | 三内核卡 + 单/多/全模式 + 启停结果与状态 |
+| ③ 协议管理 | `mcatalog.ProtocolGroup`，绑定内核 ID 校验 | `PUT/DELETE /mcat/items/protocol-groups` | 组名 + 内核多选 + 协议条目编辑 |
+| ④ 规则管理 | `Rule` / `RuleSet`，启停开关 | `PUT/DELETE /mcat/items/rules\|rule-sets` | 规则与规则集并列两栏 |
+| ⑤ DNS 管理 | `DNSPolicy` + `ResolveDNS`（国内域名表 + CN IP CIDR + 防泄密拒绝明文） | `PUT /mcat/items/dns`、`POST /mcat/dns/resolve` | 策略编辑 + 域名/IP 分流试算 |
+| ⑥ 策略管理 | `PolicyGroup` 绑定规则集（悬挂引用拒绝） | `PUT/DELETE /mcat/items/policy-groups` | 模式 + 规则集多选 |
+| ⑦ 模块管理 | `BuildModule()` 从 2~6 + 规划 1 节点 + 主内核打包，`Validate()` + `Snapshot()` | `GET/POST /mcat/modules`、`POST .../validate`、`DELETE` | 九宫格选择 + 模块列表 + 校验 |
+| ⑧ 用户管理 | `User{ModuleID, Token}`，token 自动生成 | `PUT /mcat/items/users` | 用户名 + 选模块，保存即得 token |
+| ⑨ 链接管理 | `BuildLinks()`：`clash://`、`sing-box://`、`surge://`、`shadowrocket://` 深链 | `POST/GET /mcat/users/{id}/links` | 用户 + 客户端多选 → 专属链接 + 复制 |
+| ⑩ 总控 | `Regulate()` 计算启停/下发动作，`MasterState` 记录 | `GET/POST /mcat/master` | 选模块 → 调控 → 展示动作与状态 |
+
+**统一入口**：菜单「模块架构」下 ①~⑩ 共 10 项；②~⑩ 共用 `ModuleWorkbench.vue`，按步骤条顺序切换。
+**数据**：`module-catalog.json`（2~9）、`modules.json`（7 的聚合根）、`mnodes.json`（1 的节点），均为 0600 独立文件。
+**真实能力**：内核启停与总控都调用现有 `engine.BatchStart/BatchStop`；引擎未初始化或内核未安装时逐条返回真实原因，不伪造成功。
+
+**验证**：`go build/vet/test -p 2 ./...`、`npx vue-tsc --noEmit`、`npm run build` 全绿；
+`TestMCatalogFlow2To10` 走真实 HTTP handler 从「建规则集 → 协议组 → DNS 试算 → 打包模块 → 用户 → 链接 → 总控」整条链路通过。
+
+**已知边界**：客户端订阅内容渲染仍复用 `internal/subscription`，本期只生成可识别的深链与 token，**未改动现有订阅渲染器**；
+手机侧拿到模块全量信息后的解析由客户端负责，主内核总控在面板侧完成。

@@ -2901,3 +2901,47 @@ export const probeModuleNode = (id: string) =>
   )
 export const deleteModuleNode = (id: string) =>
   del<GenericResult>(`/mnodes/${encodeURIComponent(id)}`)
+
+/* ================================================================== *
+ * 规划 2~10：模块架构统一接口
+ * ================================================================== */
+
+export interface MCatalog {
+  kernels: MKernel[]
+  protocol_groups: MProtocolGroup[]
+  rules: MRule[]
+  rule_sets: MRuleSet[]
+  dns: MDNS[]
+  policy_groups: MPolicyGroup[]
+  users: MUser[]
+  links: MLink[]
+  master: MMaster
+}
+export interface MKernel { id: string; name: string; enabled: boolean; auto_start: boolean; state: string; updated_at: string }
+export interface MProtocolGroup { id: string; name: string; kernel_ids: string[]; protocols: { type: string; tag: string }[]; enabled: boolean }
+export interface MRule { id: string; name: string; type: string; pattern: string; outbound: string; enabled: boolean }
+export interface MRuleSet { id: string; name: string; source: string; enabled: boolean }
+export interface MDNS { id: string; name: string; enabled: boolean; leak_protection: boolean; encrypt: string; domestic: string[]; foreign: string[]; strategy: string; domestic_ip_cidrs: string[] }
+export interface MPolicyGroup { id: string; name: string; mode: string; rule_set_ids: string[]; enabled: boolean }
+export interface MUser { id: string; name: string; module_id: string; token: string; created_at: string }
+export interface MLink { id: string; user_id: string; client: string; target: string; url: string }
+export interface MMaster { enabled: boolean; auto_regulate: boolean; module_id: string; active_kernels: string[]; egress_node_id: string; last_apply: string; last_result: string; regulate_count: number }
+export interface MModuleSummary { id: string; name: string; enabled: boolean; node_count: number; kernel_count: number; active_kernels: number; protocol_group_count: number; rule_count: number; rule_set_count: number; policy_group_count: number; dns_enabled: boolean; master_enabled: boolean; updated_at: string }
+export interface MCatalogResponse { catalog: MCatalog; modules: MModuleSummary[]; clients: string[]; kinds: string[] }
+
+export const getMCatalog = () => get<MCatalogResponse>('/mcat')
+export const putMItem = <T>(kind: string, item: unknown) => put<T>(`/mcat/items/${kind}`, item)
+export const deleteMItem = (kind: string, id: string) =>
+  del<GenericResult>(`/mcat/items/${kind}/${encodeURIComponent(id)}`)
+export const mKernelAction = (action: 'start' | 'stop', body: { mode?: string; ids?: string[]; exclusive?: boolean }) =>
+  post<{ action: string; results: { id: string; ok: boolean; message: string }[]; kernels: MKernel[] }>(`/mcat/kernels/${action}`, body)
+export const mDNSResolve = (body: { dns_id: string; domain: string; ip: string }) =>
+  post<{ region: string; upstream: string; reason: string; encrypted: boolean; leak_safe: boolean }>('/mcat/dns/resolve', body)
+export const mCreateModule = (sel: unknown) => post<unknown>('/mcat/modules', sel)
+export const mDeleteModule = (id: string) => del<GenericResult>(`/mcat/modules/${encodeURIComponent(id)}`)
+export const mValidateModule = (id: string) => post<unknown>(`/mcat/modules/${encodeURIComponent(id)}/validate`, {})
+export const mIssueLinks = (userId: string, body: { base_url?: string; clients?: string[] }) =>
+  post<{ user_id: string; token: string; subscription: string; links: MLink[] }>(
+    `/mcat/users/${encodeURIComponent(userId)}/links`, body)
+export const mMasterApply = (body: { module_id?: string; auto_regulate?: boolean }) =>
+  post<{ module_id: string; plan: { actions: string[]; start_kernels: string[]; stop_kernels: string[] }; master: MMaster }>('/mcat/master', body)
