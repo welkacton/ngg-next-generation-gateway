@@ -132,6 +132,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '节点管理' },
   },
   {
+    path: '/module-nodes',
+    name: 'module-nodes',
+    component: () => import('../views/ModuleNodes.vue'),
+    meta: { title: '① 节点管理（模块架构）' },
+  },
+  {
     path: '/pq',
     name: 'pq',
     component: () => import('../views/PQ.vue'),

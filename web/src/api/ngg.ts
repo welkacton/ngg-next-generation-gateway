@@ -2827,3 +2827,77 @@ export const setEgressInterface = (iface: string) =>
   put<{ ok: boolean; changed: string[]; config: NetworkConfig }>('/network/config', {
     egress: { interface: iface },
   })
+
+/* ================================================================== *
+ * 规划 1：模块节点（空白节点 · 自动凭据 · 部署 · 连接探测）
+ * ================================================================== */
+
+export interface ModuleNodeProbe {
+  online: boolean
+  hostname?: string
+  os?: string
+  arch?: string
+  cpu_percent?: number
+  memory_total?: number
+  memory_used?: number
+  disk_total?: number
+  disk_used?: number
+  net_rx_bytes?: number
+  net_tx_bytes?: number
+  uptime_sec?: number
+  latency_ms?: number
+  error?: string
+  collected_at?: string
+}
+
+export interface ModuleNodeSpec {
+  id: string
+  name: string
+  address: string
+  port: number
+  api_password_hash: string
+  pq_suite: string
+  pq_public: string
+  pq_fingerprint: string
+  mtls_common_name: string
+  mtls_fingerprint: string
+  ca_cert_pem: string
+  node_cert_pem: string
+  probe?: ModuleNodeProbe
+}
+
+export interface ModuleNodeSecrets {
+  api_password: string
+  pq_public: string
+  pq_fingerprint: string
+  node_key_pem: string
+  node_cert_pem: string
+  ca_cert_pem: string
+  notice: string
+}
+
+export interface ModuleNodeView {
+  node: ModuleNodeSpec
+  has_script: boolean
+  generated_at: string
+}
+
+export interface CreateModuleNodeResult {
+  node: ModuleNodeView
+  secrets: ModuleNodeSecrets
+  notice: string
+}
+
+export const listModuleNodes = () =>
+  get<{ nodes: ModuleNodeView[] }>('/mnodes')
+export const createModuleNode = (address: string, port?: number) =>
+  post<CreateModuleNodeResult>('/mnodes', { address, port })
+export const getModuleNodeScript = (id: string) =>
+  get<string>(`/mnodes/${encodeURIComponent(id)}/script`, { responseType: 'text' })
+export const probeModuleNode = (id: string) =>
+  post<{ node_id: string; probe: ModuleNodeProbe }>(
+    `/mnodes/${encodeURIComponent(id)}/probe`,
+    {},
+  )
+export const deleteModuleNode = (id: string) =>
+  del<GenericResult>(`/mnodes/${encodeURIComponent(id)}`)

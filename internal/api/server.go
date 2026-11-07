@@ -21,6 +21,7 @@ import (
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
 	"github.com/ngg-project/ngg/internal/gateway"
+	"github.com/ngg-project/ngg/internal/mnode"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/nodedeploy"
 	"github.com/ngg-project/ngg/internal/nodepki"
@@ -56,6 +57,8 @@ type Server struct {
 	deploy      *nodedeploy.Store
 	pki         *nodepki.Store
 	nodeMetrics *nodeMetricsCache
+	// 规划 1：模块节点（空白节点 + 自动凭据 + 部署 + 连接探测）
+	mnodes *mnode.Store
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -144,6 +147,13 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 	}
 	s.pki = pki
 	s.deploy = nodedeploy.NewStore(dataDir)
+	// 规划 1：模块节点库（独立文件，不影响既有节点域）
+	mnodes, merr := mnode.NewStore(dataDir)
+	if merr != nil {
+		log.Printf("module node store unavailable: %v", merr)
+	} else {
+		s.mnodes = mnodes
+	}
 	// 节点指标：面板主动连入每个已部署节点拉取，替代原先的 SSH 采集。
 	s.nodeMetrics = newNodeMetricsCache()
 	s.nodeMetrics.start(nodePollInterval, s.pollAllNodes)
@@ -230,6 +240,14 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/cores/{id}/stats", s.handleStats)
 	// 内核诊断：二进制 / 版本 / 配置校验 / 端口占用 / 日志尾部，用于定位启动失败。
 	m.HandleFunc("GET /api/v1/cores/{id}/diagnostics", s.handleCoreDiagnostics)
+
+	// 规划 1：模块节点（新建空白节点 / 安装脚本 / 连接探测）
+	m.HandleFunc("GET /api/v1/mnodes", s.handleMNodes)
+	m.HandleFunc("POST /api/v1/mnodes", s.handleMNodes)
+	m.HandleFunc("GET /api/v1/mnodes/{id}", s.handleMNode)
+	m.HandleFunc("DELETE /api/v1/mnodes/{id}", s.handleMNode)
+	m.HandleFunc("GET /api/v1/mnodes/{id}/script", s.handleMNodeScript)
+	m.HandleFunc("POST /api/v1/mnodes/{id}/probe", s.handleMNodeProbe)
 
 	m.HandleFunc("GET /api/v1/registry", s.handleRegistry)
 	m.HandleFunc("POST /api/v1/registry/reload", s.handleRegistryReload)

@@ -203,6 +203,15 @@ const menuOptions: MenuOption[] = [
       { label: '用户管理', key: 'users', icon: menuIcon },
     ],
   },
+  { type: 'divider', key: 'divider-module' },
+  {
+    label: '模块架构',
+    key: 'group-module',
+    icon: menuIcon,
+    children: [
+      { label: '① 节点管理', key: 'module-nodes', icon: menuIcon },
+    ],
+  },
   { type: 'divider', key: 'divider-backend' },
   {
     label: '后端管理',
