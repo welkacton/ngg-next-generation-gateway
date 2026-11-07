@@ -20,6 +20,7 @@ import (
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
 	"github.com/ngg-project/ngg/internal/gateway"
+	"github.com/ngg-project/ngg/internal/hostmon"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/pipeline"
 	"github.com/ngg-project/ngg/internal/profiles"
@@ -49,6 +50,7 @@ type Server struct {
 	clients      *clientHandlers
 	subs         *subscriptionHandlers
 	subRenderer  *subscription.Renderer
+	monitor      *hostmon.Monitor
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -129,6 +131,14 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 	}
 	s.sampler = newMetricsSampler(eng.NetworkStatus, tunTraffic)
 	s.sampler.Start()
+	// 节点系统信息：SSH 只读采集。凭据在 <data>/host-monitor.json（0600），
+	// 采集失败只影响这一块面板，不阻断控制面启动。
+	mon := hostmon.New(dataDir)
+	if err := mon.Load(); err != nil {
+		log.Printf("host monitor store unavailable: %v", err)
+	}
+	s.monitor = mon
+	mon.Start(hostMonitorInterval)
 	s.routes()
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Listen, cfg.Server.Port),
@@ -157,6 +167,9 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) Shutdown() error {
 	if s.sampler != nil {
 		s.sampler.Stop()
+	}
+	if s.monitor != nil {
+		s.monitor.Stop()
 	}
 	return s.http.Close()
 }
@@ -304,6 +317,11 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	m.HandleFunc("POST /api/v1/hosts", s.handleHosts)
 	m.HandleFunc("GET /api/v1/hosts/stats", s.handleHostStats)
+	// 节点系统信息（SSH 只读采集）：集合路由与 /hosts/{id} 并存，字面量优先
+	m.HandleFunc("GET /api/v1/hosts/monitor", s.handleHostMonitor)
+	m.HandleFunc("PUT /api/v1/hosts/{id}/monitor", s.handleHostMonitorByID)
+	m.HandleFunc("DELETE /api/v1/hosts/{id}/monitor", s.handleHostMonitorByID)
+	m.HandleFunc("POST /api/v1/hosts/{id}/monitor/refresh", s.handleHostMonitorRefresh)
 	m.HandleFunc("POST /api/v1/hosts/probe", s.handleHostProbeAll)
 	m.HandleFunc("GET /api/v1/hosts/export", s.handleHostExport)
 	m.HandleFunc("PUT /api/v1/hosts/import", s.handleHostImport)

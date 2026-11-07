@@ -49,7 +49,6 @@ const loadError = ref('')
 
 const showDrawer = ref(false)
 const editingId = ref<string | null>(null)
-const tagDraft = ref('')
 
 interface UserForm {
   username: string
@@ -141,7 +140,6 @@ async function refresh() {
 function openCreate() {
   editingId.value = null
   form.value = emptyForm()
-  tagDraft.value = ''
   showDrawer.value = true
 }
 
@@ -162,7 +160,6 @@ function openEdit(u: PortalUser) {
     hwid_limit: u.hwid_limit ?? 0,
     subscription_url: u.subscription_url,
   }
-  tagDraft.value = ''
   showDrawer.value = true
 }
 
@@ -224,13 +221,6 @@ function confirmDeleteCurrent() {
 async function resetUsage(u: PortalUser) {
   const res = await run('reset:' + u.id, () => api.resetUserUsage(u.id), '用量已重置')
   if (res) await refresh()
-}
-
-function addTag() {
-  const v = tagDraft.value.trim()
-  if (!v) return
-  form.value.tag = v
-  tagDraft.value = ''
 }
 
 function usagePercent(u?: PortalUser | null): number {
@@ -486,8 +476,6 @@ const columns = computed<any[]>(() => [
         h('span', { class: 'hint' }, usageText(u)),
       ]),
   },
-  { title: '标签', key: 'tag', width: 110, ellipsis: { tooltip: true }, render: (u: PortalUser) => u.tag || '—' },
-  { title: '内部分组', key: 'group', width: 130, ellipsis: { tooltip: true }, render: (u: PortalUser) => u.group || '—' },
   {
     title: '操作',
     key: 'actions',
@@ -572,7 +560,7 @@ onMounted(refresh)
         :data="filtered"
         :row-key="(row: any) => String(row.id)"
         :bordered="false"
-        :scroll-x="1520"
+        :scroll-x="1240"
         size="small"
         :pagination="{ pageSize: 20 }"
       />
@@ -599,32 +587,6 @@ onMounted(refresh)
               <div class="hint" style="margin-top: 6px">NGG 不自建订阅服务，留空表示未设置。</div>
             </NCard>
 
-            <NCard size="small" title="连接信息" class="user-panel">
-              <div class="kv-label">Telegram ID</div>
-              <NInput v-model:value="form.telegram_id" placeholder="可选" />
-              <div class="kv-label" style="margin-top: 10px">Email</div>
-              <NInput v-model:value="form.email" placeholder="可选" />
-              <div class="user-kv"><span>最后连接节点</span><span>{{ users.find((x) => x.id === editingId)?.last_node_name || '—' }}</span></div>
-              <div class="user-kv"><span>最近在线</span><span>{{ editingId ? relativeSeen(users.find((x) => x.id === editingId)) : '—' }}</span></div>
-            </NCard>
-
-            <NCard size="small" title="设备与标签" class="user-panel">
-              <div class="kv-label">Tag</div>
-              <NSpace :size="6">
-                <NInput v-model:value="tagDraft" placeholder="例如 EXAMPLE_TAG_1" @keyup.enter="addTag" />
-                <NButton size="small" @click="addTag">设置</NButton>
-              </NSpace>
-              <div class="hint" style="margin-top: 4px">当前：{{ form.tag || '未设置' }}</div>
-              <div class="kv-label" style="margin-top: 10px">HWID 设备限制</div>
-              <NSpace :size="8" align="center">
-                <NSwitch v-model:value="form.hwid_disabled" />
-                <span class="hint">禁用 HWID 限制</span>
-                <NInputNumber v-model:value="form.hwid_limit" :min="0" :max="100" style="width: 110px" />
-                <span class="hint">台</span>
-              </NSpace>
-              <div class="kv-label" style="margin-top: 10px">备注</div>
-              <NInput v-model:value="form.note" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
-            </NCard>
           </NGi>
 
           <NGi>
@@ -654,14 +616,9 @@ onMounted(refresh)
             <NCard size="small" title="访问设置" class="user-panel">
               <div class="kv-label">到期时间（留空 = 永不过期）</div>
               <NDatePicker v-model:value="form.expiresMs" type="datetime" clearable style="width: 100%" />
-              <div class="kv-label" style="margin-top: 10px">内部分组</div>
-              <NInput v-model:value="form.group" placeholder="Default-Squad" />
               <div class="kv-label" style="margin-top: 10px">用户 ID</div>
               <div class="mono">{{ editingId || '保存后由后端生成' }}</div>
             </NCard>
-
-            <NCard size="small" title="真实状态" class="user-panel">
-                          </NCard>
           </NGi>
         </NGrid>
 

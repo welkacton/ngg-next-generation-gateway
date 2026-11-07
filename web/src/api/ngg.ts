@@ -2426,6 +2426,63 @@ export interface HostProvision {
   generated_at: string
 }
 
+/* ------------------------------------------------------------------ *
+ * 节点系统信息：后端通过 SSH 只读命令采集，未配置/未采集时显示「未采集」
+ * ------------------------------------------------------------------ */
+
+export interface HostMonitorConfig {
+  host_id: string
+  host: string
+  port: number
+  user: string
+  has_password: boolean
+  has_private_key: boolean
+  host_key_fingerprint?: string
+}
+
+export interface HostMonitorMetrics {
+  host_id: string
+  collected_at: string
+  online: boolean
+  error?: string
+  hostname?: string
+  os?: string
+  kernel?: string
+  uptime_sec: number
+  cpu_cores: number
+  cpu_usage_pct: number
+  mem_total: number
+  mem_used: number
+  disk_total: number
+  disk_used: number
+  net_rx_bytes: number
+  net_tx_bytes: number
+  net_rx_rate: number
+  net_tx_rate: number
+}
+
+export interface HostMonitorResult {
+  metrics: HostMonitorMetrics[]
+  configs: HostMonitorConfig[]
+  interval_sec: number
+}
+
+export interface HostMonitorInput {
+  host?: string
+  port?: number
+  user?: string
+  password?: string
+  private_key?: string
+}
+
+export const getHostMonitor = () => get<HostMonitorResult>('/hosts/monitor')
+export const setHostMonitor = (id: string, payload: HostMonitorInput) =>
+  put<HostMonitorResult>(`/hosts/${encodeURIComponent(id)}/monitor`, payload)
+export const deleteHostMonitor = (id: string) =>
+  del<GenericResult>(`/hosts/${encodeURIComponent(id)}/monitor`)
+export const refreshHostMonitor = (id: string) =>
+  post<HostMonitorMetrics>(`/hosts/${encodeURIComponent(id)}/monitor/refresh`)
+
 export const getHostProvision = (id: string) =>
   get<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`)
 export const provisionHost = (

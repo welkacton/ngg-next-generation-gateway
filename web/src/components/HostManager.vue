@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -14,8 +14,6 @@ import {
   NInput,
   NInputNumber,
   NModal,
-  NRadioButton,
-  NRadioGroup,
   NSelect,
   NSpace,
   NSwitch,
@@ -220,91 +218,12 @@ const showAll = ref(false)
 
 const showDrawer = ref(false)
 const showAdd = ref(false)
-const showJson = ref(false)
 const editingId = ref<string | null>(null)
 const form = ref<HostForm>(emptyHost(defaultRole()))
 const addForm = ref<HostForm>(emptyHost(defaultRole()))
-const jsonText = ref('')
 const newIP = ref('')
 const tagInput = ref('')
 const revealSecret = ref(false)
-
-/* ------------------------------------------------------------------ *
- * Sub-Store 导入：粘贴对方的导出内容或填订阅地址，先预览再落库。
- * 凭据只在后端过一遍（预览接口不回传），前端拿到的只有节点元信息。
- * ------------------------------------------------------------------ */
-const showSubStore = ref(false)
-const ssMode = ref<'url' | 'text'>('url')
-const ssURL = ref('')
-const ssText = ref('')
-const ssRole = ref<HostRole>(defaultRole())
-const ssResult = ref<api.SubStoreResult | null>(null)
-
-/** 告警可能很多（每条跳过都有原因），抽屉里只展示前 12 条。 */
-const SS_WARNING_LIMIT = 12
-const ssWarnings = computed<string[]>(() => {
-  const all = ssResult.value?.warnings ?? []
-  return all.length > SS_WARNING_LIMIT
-    ? [...all.slice(0, SS_WARNING_LIMIT), `……还有 ${all.length - SS_WARNING_LIMIT} 条告警`]
-    : all
-})
-
-function openSubStoreFromAdd(): void {
-  showAdd.value = false
-  openSubStore()
-}
-
-function openJsonFromAdd(): void {
-  showAdd.value = false
-  void openJson()
-}
-
-function openSubStore(): void {
-  ssMode.value = 'url'
-  ssURL.value = ''
-  ssText.value = ''
-  ssRole.value = defaultRole()
-  ssResult.value = null
-  showSubStore.value = true
-}
-
-function ssInputMissing(): boolean {
-  if (ssMode.value === 'text') {
-    if (!ssText.value.trim()) {
-      window.$message?.warning('请先粘贴 Sub-Store 配置内容')
-      return true
-    }
-    return false
-  }
-  if (!ssURL.value.trim()) {
-    window.$message?.warning('请先填写订阅地址')
-    return true
-  }
-  return false
-}
-
-function ssPayload(dryRun: boolean): api.SubStoreRequest {
-  const payload: api.SubStoreRequest = { role: ssRole.value, dry_run: dryRun }
-  if (ssMode.value === 'text') payload.text = ssText.value
-  else payload.url = ssURL.value.trim()
-  return payload
-}
-
-async function previewSubStore(): Promise<void> {
-  if (ssInputMissing()) return
-  const res = await run('ss-preview', () => api.parseSubStore(ssPayload(true)))
-  if (res) ssResult.value = res
-}
-
-async function commitSubStore(): Promise<void> {
-  if (ssInputMissing()) return
-  const res = await run('ss-import', () => api.importSubStore(ssPayload(false)))
-  if (!res) return
-  ssResult.value = res
-  window.$message?.success(`已导入 ${res.hosts.length} 个节点`)
-  await refresh()
-}
-
 
 /** 网络引擎未启动时，0 字节不是「真实流量」，应如实显示未采集。 */
 const hasMetrics = computed(() => metrics.value?.network_running === true)
@@ -330,6 +249,7 @@ async function refresh() {
   }
   const m = await run('metrics', () => api.getHostStats())
   if (m) metrics.value = m
+  await loadMonitor()
 }
 
 async function loadOptions() {
@@ -342,6 +262,114 @@ async function loadOptions() {
       ...(f.profiles ?? []).map((x) => ({ label: `${x.name}（${x.kernel}）`, value: x.id })),
     ]
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 协议配置绑定 + SSH 系统信息（真实采集，未配置时一律显示「未采集」）
+ * ------------------------------------------------------------------ */
+const monitorMetrics = ref<Record<string, api.HostMonitorMetrics>>({})
+const monitorConfigs = ref<api.HostMonitorConfig[]>([])
+const monitorIntervalSec = ref(30)
+let monitorTimer: number | undefined
+
+function monitorOf(h: HostView): api.HostMonitorMetrics | null {
+  return monitorMetrics.value[h.id] ?? null
+}
+
+function monitorConfigOf(h: HostView): api.HostMonitorConfig | null {
+  return (
+    monitorConfigs.value.find((c) => c.host_id === h.id || (!c.host_id && c.host === h.address)) ?? null
+  )
+}
+
+/** 后端按 host_id 存指标；host_id 为空的预置配置按其地址回填到对应节点。 */
+async function loadMonitor(): Promise<void> {
+  const res = await run('monitor', () => api.getHostMonitor())
+  if (!res) return
+  monitorConfigs.value = res.configs ?? []
+  monitorIntervalSec.value = res.interval_sec || 30
+  const map: Record<string, api.HostMonitorMetrics> = {}
+  for (const m of res.metrics ?? []) {
+    if (m.host_id) {
+      map[m.host_id] = m
+      continue
+    }
+    const cfg = (res.configs ?? []).find((c) => !c.host_id && !!c.host)
+    const target = cfg ? hosts.value.find((h) => h.address === cfg.host) : null
+    if (target) map[target.id] = { ...m, host_id: target.id }
+  }
+  monitorMetrics.value = map
+}
+
+async function bindProfile(h: HostView, profileId: string): Promise<void> {
+  const payload = { ...h, profile: profileId } as api.RemoteHost
+  const res = await run('bind:' + h.id, () => api.updateHost(h.id, payload), '配置文件已绑定')
+  if (res) await refresh()
+}
+
+const showMonitor = ref(false)
+const monitorHost = ref<HostView | null>(null)
+const monitorForm = ref({ host: '', port: 22, user: 'root', password: '' })
+
+function openMonitor(h: HostView): void {
+  monitorHost.value = h
+  const c = monitorConfigOf(h)
+  monitorForm.value = {
+    host: c?.host || h.address,
+    port: c?.port || 22,
+    user: c?.user || 'root',
+    password: '',
+  }
+  showMonitor.value = true
+}
+
+async function saveMonitor(): Promise<void> {
+  const h = monitorHost.value
+  if (!h) return
+  const payload: api.HostMonitorInput = {
+    host: monitorForm.value.host.trim(),
+    port: Number(monitorForm.value.port) || 22,
+    user: monitorForm.value.user.trim() || 'root',
+  }
+  // 留空表示沿用已保存的密码，避免每次编辑都被清空。
+  if (monitorForm.value.password) payload.password = monitorForm.value.password
+  const res = await run(
+    'monitor-save',
+    () => api.setHostMonitor(h.id, payload),
+    'SSH 监控已保存并开始采集',
+  )
+  if (res) {
+    showMonitor.value = false
+    await loadMonitor()
+  }
+}
+
+async function removeMonitor(): Promise<void> {
+  const h = monitorHost.value
+  if (!h) return
+  const res = await run('monitor-del', () => api.deleteHostMonitor(h.id), 'SSH 监控已停用')
+  if (res) {
+    showMonitor.value = false
+    await loadMonitor()
+  }
+}
+
+async function refreshMonitorNow(h: HostView): Promise<void> {
+  await run('monitor-refresh:' + h.id, () => api.refreshHostMonitor(h.id))
+  await loadMonitor()
+}
+
+function barPct(used: number, total: number): number {
+  if (!total) return 0
+  return Math.max(0, Math.min(100, Math.round((used / total) * 100)))
+}
+function rateText(v: number): string {
+  return v > 0 ? `${formatBytes(v)}/s` : '0 B/s'
+}
+function levelClass(v: number): string {
+  if (v >= 85) return 'is-high'
+  if (v >= 65) return 'is-warn'
+  return 'is-ok'
 }
 
 watch(showAll, () => { void refresh() })
@@ -443,28 +471,6 @@ async function probeAll() {
   if (res) {
     window.$message?.info(`真实探测完成：${res.checked} 个节点，${res.online} 个可达`)
     await refresh()
-  }
-}
-
-async function openJson() {
-  const res = await run('export', () => api.exportHosts())
-  if (res) {
-    jsonText.value = JSON.stringify({ hosts: res.hosts }, null, 2)
-    showJson.value = true
-  }
-}
-
-async function importJson() {
-  try {
-    const parsed = JSON.parse(jsonText.value) as { hosts?: RemoteHost[] }
-    if (!Array.isArray(parsed.hosts)) throw new Error('JSON 需包含 hosts 数组')
-    const res = await run('import', () => api.importHosts(parsed.hosts!), '节点库已全量导入')
-    if (res) {
-      showJson.value = false
-      await refresh()
-    }
-  } catch (e) {
-    window.$message?.error(`JSON 解析失败：${e instanceof Error ? e.message : String(e)}`)
   }
 }
 
@@ -589,7 +595,7 @@ function openDeploy(h: HostView): void {
   deployHost.value = h
   const saved = provisions.value[h.id]
   deployProvision.value = saved ?? null
-  deployProfileId.value = saved?.profile_id ?? null
+  deployProfileId.value = saved?.profile_id || h.profile || null
   if (saved) {
     if (isProvisionProtocol(saved.protocol)) deployProtocol.value = saved.protocol
     deployPort.value = saved.port
@@ -647,6 +653,11 @@ async function copyText(text: string, ok: string): Promise<void> {
 onMounted(() => {
   void refresh()
   void loadOptions()
+  monitorTimer = window.setInterval(() => void loadMonitor(), Math.max(10, monitorIntervalSec.value) * 1000)
+})
+
+onUnmounted(() => {
+  if (monitorTimer !== undefined) window.clearInterval(monitorTimer)
 })
 </script>
 
@@ -728,56 +739,91 @@ onMounted(() => {
       </NCard>
     </div>
 
-    <NGrid v-else cols="1 m:2 l:3" responsive="screen" :x-gap="12" :y-gap="12" class="section-gap">
+    <NGrid v-else cols="1 m:2" responsive="screen" :x-gap="14" :y-gap="14" class="section-gap">
       <NGi v-for="h in filtered" :key="h.id">
-        <NCard size="small" class="host-card" :class="cardStatusClass(h)">
+        <NCard size="small" class="node-card" :class="cardStatusClass(h)">
           <template #header>
-            <div class="host-card__head">
-              <span class="host-card__flag">{{ flag(h.country) }}</span>
-              <span class="host-card__name">{{ h.name }}</span>
-              <NTag size="small" :bordered="false" :type="roleType(h.role)">{{ roleLabel(h.role) }}</NTag>
+            <div class="node-card__head">
+              <span class="node-card__flag">{{ flag(h.country) }}</span>
+              <span class="node-card__name" :title="h.name">{{ h.name }}</span>
+              <button
+                type="button"
+                class="node-card__role"
+                :title="'点击切换为' + (h.role === 'inbound' ? '出站' : '入站')"
+                @click="switchRole(h, h.role === 'inbound' ? 'outbound' : 'inbound')"
+              >{{ roleLabel(h.role) }}</button>
             </div>
           </template>
           <template #header-extra>
-            <NTag size="small" :bordered="false" :type="probeType(h)">{{ h.probe ? (h.probe.online ? '在线' : '离线') : '未检测' }}</NTag>
+            <NTag size="small" :bordered="false" :type="probeType(h)">
+              {{ h.probe ? (h.probe.online ? '在线' : '离线') : '未检测' }}
+            </NTag>
           </template>
 
-          <div class="host-card__addr mono">{{ h.address }}:{{ h.node_port }}</div>
-          <div class="host-card__meta">
-            <span>{{ h.internal || h.id }}</span>
-            <span>·</span>
-            <span>{{ h.protocol || '未设协议' }}</span>
-            <span v-if="h.provider">· {{ h.provider }}</span>
+          <div class="node-card__id">
+            <span class="mono">{{ h.address }}:{{ h.node_port }}</span>
+            <span class="node-card__os">{{ h.protocol || '未设协议' }}</span>
+            <span v-if="monitorOf(h)?.online" class="node-card__os">{{ monitorOf(h)?.os || 'Linux' }}</span>
           </div>
-          <div class="host-card__probe" :class="h.probe?.online ? 'is-online' : 'is-offline'">
-            {{ probeText(h) }}
+
+          <!-- 协议配置：直接在这里绑定，部署脚本会沿用这个选择 -->
+          <div class="node-bind">
+            <span class="node-bind__label">协议配置文件</span>
+            <NSelect
+              :value="h.profile || ''"
+              :options="profileOptions"
+              size="small"
+              clearable
+              filterable
+              placeholder="选择「协议配置」里的文件"
+              @update:value="(v: string | null) => bindProfile(h, String(v ?? ''))"
+            />
           </div>
-          <div class="host-card__chain">
-            <span class="host-card__chain-k">链路</span>
-            <NTag size="small" :bordered="false" :type="chainHops(h.chain).length ? 'info' : 'default'">
-              {{ chainLabel(h.chain) }}
-            </NTag>
-            <span v-if="chainHops(h.chain).length" class="host-card__chain-n">{{ chainHops(h.chain).length }} 跳</span>
+
+          <!-- 真实系统信息：全部来自 SSH 只读采集，未配置时不伪造数值 -->
+          <div v-if="monitorOf(h)?.online" class="node-res">
+            <div class="node-res__item">
+              <div class="node-res__top"><span>CPU</span><b>{{ Math.round(monitorOf(h)?.cpu_usage_pct ?? 0) }}%</b></div>
+              <div class="node-res__track">
+                <i :class="levelClass(monitorOf(h)?.cpu_usage_pct ?? 0)" :style="{ width: barPct(monitorOf(h)?.cpu_usage_pct ?? 0, 100) + '%' }" />
+              </div>
+              <div class="node-res__sub">{{ monitorOf(h)?.cpu_cores ?? 0 }} 核 · {{ monitorOf(h)?.kernel || '—' }}</div>
+            </div>
+            <div class="node-res__item">
+              <div class="node-res__top"><span>内存</span><b>{{ barPct(monitorOf(h)?.mem_used ?? 0, monitorOf(h)?.mem_total ?? 0) }}%</b></div>
+              <div class="node-res__track">
+                <i :class="levelClass(barPct(monitorOf(h)?.mem_used ?? 0, monitorOf(h)?.mem_total ?? 0))" :style="{ width: barPct(monitorOf(h)?.mem_used ?? 0, monitorOf(h)?.mem_total ?? 0) + '%' }" />
+              </div>
+              <div class="node-res__sub">{{ formatBytes(Number(monitorOf(h)?.mem_used ?? 0)) }} / {{ formatBytes(Number(monitorOf(h)?.mem_total ?? 0)) }}</div>
+            </div>
+            <div class="node-res__item">
+              <div class="node-res__top"><span>硬盘</span><b>{{ barPct(monitorOf(h)?.disk_used ?? 0, monitorOf(h)?.disk_total ?? 0) }}%</b></div>
+              <div class="node-res__track">
+                <i :class="levelClass(barPct(monitorOf(h)?.disk_used ?? 0, monitorOf(h)?.disk_total ?? 0))" :style="{ width: barPct(monitorOf(h)?.disk_used ?? 0, monitorOf(h)?.disk_total ?? 0) + '%' }" />
+              </div>
+              <div class="node-res__sub">{{ formatBytes(Number(monitorOf(h)?.disk_used ?? 0)) }} / {{ formatBytes(Number(monitorOf(h)?.disk_total ?? 0)) }}</div>
+            </div>
+            <div class="node-res__item">
+              <div class="node-res__top"><span>流量</span><b>↓{{ rateText(Number(monitorOf(h)?.net_rx_rate ?? 0)) }} ↑{{ rateText(Number(monitorOf(h)?.net_tx_rate ?? 0)) }}</b></div>
+              <div class="node-res__sub node-res__sub--wide">
+                累计 ↓{{ formatBytes(Number(monitorOf(h)?.net_rx_bytes ?? 0)) }} · ↑{{ formatBytes(Number(monitorOf(h)?.net_tx_bytes ?? 0)) }}
+              </div>
+            </div>
           </div>
-          <div class="host-card__chain">
-            <span class="host-card__chain-k">部署</span>
-            <NTag size="small" :bordered="false" :type="provisions[h.id] ? 'success' : 'default'">
-              {{ provisionLabel(h) }}
-            </NTag>
+          <div v-else class="node-res__empty">
+            <span class="hint">{{ monitorOf(h)?.error ? '采集失败：' + monitorOf(h)?.error : '系统信息未采集（CPU / 内存 / 硬盘 / 流量）' }}</span>
+            <NButton size="tiny" quaternary type="primary" @click="openMonitor(h)">配置 SSH 监控</NButton>
           </div>
-          <div v-if="h.tags?.length" class="host-card__tags">
-            <NTag v-for="t in h.tags.slice(0, 4)" :key="t" size="small" :bordered="false">{{ t }}</NTag>
-          </div>
-          <div class="host-card__foot">
+
+          <div class="node-card__foot">
             <NSpace :size="6" :wrap="true">
               <NButton size="tiny" type="primary" @click="openDetail(h)">详情</NButton>
               <NButton size="tiny" type="info" @click="openDeploy(h)">部署到 节点服务器</NButton>
-              <NButton size="tiny" :loading="isBusy('probe:' + h.id)" @click="probeOne(h)">探测</NButton>
-              <NButton size="tiny" :loading="isBusy('role:' + h.id)" @click="switchRole(h, 'inbound')">设为入站</NButton>
-              <NButton size="tiny" :loading="isBusy('role:' + h.id)" @click="switchRole(h, 'outbound')">设为出站</NButton>
-              <NButton size="tiny" quaternary @click="copySummary(h)">复制</NButton>
+              <NButton size="tiny" @click="openMonitor(h)">系统信息</NButton>
+              <NButton size="tiny" :loading="isBusy('monitor-refresh:' + h.id)" @click="refreshMonitorNow(h)">刷新</NButton>
               <NButton size="tiny" quaternary type="error" @click="confirmDelete(h)">删除</NButton>
             </NSpace>
+            <span class="node-card__time">{{ monitorOf(h) ? '采集于 ' + formatTime(monitorOf(h)?.collected_at ?? '') : '' }}</span>
           </div>
         </NCard>
       </NGi>
@@ -847,6 +893,16 @@ onMounted(() => {
                 <div class="kv-label">执行内核 core_id</div>
                 <NInput v-model:value="form.core_id" placeholder="xray-core / sing-box / mihomo" />
               </NGi>
+              <NGi :span="2">
+                <div class="kv-label">协议配置文件（来自「协议配置」）</div>
+                <NSelect
+                  v-model:value="form.profile"
+                  :options="profileOptions"
+                  clearable
+                  filterable
+                  placeholder="不绑定（使用内核默认）"
+                />
+              </NGi>
             </NGrid>
           </section>
 
@@ -910,12 +966,17 @@ onMounted(() => {
           </NGi>
         </NGrid>
 
-        <!-- 批量入口从工具栏收进来：新建单台节点时不再被一堆按钮干扰 -->
-        <div class="add-more">
-          <span class="hint">批量导入：</span>
-          <NButton size="tiny" quaternary type="primary" @click="openSubStoreFromAdd">从 Sub-Store 导入</NButton>
-          <span class="hint">·</span>
-          <NButton size="tiny" quaternary @click="openJsonFromAdd">JSON 全量导入 / 导出</NButton>
+        <div class="node-bind node-bind--form">
+          <span class="node-bind__label">协议配置文件（来自「协议配置」）</span>
+          <NSelect
+            v-model:value="addForm.profile"
+            :options="profileOptions"
+            size="small"
+            clearable
+            filterable
+            placeholder="不绑定（使用内核默认）"
+          />
+          <span class="hint">绑定后「部署到 节点服务器」会自动带上这份文件。</span>
         </div>
       </NSpace>
       <template #footer>
@@ -1017,97 +1078,62 @@ onMounted(() => {
       </NSpace>
     </NModal>
 
-    <!-- JSON 全量导入导出 -->
-    <NModal v-model:show="showJson" preset="card" title="节点库 JSON（全量）" style="width: 720px" :bordered="false">
-      <NSpace vertical :size="10" style="width: 100%">
-        <div class="hint">导出的是真实登记数据；导入为全量替换，任一条校验失败则整个节点库保持不变。</div>
-        <NInput
-          v-model:value="jsonText"
-          type="textarea"
-          :autosize="{ minRows: 12, maxRows: 20 }"
-          class="mono"
-        />
+    <!-- 系统信息采集（SSH 只读） -->
+    <NModal
+      v-model:show="showMonitor"
+      preset="card"
+      :title="`系统信息采集 · ${monitorHost?.name ?? ''}`"
+      style="width: 560px"
+      :bordered="false"
+    >
+      <NSpace vertical :size="12" style="width: 100%">
+        <NAlert type="info" :bordered="false">
+          通过 SSH 执行只读命令采集 CPU / 内存 / 硬盘 / 流量，不会在服务器上安装或写入任何东西。
+          凭据只保存在本机数据目录，页面不会回显密码。
+        </NAlert>
+        <NGrid cols="2" :x-gap="10" :y-gap="8">
+          <NGi>
+            <div class="kv-label">SSH 主机</div>
+            <NInput v-model:value="monitorForm.host" placeholder="IP 或域名" />
+          </NGi>
+          <NGi>
+            <div class="kv-label">端口</div>
+            <NInputNumber v-model:value="monitorForm.port" :min="1" :max="65535" style="width: 100%" />
+          </NGi>
+          <NGi>
+            <div class="kv-label">用户名</div>
+            <NInput v-model:value="monitorForm.user" placeholder="root" />
+          </NGi>
+          <NGi>
+            <div class="kv-label">密码（留空沿用已保存的）</div>
+            <NInput v-model:value="monitorForm.password" type="password" show-password-on="click" placeholder="不修改请留空" />
+          </NGi>
+        </NGrid>
+        <div class="hint">
+          首次连接会记录服务器 SSH 指纹并校验后续连接，指纹变化会拒绝连接。
+          每 {{ monitorIntervalSec }} 秒自动采集一次。
+        </div>
+        <NAlert
+          v-if="monitorHost && monitorOf(monitorHost) && !monitorOf(monitorHost)?.online"
+          type="warning"
+          :bordered="false"
+        >{{ monitorOf(monitorHost)?.error || '尚未采集到数据' }}</NAlert>
       </NSpace>
       <template #footer>
-        <NSpace justify="end">
-          <NButton size="small" @click="showJson = false">关闭</NButton>
-          <NButton size="small" type="primary" :loading="isBusy('import')" @click="importJson">
-            全量导入
-          </NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <!-- Sub-Store 导入 -->
-    <NModal v-model:show="showSubStore" preset="card" title="从 Sub-Store 导入节点" style="width: 720px" :bordered="false">
-      <NSpace vertical :size="12" style="width: 100%">
-        <div class="hint">
-          支持 Sub-Store 的 plain JSON（target=json）、Clash / mihomo YAML、base64 订阅与纯节点链接。
-          只会识别节点本身；无法表达为 NGG 节点的条目（vmess / hysteria2 / tuic / wireguard 等）逐条列出后跳过，不会硬塞成 vless。
-        </div>
-
-        <NSpace :size="8" align="center" :wrap="true">
-          <NRadioGroup v-model:value="ssMode" size="small">
-            <NRadioButton value="url">订阅地址</NRadioButton>
-            <NRadioButton value="text">粘贴内容</NRadioButton>
-          </NRadioGroup>
-          <NSelect v-model:value="ssRole" size="small" :options="ROLE_OPTIONS" style="width: 250px" />
-        </NSpace>
-
-        <NInput
-          v-if="ssMode === 'url'"
-          v-model:value="ssURL"
-          placeholder="http://127.0.0.1:3000/api/sub/name?target=json"
-        />
-        <NInput
-          v-else
-          v-model:value="ssText"
-          type="textarea"
-          :autosize="{ minRows: 8, maxRows: 16 }"
-          class="mono"
-          placeholder='[{"type":"ss","name":"HK-01","server":"1.2.3.4","port":8388,"cipher":"aes-256-gcm","password":"…"}]'
-        />
-
-        <NSpace :size="8" align="center">
-          <NButton size="small" :loading="isBusy('ss-preview')" @click="previewSubStore">解析预览</NButton>
+        <NSpace justify="space-between" style="width: 100%">
           <NButton
             size="small"
-            type="primary"
-            :loading="isBusy('ss-import')"
-            :disabled="!ssResult || !ssResult.hosts.length"
-            @click="commitSubStore"
-          >导入 {{ ssResult?.hosts.length ?? 0 }} 个节点</NButton>
-          <span class="hint">先预览再导入，避免把错误格式一次性写进节点库。</span>
-        </NSpace>
-
-        <template v-if="ssResult">
-          <NSpace :size="6" align="center" :wrap="true">
-            <NTag size="small" :bordered="false">格式 {{ ssResult.format }}</NTag>
-            <NTag size="small" :bordered="false">识别 {{ ssResult.parsed }}</NTag>
-            <NTag size="small" :bordered="false" type="warning">跳过 {{ ssResult.skipped }}</NTag>
-            <NTag size="small" :bordered="false" type="success">可导入 {{ ssResult.hosts.length }}</NTag>
+            type="error"
+            quaternary
+            :loading="isBusy('monitor-del')"
+            @click="removeMonitor"
+          >停用监控</NButton>
+          <NSpace :size="8">
+            <NButton size="small" @click="showMonitor = false">取消</NButton>
+            <NButton size="small" type="primary" :loading="isBusy('monitor-save')" @click="saveMonitor">
+              保存并开始采集
+            </NButton>
           </NSpace>
-
-          <div v-if="ssResult.hosts.length" class="ss-list">
-            <div v-for="d in ssResult.hosts" :key="d.id" class="ss-row">
-              <span class="ss-row__proto">{{ d.protocol }}</span>
-              <span class="ss-row__name">{{ d.name || d.id }}</span>
-              <span class="mono ss-row__addr">{{ d.address }}:{{ d.svc_port }}</span>
-            </div>
-          </div>
-          <NAlert v-else type="warning" :bordered="false">没有可导入的节点，原因见下方告警。</NAlert>
-
-          <NAlert v-for="(f, i) in ssResult.failed" :key="'ss-f' + i" type="error" :bordered="false">
-            {{ f }}
-          </NAlert>
-          <NAlert v-for="(w, i) in ssWarnings" :key="'ss-w' + i" type="warning" :bordered="false">
-            {{ w }}
-          </NAlert>
-        </template>
-      </NSpace>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton size="small" @click="showSubStore = false">关闭</NButton>
         </NSpace>
       </template>
     </NModal>
@@ -1115,6 +1141,169 @@ onMounted(() => {
 </template>
 
 <style scoped>
+
+/* ------------------------------------------------------------------ *
+ * v2.11.0 节点管理：Data / Dashboard 风格（沿用项目蓝 / 中性灰 token）
+ * 结构：KPI 行 → 节点卡（身份 / 绑定 / 资源 / 操作）；避免信息过载，
+ * 所有交互元素保留可见文字与 focus 轮廓，不靠颜色单独表达状态。
+ * ------------------------------------------------------------------ */
+.node-card {
+  border: 1px solid #ececf0;
+  border-radius: 12px;
+  background: #fff;
+}
+.node-card :deep(.n-card-header) {
+  padding: 12px 14px 8px;
+}
+.node-card :deep(.n-card__content) {
+  padding: 0 14px 12px;
+}
+.node-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.node-card__flag {
+  flex: 0 0 auto;
+  min-width: 28px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: #f2f4f7;
+  color: #3a3a3c;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+.node-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1d1d1f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-card__role {
+  flex: 0 0 auto;
+  border: 1px solid #d2d2d7;
+  border-radius: 999px;
+  background: #fff;
+  color: #3a3a3c;
+  font-size: 10.5px;
+  line-height: 18px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.node-card__role:hover { border-color: #0071e3; color: #0071e3; }
+.node-card__role:focus-visible { outline: 2px solid #0071e3; outline-offset: 2px; }
+.node-card__id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: #6e6e73;
+  margin-bottom: 10px;
+}
+.node-card__os {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #f5f5f7;
+  font-size: 10.5px;
+  color: #6e6e73;
+}
+.node-bind {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #ececf0;
+  border-radius: 9px;
+  background: #fafafb;
+}
+.node-bind__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6e6e73;
+  white-space: nowrap;
+}
+.node-bind--form {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+.node-res {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+  margin-top: 10px;
+}
+.node-res__item { min-width: 0; }
+.node-res__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: #6e6e73;
+}
+.node-res__top b {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1d1d1f;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.node-res__track {
+  height: 5px;
+  margin: 4px 0 3px;
+  border-radius: 3px;
+  background: #eef0f3;
+  overflow: hidden;
+}
+.node-res__track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width .3s ease;
+}
+.node-res__track i.is-ok { background: #34c759; }
+.node-res__track i.is-warn { background: #ff9f0a; }
+.node-res__track i.is-high { background: #ff3b30; }
+.node-res__sub {
+  font-size: 10.5px;
+  color: #8e8e93;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-res__sub--wide { white-space: normal; line-height: 1.4; }
+.node-res__empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed #e5e5ea;
+  border-radius: 9px;
+}
+.node-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #f0f0f2;
+}
+.node-card__time {
+  font-size: 10px;
+  color: #a1a1a6;
+  white-space: nowrap;
+}
+
 /* 节点详情：单列表单，按「角色与状态 / 节点信息」两段排列，宽度收到 580px。 */
 .node-form {
   display: flex;
@@ -1206,16 +1395,6 @@ onMounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* 批量入口：只在新增节点弹窗底部出现，不占用主工具栏 */
-.add-more {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  padding-top: 4px;
-  border-top: 1px solid #f0f0f2;
-}
-
 /* 部署到 节点服务器 */
 .deploy-block {
   border: 1px solid #ececf0;
@@ -1268,40 +1447,4 @@ onMounted(() => {
   margin-bottom: 2px;
 }
 
-/* Sub-Store 导入预览：一行一个节点，协议用短标签区分。 */
-.ss-list {
-  max-height: 220px;
-  overflow: auto;
-  border: 1px solid #ececf0;
-  border-radius: 10px;
-  background: #fff;
-}
-.ss-row {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid #f4f4f6;
-  font-size: 12px;
-}
-.ss-row:last-child {
-  border-bottom: none;
-}
-.ss-row__proto {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: #0071e3;
-  text-transform: uppercase;
-}
-.ss-row__name {
-  color: #1d1d1f;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ss-row__addr {
-  color: #6e6e73;
-  font-size: 11px;
-}
 </style>
