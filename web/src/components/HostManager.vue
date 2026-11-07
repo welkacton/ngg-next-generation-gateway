@@ -138,6 +138,9 @@ function emptyHost(role: HostRole): HostForm {
   }
 }
 
+/** 选中的节点最近一次真实探测结果（详情页头部与底部元信息共用）。 */
+const currentProbe = computed(() => hosts.value.find((x) => x.id === editingId.value)?.probe ?? null)
+
 function toChain(chain?: HostChainHop[] | null): ChainHopDraft[] {
   return (chain ?? []).map((h) => ({
     kind: h.kind === 'http' ? 'http' : 'socks5',
@@ -872,173 +875,76 @@ onMounted(() => {
     <!-- ---------------------------------------------------------------- *
      * 节点详情抽屉：两栏布局，对齐节点管理面板的信息密度
      * ---------------------------------------------------------------- -->
-    <NDrawer v-model:show="showDrawer" :width="860" placement="right">
+    <NDrawer v-model:show="showDrawer" :width="580" placement="right">
       <NDrawerContent closable :native-scrollbar="false">
         <template #header>
-          <NSpace :size="8" align="center">
+          <NSpace :size="8" align="center" :wrap="true">
             <span>{{ flag(form.country) }} {{ form.name || '节点详情' }}</span>
             <NTag size="small" :bordered="false" :type="roleType(form.role)">{{ roleLabel(form.role) }}</NTag>
+            <NTag v-if="currentProbe" size="small" :bordered="false" :type="currentProbe.online ? 'success' : 'error'">
+              {{ currentProbe.online ? '在线' : '离线' }} · {{ currentProbe.latency_ms ?? 0 }} ms
+            </NTag>
           </NSpace>
         </template>
 
-        <NGrid cols="1 m:2" responsive="screen" :x-gap="14" :y-gap="14">
-          <!-- 左栏 -->
-          <NGi>
-            <NCard size="small" title="节点状态" class="host-panel">
-              <NSpace vertical :size="10" style="width: 100%">
-                <div class="kv-label">角色（可随时改成入站 / 出站 / 双向）</div>
+        <div class="node-form">
+          <section class="node-form__section">
+            <div class="node-form__legend">角色与状态</div>
+            <NGrid cols="2" :x-gap="12" :y-gap="10">
+              <NGi>
+                <div class="kv-label">角色（入站 / 出站 / 双向）</div>
                 <NSelect v-model:value="form.role" :options="ROLE_OPTIONS" />
+              </NGi>
+              <NGi>
                 <div class="kv-label">启用</div>
-                <NSwitch v-model:value="form.enabled" />
-                <div class="host-status-line">
-                  <span class="hint">最近真实探测：</span>
-                  <span>{{ probeText(hosts.find((x) => x.id === editingId)) }}</span>
+                <div class="node-form__switch">
+                  <NSwitch v-model:value="form.enabled" />
+                  <span class="hint">{{ form.enabled ? '参与调度' : '已停用' }}</span>
                 </div>
-                <div class="hint">节点 ID：{{ editingId }}</div>
-                <div class="hint">创建：{{ formatTime(form.created_at) }}</div>
-              </NSpace>
-            </NCard>
+              </NGi>
+            </NGrid>
+          </section>
 
-            <NCard size="small" title="基本信息" class="host-panel">
-              <NSpace vertical :size="9" style="width: 100%">
-                <NGrid cols="2" :x-gap="10" :y-gap="6">
-                  <NGi>
-                    <div class="kv-label">国家 / 地区</div>
-                    <NSelect v-model:value="form.country" :options="COUNTRY_OPTIONS" />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">内部名称</div>
-                    <NInput v-model:value="form.internal" placeholder="us01" />
-                  </NGi>
-                  <NGi :span="2">
-                    <div class="kv-label">节点名称</div>
-                    <NInput v-model:value="form.name" placeholder="US us01" />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">地址（IP / 域名）</div>
-                    <NInput v-model:value="form.address" placeholder="203.0.113.10" />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">Node Port（管理端口）</div>
-                    <NInputNumber v-model:value="form.node_port" :min="1" :max="65535" style="width: 100%" />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">服务端口</div>
-                    <NInputNumber v-model:value="form.svc_port" :min="0" :max="65535" style="width: 100%" />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">执行内核 core_id</div>
-                    <NInput v-model:value="form.core_id" placeholder="xray-core / sing-box / mihomo" />
-                  </NGi>
-                  <NGi :span="2">
-                    <div class="kv-label">Secret Key</div>
-                    <NInput
-                      v-model:value="form.secret_key"
-                      :type="revealSecret ? 'text' : 'password'"
-                      placeholder="可选，留空表示未设置"
-                    >
-                      <template #suffix>
-                        <NButton text size="tiny" @click="revealSecret = !revealSecret">
-                          {{ revealSecret ? '隐藏' : '显示' }}
-                        </NButton>
-                      </template>
-                    </NInput>
-                  </NGi>
-                  <NGi :span="2">
-                    <div class="kv-label">代理 URL（可选，面板到节点的内部 API 走此代理）</div>
-                    <NInput v-model:value="form.proxy_url" placeholder="socks5://user:pass@host:port" />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">协议</div>
-                    <NSelect
-                      v-model:value="form.protocol"
-                      :options="protocolOptions"
-                      filterable
-                      tag
-                      placeholder="选择或输入协议"
-                    />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">插件</div>
-                    <NInput v-model:value="form.plugin" placeholder="可选" />
-                  </NGi>
-                </NGrid>
-              </NSpace>
-            </NCard>
+          <section class="node-form__section">
+            <div class="node-form__legend">节点信息</div>
+            <NGrid cols="2" :x-gap="12" :y-gap="10">
+              <NGi>
+                <div class="kv-label">国家 / 地区</div>
+                <NSelect v-model:value="form.country" :options="COUNTRY_OPTIONS" />
+              </NGi>
+              <NGi>
+                <div class="kv-label">内部名称</div>
+                <NInput v-model:value="form.internal" placeholder="us01" />
+              </NGi>
+              <NGi :span="2">
+                <div class="kv-label">节点名称</div>
+                <NInput v-model:value="form.name" placeholder="US us01" />
+              </NGi>
+              <NGi>
+                <div class="kv-label">地址（IP / 域名）</div>
+                <NInput v-model:value="form.address" placeholder="203.0.113.10" />
+              </NGi>
+              <NGi>
+                <div class="kv-label">Node Port（管理端口）</div>
+                <NInputNumber v-model:value="form.node_port" :min="1" :max="65535" style="width: 100%" />
+              </NGi>
+              <NGi>
+                <div class="kv-label">服务端口</div>
+                <NInputNumber v-model:value="form.svc_port" :min="0" :max="65535" style="width: 100%" />
+              </NGi>
+              <NGi>
+                <div class="kv-label">执行内核 core_id</div>
+                <NInput v-model:value="form.core_id" placeholder="xray-core / sing-box / mihomo" />
+              </NGi>
+            </NGrid>
+          </section>
 
-            <NCard size="small" title="标签与备注" class="host-panel">
-              <NSpace vertical :size="10" style="width: 100%">
-                <div class="kv-label">标签（逗号分隔）</div>
-                <NInput
-                  v-model:value="tagInput"
-                  placeholder="输入后回车添加"
-                  @keyup.enter="addTagFromInput"
-                />
-                <div v-if="form.tags.length" class="host-tags">
-                  <NTag
-                    v-for="t in form.tags"
-                    :key="t"
-                    size="small"
-                    closable
-                    :bordered="false"
-                    @close="form.tags = form.tags.filter((x) => x !== t)"
-                  >{{ t }}</NTag>
-                </div>
-                <div class="kv-label">备注</div>
-                <NInput v-model:value="form.note" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
-              </NSpace>
-            </NCard>
-
-          </NGi>
-
-          <!-- 右栏 -->
-          <NGi>
-            <NCard size="small" title="IP 地址" class="host-panel">
-              <NSpace :size="6" style="width: 100%">
-                <NInput v-model:value="newIP" placeholder="添加该主机的 IP" @keyup.enter="addIP" />
-                <NButton size="small" @click="addIP">添加</NButton>
-              </NSpace>
-              <div v-if="!form.ip_addresses.length" class="hint" style="margin-top: 10px">还没有填写 IP 地址</div>
-              <div v-else class="host-tags" style="margin-top: 10px">
-                <NTag
-                  v-for="ip in form.ip_addresses"
-                  :key="ip"
-                  size="small"
-                  closable
-                  :bordered="false"
-                  @close="form.ip_addresses = form.ip_addresses.filter((x) => x !== ip)"
-                >{{ ip }}</NTag>
-              </div>
-            </NCard>
-
-            <NCard size="small" title="最近一次真实探测" class="host-panel">
-              <template v-if="hosts.find((x) => x.id === editingId)?.probe">
-                <div class="host-kv">
-                  <span>可达</span>
-                  <NTag
-                    size="small"
-                    :bordered="false"
-                    :type="hosts.find((x) => x.id === editingId)?.probe?.online ? 'success' : 'error'"
-                  >
-                    {{ hosts.find((x) => x.id === editingId)?.probe?.online ? '在线' : '离线' }}
-                  </NTag>
-                </div>
-                <div class="host-kv">
-                  <span>延迟</span>
-                  <span class="mono">{{ hosts.find((x) => x.id === editingId)?.probe?.latency_ms ?? 0 }} ms</span>
-                </div>
-                <div class="host-kv">
-                  <span>目标</span>
-                  <span class="mono">{{ hosts.find((x) => x.id === editingId)?.probe?.target || '—' }}</span>
-                </div>
-                <div v-if="hosts.find((x) => x.id === editingId)?.probe?.error" class="hint" style="margin-top: 6px">
-                  {{ hosts.find((x) => x.id === editingId)?.probe?.error }}
-                </div>
-              </template>
-              <div v-else class="hint">尚未探测。点列表上的「探测」做一次真实 TCP 连接。</div>
-            </NCard>
-          </NGi>
-        </NGrid>
+          <div class="node-form__meta">
+            <span>节点 ID <b class="mono">{{ editingId }}</b></span>
+            <span>创建 <b>{{ formatTime(form.created_at) }}</b></span>
+            <span v-if="currentProbe?.target">探测目标 <b class="mono">{{ currentProbe.target }}</b></span>
+          </div>
+        </div>
 
         <template #footer>
           <NSpace justify="end" :size="8">
@@ -1269,6 +1175,78 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 节点详情：单列表单，按「角色与状态 / 节点信息」两段排列，宽度收到 580px。 */
+.node-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.node-form__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.node-form__legend {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #6e6e73;
+  letter-spacing: .02em;
+}
+.node-form__switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.node-form__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f2;
+  font-size: 11px;
+  color: #8e8e93;
+}
+.node-form__meta b {
+  font-weight: 500;
+  color: #1d1d1f;
+}
+
+/* 节点详情：单列表单，按「角色与状态 / 节点信息」两段排列，宽度收到 580px。 */
+.node-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.node-form__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.node-form__legend {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #6e6e73;
+  letter-spacing: .02em;
+}
+.node-form__switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.node-form__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f2;
+  font-size: 11px;
+  color: #8e8e93;
+}
+.node-form__meta b {
+  font-weight: 500;
+  color: #1d1d1f;
+}
+
 .host-card__chain {
   display: flex;
   align-items: center;
