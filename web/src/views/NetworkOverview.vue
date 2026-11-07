@@ -509,10 +509,10 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="netov-config">
-          <button type="button" class="netov-config__item" @click="go('inbound')">
+          <button type="button" class="netov-config__item" @click="go('nodes')">
             <span class="netov-config__label">节点数</span>
             <span class="netov-config__value">{{ countText(nodeCount) }}</span>
-            <span class="netov-config__go">入口节点 →</span>
+            <span class="netov-config__go">节点管理 →</span>
           </button>
           <button type="button" class="netov-config__item" @click="go('rules')">
             <span class="netov-config__label">规则数</span>

@@ -2413,6 +2413,10 @@ export interface HostProvisionEndpoint {
 
 export interface HostProvision {
   host_id: string
+  /** 绑定的「协议配置」档案（未绑定则为空，表示使用最小配置模式）。 */
+  profile_id?: string
+  profile_name?: string
+  kernel?: string
   protocol: ProvisionProtocol
   port: number
   credential: string
@@ -2426,7 +2430,13 @@ export const getHostProvision = (id: string) =>
   get<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`)
 export const provisionHost = (
   id: string,
-  payload: { protocol: ProvisionProtocol; port?: number; sni?: string },
+  payload: {
+    /** 绑定档案时只需 profile_id；protocol 仅在最小配置模式下必填。 */
+    profile_id?: string
+    protocol?: ProvisionProtocol
+    port?: number
+    sni?: string
+  },
 ) => post<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`, payload)
 
 export type SubscriptionTarget = 'clash' | 'surge' | 'singbox' | 'v2ray' | 'socks'

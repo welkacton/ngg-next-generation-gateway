@@ -8,10 +8,9 @@ const router = useRouter()
 const items = [
   { key: 'pipeline', label: '链路编排', page: 'pipeline' },
   { key: 'protocols', label: '协议配置', page: 'protocols' },
-  { key: 'inbound', label: '入口节点', page: 'inbound' },
+  { key: 'nodes', label: '节点管理', page: 'nodes' },
   { key: 'rules', label: '规则配置', page: 'rules' },
   { key: 'dns', label: 'DNS配置', page: 'dns' },
-  { key: 'outbound', label: '出口节点', page: 'outbound' },
   { key: 'users', label: '用户管理', page: 'users' },
 ]
 

@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.7.5", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.8.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.7.5），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.8.0），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -829,3 +829,35 @@ TUN 数据面的其它调整：
 - 只有 `DIRECT` 的 UDP 会被中继；需要代理的 UDP 立即关闭（见 §15）。
 - `udp_flows` 为空闲 90 秒回收的流，不再让每个 QUIC 尝试空占 30 秒。
 - 连接失败时 `DropError` 会带上具体阶段，便于区分「规则拦的」和「拨号失败的」。
+
+## 18. 节点管理合并与配置文件绑定部署（v2.8.0）
+
+### 18.1 入口节点 / 出口节点 → 节点管理
+
+`/inbound` 与 `/outbound` 合并为 **`/nodes`（节点管理）**，菜单位于「协议配置」正下方：
+
+- 角色成为同一份节点库上的字段（`inbound` / `outbound` / `both`），卡片上可一键切换；
+- 旧地址 `/inbound`、`/outbound` 保留为 **跳转到 `/nodes`**，书签不会 404；
+- 后端接口不变：`GET /hosts?role=inbound|outbound|both|all`，节点管理页固定用 `all`。
+
+### 18.2 部署脚本可绑定「协议配置」档案
+
+`POST /hosts/{id}/provision` 新增可选字段 `profile_id`：
+
+```json
+{ "profile_id": "edge-vless", "port": 8443, "sni": "edge.example.com" }
+```
+
+- 传 `profile_id` 时，后端用 `profiles.Render()` 渲染该档案，脚本**安装档案对应的内核**
+  （mihomo / sing-box / xray-core）并把渲染后的内容**原样写入**该内核的配置文件；
+- `port` / `sni` 缺省时从内容推断（首个 `port:` / `"port":` / `mixed-port:`，以及 `serverName` / `sni`），
+  仅用于放通防火墙与自检，不会改写配置；
+- 脚本先跑内核自带校验（`xray run -test` / `sing-box check` / `mihomo -t`），失败即中止；
+- 结果里新增 `profile_id` / `profile_name` / `kernel`，并随 provision 持久化，控制台可再次显示绑定；
+- 不传 `profile_id` 时保持原来的「按协议生成最小配置」模式（向后兼容）。
+
+### 18.3 删掉的冗余面板
+
+节点详情抽屉里的「配置文件 / 采集数据 / 密钥配对 / 连接测试」四张卡已删除：
+它们与「协议配置」「网络概览」「控制中心」重复，且密钥配对与采集依赖未安装的 agent，
+在节点页展示只会误导。节点页现在只保留节点本身的属性与真实探测结果。

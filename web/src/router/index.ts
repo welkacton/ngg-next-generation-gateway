@@ -105,18 +105,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/DNS.vue'),
     meta: { title: 'DNS配置' },
   },
-  {
-    path: '/inbound',
-    name: 'inbound',
-    component: () => import('../views/Inbound.vue'),
-    meta: { title: '入口节点' },
-  },
-  {
-    path: '/outbound',
-    name: 'outbound',
-    component: () => import('../views/Outbound.vue'),
-    meta: { title: '出口节点' },
-  },
+  { path: '/inbound', redirect: { name: 'nodes' } },
+  { path: '/outbound', redirect: { name: 'nodes' } },
   {
     path: '/users',
     name: 'users',
@@ -134,6 +124,12 @@ const routes: RouteRecordRaw[] = [
     name: 'protocols',
     component: () => import('../views/Protocols.vue'),
     meta: { title: '协议配置' },
+  },
+  {
+    path: '/nodes',
+    name: 'nodes',
+    component: () => import('../views/Nodes.vue'),
+    meta: { title: '节点管理' },
   },
   {
     path: '/pq',

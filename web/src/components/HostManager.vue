@@ -36,7 +36,7 @@ import { useApiAction } from '../composables/useApi'
 import { formatBytes, formatTime, prettyJson } from '../utils/format'
 
 const props = defineProps<{
-  role: 'inbound' | 'outbound'
+  role: HostRole | 'all'
   title: string
   subtitle: string
 }>()
@@ -120,6 +120,11 @@ interface HostForm
 
 function emptyHop(): ChainHopDraft {
   return { kind: 'socks5', address: '', port: 1080, username: '', password: '', enabled: true }
+}
+
+/** 合并页（role=all）新建节点时的默认角色：先按「双向」建，卡片上可一键改。 */
+function defaultRole(): HostRole {
+  return props.role === 'all' ? 'both' : props.role
 }
 
 function emptyHost(role: HostRole): HostForm {
@@ -233,13 +238,12 @@ const showDrawer = ref(false)
 const showAdd = ref(false)
 const showJson = ref(false)
 const editingId = ref<string | null>(null)
-const form = ref<HostForm>(emptyHost(props.role))
-const addForm = ref<HostForm>(emptyHost(props.role))
+const form = ref<HostForm>(emptyHost(defaultRole()))
+const addForm = ref<HostForm>(emptyHost(defaultRole()))
 const jsonText = ref('')
 const newIP = ref('')
 const tagInput = ref('')
 const revealSecret = ref(false)
-const rawResult = ref<unknown>(null)
 
 /* ------------------------------------------------------------------ *
  * v2.3.0 节点能力：配置文件 / 采集数据 / 密钥配对 / 连接测试
@@ -301,7 +305,8 @@ const filtered = computed(() => {
 })
 
 async function refresh() {
-  const res = await run('list', () => api.listHosts(showAll.value ? 'all' : props.role))
+  const scope = props.role === 'all' || showAll.value ? 'all' : props.role
+  const res = await run('list', () => api.listHosts(scope))
   if (res) {
     hosts.value = res.hosts ?? []
     stats.value = res.stats ?? null
@@ -330,7 +335,7 @@ watch(showAll, () => { void refresh() })
  * ------------------------------------------------------------------ */
 
 function openAdd() {
-  addForm.value = emptyHost(props.role)
+  addForm.value = emptyHost(defaultRole())
   showAdd.value = true
 }
 
@@ -346,7 +351,6 @@ async function createHost() {
   }
   const res = await run('add', () => api.addHost(toPayload(addForm.value)), '节点已添加并执行真实连通性探测')
   if (res) {
-    rawResult.value = res
     showAdd.value = false
     await refresh()
   }
@@ -374,7 +378,6 @@ async function saveHost() {
   }
   const res = await run('save', () => api.updateHost(editingId.value!, toPayload(form.value)), '节点已保存')
   if (res) {
-    rawResult.value = res
     showDrawer.value = false
     await refresh()
   }
@@ -389,7 +392,6 @@ function confirmDelete(h: Pick<HostView, 'id' | 'name' | 'address'>) {
     onPositiveClick: async () => {
       const res = await run('del:' + h.id, () => api.deleteHost(h.id), '节点已删除')
       if (res) {
-        rawResult.value = res
         if (editingId.value === h.id) showDrawer.value = false
         await refresh()
       }
@@ -404,7 +406,6 @@ async function switchRole(h: Pick<HostView, 'id' | 'name'>, role: HostRole) {
     `${h.name} 已设为${roleLabel(role)}`,
   )
   if (res) {
-    rawResult.value = res
     if (editingId.value === h.id) form.value.role = role
     await refresh()
   }
@@ -413,7 +414,6 @@ async function switchRole(h: Pick<HostView, 'id' | 'name'>, role: HostRole) {
 async function probeOne(h: HostView) {
   const res = await run('probe:' + h.id, () => api.probeHost(h.id))
   if (res) {
-    rawResult.value = res
     window.$message?.[res.probe.online ? 'success' : 'warning'](
       res.probe.online
         ? `${h.name} 可达（${res.probe.latency_ms} ms）`
@@ -426,7 +426,6 @@ async function probeOne(h: HostView) {
 async function probeAll() {
   const res = await run('probe-all', () => api.probeAllHosts())
   if (res) {
-    rawResult.value = res
     window.$message?.info(`真实探测完成：${res.checked} 个节点，${res.online} 个可达`)
     await refresh()
   }
@@ -446,7 +445,6 @@ async function importJson() {
     if (!Array.isArray(parsed.hosts)) throw new Error('JSON 需包含 hosts 数组')
     const res = await run('import', () => api.importHosts(parsed.hosts!), '节点库已全量导入')
     if (res) {
-      rawResult.value = res
       showJson.value = false
       await refresh()
     }
@@ -521,9 +519,39 @@ const provisions = ref<Record<string, HostProvision>>({})
 const showDeploy = ref(false)
 const deployHost = ref<HostView | null>(null)
 const deployProtocol = ref<ProvisionProtocol>('vless')
+/** 绑定档案时协议可能是 hysteria2 / anytls 等，不在最小配置模式的枚举里。 */
+function isProvisionProtocol(v: string): v is ProvisionProtocol {
+  return Object.prototype.hasOwnProperty.call(PROVISION_DEFAULT_PORT, v)
+}
 const deployPort = ref<number | null>(443)
 const deploySni = ref('')
 const deployProvision = ref<HostProvision | null>(null)
+
+/* 部署时可绑定「协议配置」里的档案：脚本会安装该内核并原样写入该文件。 */
+const deployProfiles = ref<api.Profile[]>([])
+const deployProfileId = ref<string | null>(null)
+let profilesLoaded = false
+
+const deployProfileOptions = computed(() =>
+  deployProfiles.value.map((p) => ({
+    label: `${p.name} · ${p.kernel}/${p.format}${p.enabled ? '' : '（未启用）'}`,
+    value: p.id,
+  })),
+)
+const selectedProfile = computed(
+  () => deployProfiles.value.find((p) => p.id === deployProfileId.value) ?? null,
+)
+
+async function loadDeployProfiles(): Promise<void> {
+  if (profilesLoaded) return
+  try {
+    const res = await api.listProfiles()
+    deployProfiles.value = res.profiles ?? []
+    profilesLoaded = true
+  } catch {
+    // 读不到档案时保持空列表并如实提示，不伪造选项
+  }
+}
 
 function provisionLabel(h: HostView): string {
   const p = provisions.value[h.id]
@@ -551,8 +579,9 @@ function openDeploy(h: HostView): void {
   deployHost.value = h
   const saved = provisions.value[h.id]
   deployProvision.value = saved ?? null
+  deployProfileId.value = saved?.profile_id ?? null
   if (saved) {
-    deployProtocol.value = saved.protocol
+    if (isProvisionProtocol(saved.protocol)) deployProtocol.value = saved.protocol
     deployPort.value = saved.port
     deploySni.value = saved.endpoint.sni === 'www.bing.com' ? '' : saved.endpoint.sni
   } else {
@@ -561,34 +590,44 @@ function openDeploy(h: HostView): void {
     deploySni.value = ''
   }
   showDeploy.value = true
+  void loadDeployProfiles()
   void loadProvision(h.id)
 }
 
 watch(deployProtocol, (p) => {
   // 只在端口还是某个协议默认值时才联动，避免覆盖手填端口
+  const next = PROVISION_DEFAULT_PORT[p]
+  if (!next) return
   const current = Number(deployPort.value ?? 0)
   if (!current || Object.values(PROVISION_DEFAULT_PORT).includes(current)) {
-    deployPort.value = PROVISION_DEFAULT_PORT[p]
+    deployPort.value = next
   }
 })
 
 async function generateProvision(): Promise<void> {
   const h = deployHost.value
   if (!h) return
+  const profileId = deployProfileId.value ?? ''
   const port = Number(deployPort.value ?? 0)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  // 绑定档案时端口可留空（由文件内容推断）；最小配置模式必须给端口。
+  if (!profileId && (!Number.isInteger(port) || port < 1 || port > 65535)) {
     window.$message?.warning('端口需在 1–65535')
+    return
+  }
+  if (profileId && port !== 0 && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+    window.$message?.warning('端口需在 1–65535，或留空让脚本从配置文件推断')
     return
   }
   const res = await run(
     'deploy-gen',
     () =>
-      api.provisionHost(h.id, {
-        protocol: deployProtocol.value,
-        port,
-        sni: deploySni.value.trim(),
-      }),
-    '部署脚本已生成',
+      api.provisionHost(
+        h.id,
+        profileId
+          ? { profile_id: profileId, port: port || undefined, sni: deploySni.value.trim() }
+          : { protocol: deployProtocol.value, port, sni: deploySni.value.trim() },
+      ),
+    profileId ? '部署脚本已按绑定的配置文件生成' : '部署脚本已生成',
   )
   if (res) {
     deployProvision.value = res
@@ -753,18 +792,21 @@ onMounted(() => {
     <NCard size="small" class="section-gap">
       <NSpace align="center" :wrap="true" :size="10">
         <NInput v-model:value="keyword" size="small" clearable placeholder="搜索名称 / 地址 / 标签" style="width: 240px" />
-        <NSpace :size="6" align="center">
-          <NSwitch v-model:value="showAll" size="small" />
-          <span class="hint">显示全部角色</span>
-        </NSpace>
-        <NTag :bordered="false" size="small">{{ showAll ? '全部节点' : (props.role === 'inbound' ? '仅入站 / 双向' : '仅出站 / 双向') }}</NTag>
-        <span class="hint">点「＋ 新增节点」登记任意 VPS，卡片上可直接切换角色。</span>
+        <template v-if="props.role !== 'all'">
+          <NSpace :size="6" align="center">
+            <NSwitch v-model:value="showAll" size="small" />
+            <span class="hint">显示全部角色</span>
+          </NSpace>
+          <NTag :bordered="false" size="small">{{ showAll ? '全部节点' : (props.role === 'inbound' ? '仅入站 / 双向' : '仅出站 / 双向') }}</NTag>
+        </template>
+        <NTag v-else :bordered="false" size="small">入站 / 出站 / 双向 全部</NTag>
+        <span class="hint">点「＋ 新增节点」登记任意服务器，卡片上可直接切换入站 / 出站角色。</span>
       </NSpace>
     </NCard>
 
     <div v-if="!filtered.length" class="section-gap">
       <NCard size="small">
-        <NEmpty description="节点库为空。点击「＋ 新增节点」登记你的第一台 VPS / 电脑 / 软路由。">
+        <NEmpty description="节点库为空。点击「＋ 新增节点」登记你的第一台服务器。">
           <template #extra>
             <NButton size="small" type="primary" @click="openAdd">＋ 新增节点</NButton>
           </template>
@@ -823,147 +865,6 @@ onMounted(() => {
               <NButton size="tiny" quaternary type="error" @click="confirmDelete(h)">删除</NButton>
             </NSpace>
           </div>
-        </NCard>
-      </NGi>
-    </NGrid>
-
-    <!-- ---------------------------------------------------------------- *
-     * v2.3.0 节点能力：配置文件 / 采集数据 / 密钥配对 / 连接测试
-     * ---------------------------------------------------------------- -->
-    <NCard size="small" class="section-gap">
-      <NSpace align="center" :size="10" :wrap="true">
-        <div class="kv-label" style="margin: 0">选中节点</div>
-        <NSelect
-          v-model:value="selectedHostId"
-          :options="hostOptions"
-          clearable
-          placeholder="选择节点"
-          style="width: 280px"
-        />
-        <NTag size="small" :bordered="false">{{ selectedHostId || '未选择' }}</NTag>
-      </NSpace>
-    </NCard>
-
-    <NGrid cols="1 m:2" responsive="screen" :x-gap="12" :y-gap="12" class="section-gap">
-      <NGi>
-        <NCard size="small" title="配置文件">
-          <NSpace :size="8" :wrap="true" align="center" style="margin-bottom: 10px">
-            <NSelect v-model:value="configCoreId" :options="KERNEL_OPTIONS" style="width: 150px" />
-            <NButton size="small" :loading="isBusy('cfgfile-load')" @click="loadConfigFile">
-              读取内核当前配置（非节点已存文件）
-            </NButton>
-          </NSpace>
-          <NInput v-model:value="configFileText" type="textarea" class="code-editor" :rows="8" />
-          <NSpace :size="8" align="center" style="margin-top: 10px">
-            <NSelect v-model:value="configFileFormat" :options="FORMAT_OPTIONS" style="width: 110px" />
-            <NButton
-              size="small"
-              type="primary"
-              :disabled="!selectedHostId"
-              :loading="isBusy('cfgfile-save')"
-              @click="saveConfigFile"
-            >保存</NButton>
-          </NSpace>
-          <div v-if="configFileResult" style="margin-top: 10px">
-            <NDescriptions :column="1" size="small" label-placement="left" bordered>
-              <NDescriptionsItem label="路径"><span class="mono">{{ configFileResult.path }}</span></NDescriptionsItem>
-              <NDescriptionsItem label="字节数">{{ configFileResult.bytes }}</NDescriptionsItem>
-              <NDescriptionsItem label="校验">{{ configFileResult.validated ? '通过' : '未通过' }}</NDescriptionsItem>
-            </NDescriptions>
-          </div>
-        </NCard>
-      </NGi>
-
-      <NGi>
-        <NCard size="small" title="采集数据">
-          <template #header-extra>
-            <NButton
-              size="small"
-              :disabled="!selectedHostId"
-              :loading="isBusy('node-metrics')"
-              @click="refreshNodeMetrics"
-            >刷新</NButton>
-          </template>
-          <template v-if="nodeMetrics">
-            <NSpace v-if="nodeMetrics.source === 'unavailable' || !nodeMetrics.ok" :size="6" align="center">
-              <NTag size="small" :bordered="false" type="warning">暂不可用</NTag>
-              <span>{{ nodeMetrics.note }}</span>
-            </NSpace>
-            <NDescriptions v-else :column="2" size="small" label-placement="left" bordered>
-              <NDescriptionsItem label="CPU">{{ nodeMetrics.cpu_percent }}%</NDescriptionsItem>
-              <NDescriptionsItem label="内存 RSS">{{ formatBytes(nodeMetrics.memory_rss) }}</NDescriptionsItem>
-              <NDescriptionsItem label="入流量">{{ formatBytes(nodeMetrics.bytes_in) }}</NDescriptionsItem>
-              <NDescriptionsItem label="出流量">{{ formatBytes(nodeMetrics.bytes_out) }}</NDescriptionsItem>
-              <NDescriptionsItem label="活跃会话">{{ nodeMetrics.active_sessions }}</NDescriptionsItem>
-              <NDescriptionsItem label="采样时间">{{ formatTime(nodeMetrics.sampled_at) }}</NDescriptionsItem>
-            </NDescriptions>
-          </template>
-        </NCard>
-      </NGi>
-
-      <NGi>
-        <NCard size="small" title="密钥配对">
-          <NSpace :size="8" :wrap="true" align="center" style="margin-bottom: 10px">
-            <NSelect v-model:value="keyKind" :options="KIND_OPTIONS" style="width: 140px" />
-            <NButton size="small" :loading="isBusy('keys-gen')" @click="generateKeys">生成</NButton>
-            <NButton size="small" :disabled="!keyPair" @click="copyKeys">复制</NButton>
-          </NSpace>
-          <NDescriptions v-if="keyPair" :column="1" size="small" label-placement="left" bordered>
-            <NDescriptionsItem label="kind">{{ keyPair.kind }}</NDescriptionsItem>
-            <NDescriptionsItem label="private_key"><span class="mono">{{ keyPair.private_key }}</span></NDescriptionsItem>
-            <NDescriptionsItem label="public_key"><span class="mono">{{ keyPair.public_key }}</span></NDescriptionsItem>
-            <NDescriptionsItem v-if="keyPair.uuid" label="uuid"><span class="mono">{{ keyPair.uuid }}</span></NDescriptionsItem>
-            <NDescriptionsItem v-if="keyPair.password" label="password"><span class="mono">{{ keyPair.password }}</span></NDescriptionsItem>
-            <NDescriptionsItem label="created_at">{{ formatTime(keyPair.created_at) }}</NDescriptionsItem>
-          </NDescriptions>
-          <div style="margin-top: 12px">
-            <div class="kv-label">入口节点</div>
-            <NSelect v-model:value="pairInboundId" :options="inboundHostOptions" clearable placeholder="选择入口节点" style="width: 100%" />
-          </div>
-          <div style="margin-top: 8px">
-            <div class="kv-label">出口节点</div>
-            <NSelect v-model:value="pairOutboundId" :options="outboundHostOptions" clearable placeholder="选择出口节点" style="width: 100%" />
-          </div>
-          <NSpace style="margin-top: 10px">
-            <NButton size="small" type="primary" :loading="isBusy('keys-pair')" @click="pairKeys">配对并写入</NButton>
-          </NSpace>
-          <div v-if="pairResult" style="margin-top: 10px">
-            <NSpace :size="6">
-              <NTag size="small" :bordered="false" :type="pairResult.paired ? 'success' : 'default'">
-                paired: {{ pairResult.paired ? '是' : '否' }}
-              </NTag>
-              <NTag size="small" :bordered="false" :type="pairResult.persisted ? 'success' : 'default'">
-                persisted: {{ pairResult.persisted ? '是' : '否' }}
-              </NTag>
-            </NSpace>
-          </div>
-        </NCard>
-      </NGi>
-
-      <NGi>
-        <NCard size="small" title="连接测试">
-          <NSpace :size="8" :wrap="true" align="center" style="margin-bottom: 10px">
-            <NButton
-              size="small"
-              :disabled="!selectedHostId"
-              :loading="isBusy('node-probe')"
-              @click="probeNodeTcp"
-            >节点级探测</NButton>
-            <NTag size="small" :bordered="false">{{ selectedHostId || '未选择节点' }}</NTag>
-          </NSpace>
-          <NDescriptions v-if="nodeProbeResult" :column="2" size="small" label-placement="left" bordered>
-            <NDescriptionsItem label="可达">
-              <NTag size="small" :bordered="false" :type="nodeProbeResult.reachable ? 'success' : 'error'">
-                {{ nodeProbeResult.reachable ? '是' : '否' }}
-              </NTag>
-            </NDescriptionsItem>
-            <NDescriptionsItem label="延迟">{{ nodeProbeResult.latency_ms }} ms</NDescriptionsItem>
-            <NDescriptionsItem label="地址"><span class="mono">{{ nodeProbeResult.address }}</span></NDescriptionsItem>
-            <NDescriptionsItem label="端口">{{ nodeProbeResult.port }}</NDescriptionsItem>
-            <NDescriptionsItem v-if="nodeProbeResult.error" label="错误">
-              <span class="mono">{{ nodeProbeResult.error }}</span>
-            </NDescriptionsItem>
-          </NDescriptions>
         </NCard>
       </NGi>
     </NGrid>
@@ -1134,13 +1035,6 @@ onMounted(() => {
 
           <!-- 右栏 -->
           <NGi>
-            <NCard size="small" title="系统信息" class="host-panel">
-                            <div class="host-kv"><span>CPU</span><span>未采集</span></div>
-              <div class="host-kv"><span>内存</span><span>未采集</span></div>
-              <div class="host-kv"><span>网络接口</span><span>未采集</span></div>
-              <div class="host-kv"><span>在线时长</span><span>未采集</span></div>
-            </NCard>
-
             <NCard size="small" title="核心配置" class="host-panel">
               <div class="kv-label">绑定配置档案（来自「协议配置」）</div>
               <NSelect v-model:value="form.profile" :options="profileOptions" clearable placeholder="不绑定" />
@@ -1170,11 +1064,30 @@ onMounted(() => {
             </NCard>
 
             <NCard size="small" title="最近一次真实探测" class="host-panel">
-              <pre class="mono output-block" style="max-height: 190px">{{ prettyJson(hosts.find((x) => x.id === editingId)?.probe ?? null) }}</pre>
-            </NCard>
-
-            <NCard size="small" title="最近一次操作返回" class="host-panel">
-              <pre class="mono output-block" style="max-height: 160px">{{ prettyJson(rawResult) }}</pre>
+              <template v-if="hosts.find((x) => x.id === editingId)?.probe">
+                <div class="host-kv">
+                  <span>可达</span>
+                  <NTag
+                    size="small"
+                    :bordered="false"
+                    :type="hosts.find((x) => x.id === editingId)?.probe?.online ? 'success' : 'error'"
+                  >
+                    {{ hosts.find((x) => x.id === editingId)?.probe?.online ? '在线' : '离线' }}
+                  </NTag>
+                </div>
+                <div class="host-kv">
+                  <span>延迟</span>
+                  <span class="mono">{{ hosts.find((x) => x.id === editingId)?.probe?.latency_ms ?? 0 }} ms</span>
+                </div>
+                <div class="host-kv">
+                  <span>目标</span>
+                  <span class="mono">{{ hosts.find((x) => x.id === editingId)?.probe?.target || '—' }}</span>
+                </div>
+                <div v-if="hosts.find((x) => x.id === editingId)?.probe?.error" class="hint" style="margin-top: 6px">
+                  {{ hosts.find((x) => x.id === editingId)?.probe?.error }}
+                </div>
+              </template>
+              <div v-else class="hint">尚未探测。点列表上的「探测」做一次真实 TCP 连接。</div>
             </NCard>
           </NGi>
         </NGrid>
@@ -1203,7 +1116,7 @@ onMounted(() => {
     </NDrawer>
 
     <!-- 新增节点 -->
-    <NModal v-model:show="showAdd" preset="card" title="新增节点（任意 VPS / 电脑 / 软路由）" style="width: 560px" :bordered="false">
+    <NModal v-model:show="showAdd" preset="card" title="新增节点" style="width: 560px" :bordered="false">
       <NSpace vertical :size="10" style="width: 100%">
                 <NGrid cols="2" :x-gap="10" :y-gap="6">
           <NGi>
@@ -1287,12 +1200,33 @@ onMounted(() => {
     >
       <NSpace vertical :size="12" style="width: 100%">
         <div class="hint">
-          选择协议后生成脚本，复制到 VPS 上以 root 执行，这台机器就成为可用的代理节点。
-          脚本只安装内核并写入最小配置，不含 NGG 的会话凭据；凭据本身是该节点自己的 UUID / 密码。
+          选择「协议配置」里已保存的配置文件并绑定到这台节点，脚本会安装对应内核并把该文件原样写进去；
+          复制到 VPS 上以 root 执行即可。不选配置文件时退回最小配置模式（按协议现生成）。
+        </div>
+
+        <div>
+          <div class="kv-label">配置文件（来自「协议配置」）</div>
+          <NSelect
+            v-model:value="deployProfileId"
+            :options="deployProfileOptions"
+            clearable
+            filterable
+            placeholder="选择要绑定的配置文件（推荐）"
+          />
+          <div v-if="deployProfileId" class="hint" style="margin-top: 6px">
+            <template v-if="selectedProfile">
+              已绑定 · 内核 {{ selectedProfile.kernel }} / {{ selectedProfile.format }} ·
+              脚本会写入该文件的当前内容（保存后重新生成即可更新）
+            </template>
+            <template v-else>已绑定配置文件 {{ deployProfileId }}（列表加载中）</template>
+          </div>
+          <div v-else-if="!deployProfiles.length" class="hint" style="margin-top: 6px">
+            还没有可用的配置文件：先到「配置引擎 → 协议配置」新建并保存，再回来绑定。
+          </div>
         </div>
 
         <NGrid cols="1 m:3" responsive="screen" :x-gap="10" :y-gap="8">
-          <NGi>
+          <NGi v-if="!deployProfileId">
             <div class="kv-label">协议</div>
             <NRadioGroup v-model:value="deployProtocol" size="small">
               <NRadioButton v-for="o in PROVISION_OPTIONS" :key="o.value" :value="o.value">
@@ -1301,12 +1235,12 @@ onMounted(() => {
             </NRadioGroup>
           </NGi>
           <NGi>
-            <div class="kv-label">端口</div>
-            <NInputNumber v-model:value="deployPort" :min="1" :max="65535" style="width: 100%" />
+            <div class="kv-label">{{ deployProfileId ? '端口（可空 · 从文件推断）' : '端口' }}</div>
+            <NInputNumber v-model:value="deployPort" :min="1" :max="65535" style="width: 100%" clearable />
           </NGi>
           <NGi>
             <div class="kv-label">SNI（可空）</div>
-            <NInput v-model:value="deploySni" placeholder="留空则用主机域名或 www.bing.com" />
+            <NInput v-model:value="deploySni" placeholder="留空则用文件里的 SNI / 主机域名" />
           </NGi>
         </NGrid>
 
@@ -1328,6 +1262,10 @@ onMounted(() => {
 
           <NCard size="small" title="连接参数（客户端按此填写）">
             <NDescriptions :column="2" size="small" label-placement="left" bordered>
+              <NDescriptionsItem v-if="deployProvision.profile_name" label="绑定配置文件" :span="2">
+                {{ deployProvision.profile_name }}
+                <span class="mono hint">（{{ deployProvision.kernel }}）</span>
+              </NDescriptionsItem>
               <NDescriptionsItem label="协议">{{ deployProvision.endpoint.protocol.toUpperCase() }}</NDescriptionsItem>
               <NDescriptionsItem label="地址"><span class="mono">{{ deployProvision.endpoint.address }}</span></NDescriptionsItem>
               <NDescriptionsItem label="端口">{{ deployProvision.endpoint.port }}</NDescriptionsItem>
@@ -1354,7 +1292,7 @@ onMounted(() => {
           </div>
         </template>
         <NAlert v-else type="info" :bordered="false">
-          该节点尚未生成部署脚本。选择协议后点「生成部署脚本」。
+          该节点尚未生成部署脚本。选择配置文件（或协议）后点「生成部署脚本」。
         </NAlert>
       </NSpace>
     </NModal>

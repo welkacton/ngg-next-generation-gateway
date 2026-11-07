@@ -197,10 +197,9 @@ const menuOptions: MenuOption[] = [
     children: [
       { label: '链路编排', key: 'pipeline', icon: menuIcon },
       { label: '协议配置', key: 'protocols', icon: menuIcon },
+      { label: '节点管理', key: 'nodes', icon: menuIcon },
       { label: '规则配置', key: 'rules', icon: menuIcon },
       { label: 'DNS配置', key: 'dns', icon: menuIcon },
-      { label: '入口节点', key: 'inbound', icon: menuIcon },
-      { label: '出口节点', key: 'outbound', icon: menuIcon },
       { label: '用户管理', key: 'users', icon: menuIcon },
     ],
   },

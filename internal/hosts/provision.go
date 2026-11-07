@@ -27,6 +27,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -68,7 +69,12 @@ type ProvisionEndpoint struct {
 // HostProvision is the persisted result of Provision. Every field is real:
 // the credential is generated here, the script is the one the operator runs.
 type HostProvision struct {
-	HostID      string            `json:"host_id"`
+	HostID string `json:"host_id"`
+	// Profile binding: when set, the node runs exactly this 协议配置 profile and
+	// the script writes its rendered content instead of a generated snippet.
+	ProfileID   string            `json:"profile_id,omitempty"`
+	ProfileName string            `json:"profile_name,omitempty"`
+	Kernel      string            `json:"kernel,omitempty"`
 	Protocol    string            `json:"protocol"`
 	Port        int               `json:"port"`
 	Credential  string            `json:"credential"`
@@ -351,6 +357,8 @@ func fill(tpl string, p HostProvision) string {
 		"{{METHOD}}", SSMethod,
 		"{{GENERATED_AT}}", p.GeneratedAt.Format(time.RFC3339),
 		"{{HOST_ID}}", p.HostID,
+		"{{PROFILE_NAME}}", p.ProfileName,
+		"{{KERNEL}}", p.Kernel,
 	).Replace(tpl)
 }
 
@@ -581,4 +589,263 @@ const shellFooterTpl = `cat <<EOF
 EOF
 
 echo "NGG-NODE-READY protocol={{PROTOCOL}} port={{PORT}}"
+`
+
+/* ------------------------------------------------------------------ *
+ * 协议配置档案绑定部署（v2.8.0）
+ * ------------------------------------------------------------------ */
+
+// ProvisionProfile is one 协议配置 profile bound to a node. The API layer
+// resolves it from the profile store and hands the rendered content over, so
+// this package never has to know how profiles are persisted.
+type ProvisionProfile struct {
+	ID      string
+	Name    string
+	Kernel  string // mihomo | sing-box | xray-core
+	Format  string // yaml | json
+	Content string
+	// Optional overrides; empty means "derive from the content".
+	Protocol string
+	Port     int
+	SNI      string
+}
+
+// profileDelimiter terminates the config heredoc. Rendered configs never
+// contain it (it is a reserved marker), and we verify that before writing.
+const profileDelimiter = "NGG_PROFILE_CONFIG"
+
+var (
+	// mihomo 用 mixed-port / socks-port，xray 与 sing-box 用 port / listen_port。
+	portYAMLRe = regexp.MustCompile(`(?m)^\s*(?:(?:mixed|socks|http|redir|tproxy)-)?(?:port|listen_port)\s*:\s*([0-9]{2,5})\s*$`)
+	portJSONRe = regexp.MustCompile(`"(?:port|listen_port|listen-port)"\s*:\s*([0-9]{2,5})`)
+	sniRe      = regexp.MustCompile(`(?i)(?:server_name|server-name|servername|sni)["']?\s*[:=]\s*["']?([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,})`)
+)
+
+// guessPort finds the first inbound port in a rendered profile. It is a hint
+// for the operator (firewall + firewall rule), never a silent rewrite of the
+// profile: the content is written verbatim.
+func guessPort(content string) int {
+	// Take the FIRST port in the file, whichever dialect it is written in.
+	best, bestAt := 0, len(content)+1
+	for _, re := range []*regexp.Regexp{portJSONRe, portYAMLRe} {
+		for _, loc := range re.FindAllStringSubmatchIndex(content, -1) {
+			raw := content[loc[2]:loc[3]]
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 1 || n > 65535 {
+				continue
+			}
+			if loc[0] < bestAt {
+				best, bestAt = n, loc[0]
+			}
+		}
+	}
+	return best
+}
+
+var protocolTokens = []string{
+	"hysteria2", "hysteria", "shadowsocks", "vless", "vmess", "trojan", "tuic", "anytls", "ss",
+}
+
+// guessProtocol reports the inbound protocol mentioned in the profile. The
+// result is display/metadata only; the kernel reads the config, not this value.
+func guessProtocol(content string) string {
+	low := strings.ToLower(content)
+	for _, t := range protocolTokens {
+		if strings.Contains(low, t) {
+			return t
+		}
+	}
+	return ""
+}
+
+func guessSNI(content string) string {
+	if m := sniRe.FindStringSubmatch(content); len(m) == 2 {
+		return strings.ToLower(m[1])
+	}
+	return ""
+}
+
+// ProvisionWithProfile binds a 协议配置 profile to a host and generates a
+// script that installs the profile's kernel and writes its content verbatim.
+func (r *Registry) ProvisionWithProfile(hostID string, pp ProvisionProfile) (HostProvision, error) {
+	host, ok := r.Get(hostID)
+	if !ok {
+		return HostProvision{}, fmt.Errorf("%w: %s", ErrUnknownHost, hostID)
+	}
+	kernel := strings.ToLower(strings.TrimSpace(pp.Kernel))
+	switch kernel {
+	case "mihomo", "sing-box", "xray-core":
+	default:
+		return HostProvision{}, fmt.Errorf("不支持的配置文件内核 %q（仅 mihomo / sing-box / xray-core）", pp.Kernel)
+	}
+	content := strings.TrimRight(pp.Content, "\n")
+	if strings.TrimSpace(content) == "" {
+		return HostProvision{}, errors.New("配置文件内容为空，请先在「协议配置」里补全并保存")
+	}
+	if strings.Contains(content, profileDelimiter) {
+		return HostProvision{}, fmt.Errorf("配置文件包含保留标记 %s，请改名后再试", profileDelimiter)
+	}
+
+	port := pp.Port
+	if port == 0 {
+		port = guessPort(content)
+	}
+	if port == 0 {
+		port = 443
+	}
+	if port < 1 || port > 65535 {
+		return HostProvision{}, fmt.Errorf("端口需在 1..65535，当前 %d", port)
+	}
+	proto := strings.ToLower(strings.TrimSpace(pp.Protocol))
+	if proto == "" {
+		proto = guessProtocol(content)
+	}
+	if proto == "" {
+		proto = kernel
+	}
+	sni := strings.TrimSpace(pp.SNI)
+	if sni == "" {
+		sni = guessSNI(content)
+	}
+	if sni == "" {
+		sni = defaultSNIFor(host.Address)
+	}
+
+	p := HostProvision{
+		HostID:      host.ID,
+		ProfileID:   pp.ID,
+		ProfileName: pp.Name,
+		Kernel:      kernel,
+		Protocol:    proto,
+		Port:        port,
+		Endpoint: ProvisionEndpoint{
+			Address:   host.Address,
+			Port:      port,
+			Protocol:  proto,
+			Transport: "tcp",
+			TLS:       strings.Contains(strings.ToLower(content), "tls"),
+			SNI:       sni,
+		},
+		GeneratedAt: time.Now().UTC().Truncate(time.Second),
+	}
+	p.Notes = profileNotes(p, host)
+
+	body, err := profileBody(kernel)
+	if err != nil {
+		return HostProvision{}, err
+	}
+	script := fill(shellPreambleTpl, p) +
+		strings.Replace(fill(body, p), "{{CONFIG}}", content, 1) +
+		firewallTpl + fill(shellFooterTpl, p)
+	if !strings.Contains(script, "NGG-NODE-READY protocol="+p.Protocol) {
+		return HostProvision{}, errors.New("脚本缺少就绪标记")
+	}
+	p.Script = script
+
+	if err := r.saveProvision(p); err != nil {
+		return HostProvision{}, fmt.Errorf("保存部署脚本失败: %w", err)
+	}
+	return p, nil
+}
+
+func profileNotes(p HostProvision, host Host) []string {
+	return []string{
+		fmt.Sprintf("脚本安装 %s，并把「协议配置」里 %q 的内容原样写入该内核的配置文件（不做任何字段改写）。", p.Kernel, p.ProfileName),
+		fmt.Sprintf("端口 %d 是从配置内容推断的，仅用于放通防火墙与自检；如果配置里监听的不是这个端口，请以配置文件为准。", p.Port),
+		"脚本会用内核自带的校验命令（xray run -test / sing-box check / mihomo -t）先验证再启动，校验失败会中止，不会留下半启动状态。",
+		fmt.Sprintf("云服务器安全组与本机防火墙都要放通 TCP %d；脚本只在 ufw 已启用时执行 ufw allow，iptables 规则不会持久化。", p.Port),
+		"脚本不安装 NGG Agent：节点列表里的「在线」来自对 " + net.JoinHostPort(host.Address, strconv.Itoa(host.NodePort)) + " 的真实 TCP 探测。",
+		"该脚本由 NGG 生成但未在目标 VPS 上执行过，实际内核版本与 systemd 状态请以脚本输出和 systemctl status 为准。",
+	}
+}
+
+func profileBody(kernel string) (string, error) {
+	switch kernel {
+	case "xray-core":
+		return xrayProfileBody, nil
+	case "sing-box":
+		return singboxProfileBody, nil
+	case "mihomo":
+		return mihomoProfileBody, nil
+	}
+	return "", fmt.Errorf("不支持的配置文件内核 %q", kernel)
+}
+
+const xrayProfileBody = `log "安装 Xray-core（官方 install-release.sh）"
+bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+log "写入配置文件内容（协议配置：{{PROFILE_NAME}}）"
+mkdir -p /usr/local/etc/xray
+cat > /usr/local/etc/xray/config.json <<'` + profileDelimiter + `'
+{{CONFIG}}
+` + profileDelimiter + `
+chmod 600 /usr/local/etc/xray/config.json
+
+log "用内核校验配置"
+XRAY_BIN="$(command -v xray || echo /usr/local/bin/xray)"
+"$XRAY_BIN" run -test -config /usr/local/etc/xray/config.json
+
+systemctl daemon-reload
+systemctl enable xray
+systemctl restart xray
+`
+
+const singboxProfileBody = `log "安装 sing-box（官方 install.sh）"
+bash -c "$(curl -fsSL https://sing-box.app/install.sh)"
+
+log "写入配置文件内容（协议配置：{{PROFILE_NAME}}）"
+mkdir -p /etc/sing-box
+cat > /etc/sing-box/config.json <<'` + profileDelimiter + `'
+{{CONFIG}}
+` + profileDelimiter + `
+chmod 600 /etc/sing-box/config.json
+
+log "用内核校验配置"
+SB_BIN="$(command -v sing-box || echo /usr/local/bin/sing-box)"
+"$SB_BIN" check -c /etc/sing-box/config.json
+
+systemctl daemon-reload
+systemctl enable sing-box
+systemctl restart sing-box
+`
+
+const mihomoProfileBody = `log "安装 mihomo（GitHub 最新 release）"
+case "$(uname -m)" in
+  x86_64)  NGG_ARCH=amd64 ;;
+  aarch64) NGG_ARCH=arm64 ;;
+  *) echo "[NGG] 不支持的架构：$(uname -m)" >&2; exit 1 ;;
+esac
+NGG_URL="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest   | grep -o "https://[^\"]*mihomo-linux-${NGG_ARCH}[^\"]*\.gz" | head -1)"
+[ -n "$NGG_URL" ] || { echo "[NGG] 未能解析 mihomo 发布包地址" >&2; exit 1; }
+curl -fsSL -o /tmp/mihomo.gz "$NGG_URL"
+gunzip -f /tmp/mihomo.gz
+install -m 0755 /tmp/mihomo /usr/local/bin/mihomo
+
+log "写入配置文件内容（协议配置：{{PROFILE_NAME}}）"
+mkdir -p /etc/mihomo
+cat > /etc/mihomo/config.yaml <<'` + profileDelimiter + `'
+{{CONFIG}}
+` + profileDelimiter + `
+chmod 600 /etc/mihomo/config.yaml
+
+log "用内核校验配置"
+mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml
+
+cat > /etc/systemd/system/mihomo.service <<'NGG_UNIT'
+[Unit]
+Description=mihomo (NGG node)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/mihomo -d /etc/mihomo
+Restart=on-failure
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+NGG_UNIT
+
+systemctl daemon-reload
+systemctl enable mihomo
+systemctl restart mihomo
 `
