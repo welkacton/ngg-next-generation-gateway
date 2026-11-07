@@ -173,9 +173,15 @@ jobs:
       - name: Checksums
         shell: pwsh
         run: |
+          # Only real release assets. The installer also leaves NGG.build.iss in
+          # out/; hashing it would put a line in SHA256SUMS for a file that is
+          # never published, and `sha256sum -c` would fail on it.
           $assets = Get-ChildItem out -File |
-            Where-Object { $_.Name -ne 'SHA256SUMS' -and $_.Extension -ne '.sha256' } |
-            Sort-Object Name
+            Where-Object {
+              ($_.Extension -eq '.exe') -or
+              ($_.Name -eq 'ngg-node-linux-amd64') -or
+              ($_.Name -eq 'ngg-node-linux-arm64')
+            } | Sort-Object Name
           foreach ($f in $assets) {
             $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             [IO.File]::WriteAllText("$($f.FullName).sha256", "$hash  $($f.Name)`r`n")
@@ -233,6 +239,22 @@ jobs:
           done
           ls -lh
           cat SHA256SUMS
+
+      - name: Prune stale assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Earlier builds hashed the Inno Setup intermediate script. Drop
+            // that one stray checksum so SHA256SUMS only lists published files.
+            const { owner, repo } = context.repo;
+            const tag = context.ref.replace('refs/tags/', '');
+            const { data: rel } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            for (const a of rel.assets) {
+              if (a.name === 'NGG.build.iss.sha256') {
+                core.info(`deleting stale asset ${a.name}`);
+                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+              }
+            }
 
       - uses: softprops/action-gh-release@v2
         with:
