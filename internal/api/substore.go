@@ -74,10 +74,10 @@ type substoreResponse struct {
 	Warnings []string        `json:"warnings"`
 }
 
-// defaultNodePort is the NGG agent port written into an imported host. It is
-// the same default the 「新增节点」 form uses; the operator can change it in the
-// detail drawer, and the value is called out in the response warnings.
-const defaultNodePort = 2222
+// defaultNodePort is the NGG agent listening port written into an imported
+// host. It is the same default the 「新增节点」 form uses (3372); the operator
+// can change it in the detail drawer, and the response calls the value out.
+const defaultNodePort = 3372
 
 // substoreClient bounds a remote fetch. A subscription URL that hangs must not
 // hold an HTTP handler open.

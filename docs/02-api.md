@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.10.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.10.1", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.10.0），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.10.1），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -497,7 +497,7 @@ wscat -c "ws://127.0.0.1:9090/api/v1/ws?token=$TOKEN"
 ```bash
 # 登记一台 VPS 当作出站，并立即真实探测
 curl -X POST -H "$H" -H 'Content-Type: application/json' \
-  -d '{"id":"us01","name":"US us01","country":"US","address":"203.0.113.10","node_port":2222,"svc_port":443,"role":"outbound","enabled":true,"protocol":"vless-reality"}' \
+  -d '{"id":"us01","name":"US us01","country":"US","address":"203.0.113.10","node_port":3372,"svc_port":443,"role":"outbound","enabled":true,"protocol":"vless-reality"}' \
   "$BASE/hosts"
 
 # 把另一台改成入站

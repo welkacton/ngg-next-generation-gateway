@@ -100,7 +100,7 @@ Sub-Store 是订阅管理层：它自己不产生节点，只负责把一份节�
 同一个请求体，`dry_run: true` 只返回预览；否则逐条写入节点库：
 
 - `id` 由名称生成（CJK 名称会退化为地址），与已有 id 冲突时追加 `-2` / `-3`，因此同一份订阅可以重复导入成第二批。
-- `node_port` 统一写 2222（NGG Agent 默认端口），响应里明说可在详情中改。
+- `node_port` 统一写 3372（与「新增节点」表单默认值一致），响应里明说可在详情中改。
 - 凭据按节点模型组装：Shadowsocks = `method:password`，SOCKS5/HTTP = `username:password`，VLESS = uuid。
 - 单个节点写入失败进 `failed`（不回滚已成功的），全军覆没才返回 422。
 

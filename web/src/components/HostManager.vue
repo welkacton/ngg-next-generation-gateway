@@ -75,10 +75,6 @@ const ROLE_OPTIONS: Array<{ label: string; value: HostRole }> = [
   { label: '出站 Outbound（作为出口）', value: 'outbound' },
   { label: '双向 Both（同时入站与出站）', value: 'both' },
 ]
-const HOP_KIND_OPTIONS: Array<{ label: string; value: HostChainHop['kind'] }> = [
-  { label: 'SOCKS5', value: 'socks5' },
-  { label: 'HTTP', value: 'http' },
-]
 const MAX_CHAIN_HOPS = 8
 
 /** Windows Chrome has no flag-emoji glyphs; use a compact country-code pill. */
@@ -118,10 +114,6 @@ interface HostForm
   chain: ChainHopDraft[]
 }
 
-function emptyHop(): ChainHopDraft {
-  return { kind: 'socks5', address: '', port: 1080, username: '', password: '', enabled: true }
-}
-
 /** 合并页（role=all）新建节点时的默认角色：先按「双向」建，卡片上可一键改。 */
 function defaultRole(): HostRole {
   return props.role === 'all' ? 'both' : props.role
@@ -130,7 +122,8 @@ function defaultRole(): HostRole {
 function emptyHost(role: HostRole): HostForm {
   return {
     id: '', name: '', internal: '', country: 'US', address: '',
-    node_port: 2222, svc_port: 443, role, enabled: true,
+    // Node Port 是 NGG Agent 的监听端口，默认 3372（新增与详情共用）。
+    node_port: 3372, svc_port: 443, role, enabled: true,
     protocol: 'vless-reality', core_id: '', profile: '',
     secret_key: '', proxy_url: '', plugin: '', provider: '',
     ip_addresses: [], tags: [], note: '', track_traffic: true,
@@ -182,18 +175,6 @@ function validateChain(rows: ChainHopDraft[]): string | null {
     if (!Number.isInteger(port) || port < 1 || port > 65535) return `${tag}端口需在 1–65535`
   }
   return null
-}
-
-function addHop(rows: ChainHopDraft[]): void {
-  if (rows.length >= MAX_CHAIN_HOPS) {
-    window.$message?.warning(`链式代理最多 ${MAX_CHAIN_HOPS} 跳`)
-    return
-  }
-  rows.push(emptyHop())
-}
-
-function removeHop(rows: ChainHopDraft[], index: number): void {
-  rows.splice(index, 1)
 }
 
 function chainHops(chain?: HostChainHop[] | null): HostChainHop[] {
@@ -267,6 +248,16 @@ const ssWarnings = computed<string[]>(() => {
     ? [...all.slice(0, SS_WARNING_LIMIT), `……还有 ${all.length - SS_WARNING_LIMIT} 条告警`]
     : all
 })
+
+function openSubStoreFromAdd(): void {
+  showAdd.value = false
+  openSubStore()
+}
+
+function openJsonFromAdd(): void {
+  showAdd.value = false
+  void openJson()
+}
 
 function openSubStore(): void {
   ssMode.value = 'url'
@@ -528,11 +519,6 @@ function cardStatusClass(h: HostView): string {
  * 脚本由后端生成，只含该节点自己的凭据；NGG 的会话凭据不会进入脚本。
  * ------------------------------------------------------------------ */
 
-const PROVISION_OPTIONS: Array<{ label: string; value: ProvisionProtocol }> = [
-  { label: 'VLESS', value: 'vless' },
-  { label: 'Trojan', value: 'trojan' },
-  { label: 'Shadowsocks', value: 'shadowsocks' },
-]
 const PROVISION_DEFAULT_PORT: Record<ProvisionProtocol, number> = {
   vless: 443,
   trojan: 443,
@@ -618,16 +604,6 @@ function openDeploy(h: HostView): void {
   void loadProvision(h.id)
 }
 
-watch(deployProtocol, (p) => {
-  // 只在端口还是某个协议默认值时才联动，避免覆盖手填端口
-  const next = PROVISION_DEFAULT_PORT[p]
-  if (!next) return
-  const current = Number(deployPort.value ?? 0)
-  if (!current || Object.values(PROVISION_DEFAULT_PORT).includes(current)) {
-    deployPort.value = next
-  }
-})
-
 async function generateProvision(): Promise<void> {
   const h = deployHost.value
   if (!h) return
@@ -682,9 +658,6 @@ onMounted(() => {
         <p class="page-subtitle">{{ subtitle }}</p>
       </div>
       <NSpace :size="8" :wrap="true">
-        <NButton size="small" :loading="isBusy('probe-all')" @click="probeAll">重新探测</NButton>
-        <NButton size="small" @click="openSubStore">从 Sub-Store 导入</NButton>
-        <NButton size="small" @click="openJson">JSON 导入 / 导出</NButton>
         <NButton size="small" :loading="isBusy('list')" @click="refresh">刷新</NButton>
         <NButton size="small" type="primary" @click="openAdd">＋ 新增节点</NButton>
       </NSpace>
@@ -798,7 +771,7 @@ onMounted(() => {
           <div class="host-card__foot">
             <NSpace :size="6" :wrap="true">
               <NButton size="tiny" type="primary" @click="openDetail(h)">详情</NButton>
-              <NButton size="tiny" type="info" @click="openDeploy(h)">部署到 VPS</NButton>
+              <NButton size="tiny" type="info" @click="openDeploy(h)">部署到 节点服务器</NButton>
               <NButton size="tiny" :loading="isBusy('probe:' + h.id)" @click="probeOne(h)">探测</NButton>
               <NButton size="tiny" :loading="isBusy('role:' + h.id)" @click="switchRole(h, 'inbound')">设为入站</NButton>
               <NButton size="tiny" :loading="isBusy('role:' + h.id)" @click="switchRole(h, 'outbound')">设为出站</NButton>
@@ -863,7 +836,7 @@ onMounted(() => {
                 <NInput v-model:value="form.address" placeholder="203.0.113.10" />
               </NGi>
               <NGi>
-                <div class="kv-label">Node Port（管理端口）</div>
+                <div class="kv-label">监听端口号（Node Port）</div>
                 <NInputNumber v-model:value="form.node_port" :min="1" :max="65535" style="width: 100%" />
               </NGi>
               <NGi>
@@ -924,7 +897,7 @@ onMounted(() => {
             <NInput v-model:value="addForm.address" placeholder="203.0.113.10 或 vps.example.com" />
           </NGi>
           <NGi>
-            <div class="kv-label">Node Port</div>
+            <div class="kv-label">监听端口号（Node Port）</div>
             <NInputNumber v-model:value="addForm.node_port" :min="1" :max="65535" style="width: 100%" />
           </NGi>
           <NGi>
@@ -935,41 +908,14 @@ onMounted(() => {
             <div class="kv-label">角色（之后可随时改）</div>
             <NSelect v-model:value="addForm.role" :options="ROLE_OPTIONS" />
           </NGi>
-          <NGi>
-            <div class="kv-label">内部名称</div>
-            <NInput v-model:value="addForm.internal" placeholder="us01" />
-          </NGi>
-          <NGi>
-            <div class="kv-label">服务端口</div>
-            <NInputNumber v-model:value="addForm.svc_port" :min="0" :max="65535" style="width: 100%" />
-          </NGi>
         </NGrid>
 
-        <div class="chain">
-          <div class="chain__head">
-            <span class="chain__summary">{{ chainLabel(chainPayload(addForm.chain)) }}</span>
-            <span class="chain__count mono">{{ addForm.chain.length }} / {{ MAX_CHAIN_HOPS }}</span>
-            <NButton
-              size="tiny"
-              quaternary
-              type="primary"
-              :disabled="addForm.chain.length >= MAX_CHAIN_HOPS"
-              @click="addHop(addForm.chain)"
-            >＋ 添加一跳</NButton>
-          </div>
-          <div v-if="!addForm.chain.length" class="chain__empty mono">直连</div>
-          <div v-for="(hop, i) in addForm.chain" :key="i" class="chain__row">
-            <span class="chain__idx mono">{{ i + 1 }}</span>
-            <NSelect v-model:value="hop.kind" size="small" :options="HOP_KIND_OPTIONS" />
-            <NInput v-model:value="hop.address" size="small" placeholder="host" />
-            <NSwitch v-model:value="hop.enabled" size="small" />
-            <NButton size="tiny" quaternary type="error" @click="removeHop(addForm.chain, i)">删除</NButton>
-            <div class="chain__auth">
-              <NInputNumber v-model:value="hop.port" size="small" :min="1" :max="65535" placeholder="port" style="width: 100%" />
-              <NInput v-model:value="hop.username" size="small" placeholder="user" />
-              <NInput v-model:value="hop.password" size="small" type="password" show-password-on="click" placeholder="pass" />
-            </div>
-          </div>
+        <!-- 批量入口从工具栏收进来：新建单台节点时不再被一堆按钮干扰 -->
+        <div class="add-more">
+          <span class="hint">批量导入：</span>
+          <NButton size="tiny" quaternary type="primary" @click="openSubStoreFromAdd">从 Sub-Store 导入</NButton>
+          <span class="hint">·</span>
+          <NButton size="tiny" quaternary @click="openJsonFromAdd">JSON 全量导入 / 导出</NButton>
         </div>
       </NSpace>
       <template #footer>
@@ -982,18 +928,19 @@ onMounted(() => {
       </template>
     </NModal>
 
-    <!-- 部署到 VPS：生成可粘贴执行的脚本，并展示真实连接参数 -->
+    <!-- 部署到 节点服务器：生成可粘贴执行的脚本，并展示真实连接参数 -->
     <NModal
       v-model:show="showDeploy"
       preset="card"
-      :title="`部署到 VPS · ${deployHost?.name ?? ''}`"
+      :title="`部署到 节点服务器 · ${deployHost?.name ?? ''}`"
       style="width: 760px"
       :bordered="false"
     >
       <NSpace vertical :size="12" style="width: 100%">
         <div class="hint">
-          选择「协议配置」里已保存的配置文件并绑定到这台节点，脚本会安装对应内核并把该文件原样写进去；
-          复制到 VPS 上以 root 执行即可。不选配置文件时退回最小配置模式（按协议现生成）。
+          选择「协议配置」里已保存的配置文件并绑定到这台节点，脚本会安装对应内核并把该文件原样写进去，
+          端口与 SNI 直接从文件推断；复制到节点服务器上以 root 执行即可。
+          不选配置文件时按默认 VLESS:443 生成最小配置。
         </div>
 
         <div>
@@ -1016,25 +963,6 @@ onMounted(() => {
             还没有可用的配置文件：先到「配置引擎 → 协议配置」新建并保存，再回来绑定。
           </div>
         </div>
-
-        <NGrid cols="1 m:3" responsive="screen" :x-gap="10" :y-gap="8">
-          <NGi v-if="!deployProfileId">
-            <div class="kv-label">协议</div>
-            <NRadioGroup v-model:value="deployProtocol" size="small">
-              <NRadioButton v-for="o in PROVISION_OPTIONS" :key="o.value" :value="o.value">
-                {{ o.label }}
-              </NRadioButton>
-            </NRadioGroup>
-          </NGi>
-          <NGi>
-            <div class="kv-label">{{ deployProfileId ? '端口（可空 · 从文件推断）' : '端口' }}</div>
-            <NInputNumber v-model:value="deployPort" :min="1" :max="65535" style="width: 100%" clearable />
-          </NGi>
-          <NGi>
-            <div class="kv-label">SNI（可空）</div>
-            <NInput v-model:value="deploySni" placeholder="留空则用文件里的 SNI / 主机域名" />
-          </NGi>
-        </NGrid>
 
         <NSpace align="center" :size="10" :wrap="true">
           <NButton size="small" type="primary" :loading="isBusy('deploy-gen')" @click="generateProvision">
@@ -1084,7 +1012,7 @@ onMounted(() => {
           </div>
         </template>
         <NAlert v-else type="info" :bordered="false">
-          该节点尚未生成部署脚本。选择配置文件（或协议）后点「生成部署脚本」。
+          该节点尚未生成部署脚本。选择配置文件后点「生成部署脚本」。
         </NAlert>
       </NSpace>
     </NModal>
@@ -1278,71 +1206,17 @@ onMounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.chain {
-  border: 1px solid #f0f0f2;
-  border-radius: 10px;
-  background: #fafafb;
-  padding: 8px 10px;
-}
-.chain__head {
+/* 批量入口：只在新增节点弹窗底部出现，不占用主工具栏 */
+.add-more {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.chain__summary {
-  font-size: 11.5px;
-  color: #3a3a3c;
-  font-weight: 500;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chain__count {
-  font-size: 10.5px;
-  color: #8e8e93;
-  margin-left: auto;
-}
-.chain__empty {
-  font-size: 11.5px;
-  color: #a1a1a6;
-  padding: 2px 0 4px;
-}
-.chain__row {
-  display: grid;
-  grid-template-columns: 16px 84px minmax(0, 1fr) 30px auto;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  background: #fff;
-  border: 1px solid #ececf0;
-  border-radius: 8px;
-  margin-bottom: 6px;
-  min-width: 0;
-}
-.chain__row:last-child {
-  margin-bottom: 0;
-}
-.chain__idx {
-  font-size: 10px;
-  color: #8e8e93;
-  text-align: center;
-}
-.chain__row :deep(.n-select) {
-  width: 100%;
-  min-width: 0;
-}
-.chain__auth {
-  grid-column: 2 / -1;
-  display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
-  min-width: 0;
+  padding-top: 4px;
+  border-top: 1px solid #f0f0f2;
 }
 
-/* 部署到 VPS */
+/* 部署到 节点服务器 */
 .deploy-block {
   border: 1px solid #ececf0;
   border-radius: 10px;

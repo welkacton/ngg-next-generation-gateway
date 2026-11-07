@@ -141,6 +141,11 @@ func TestSubStoreImportCreatesHosts(t *testing.T) {
 	if !strings.Contains(body, "aes-256-gcm:sspass") {
 		t.Fatalf("shadowsocks credential must carry the cipher: %s", body)
 	}
+	// 导入的管理端口必须与「新增节点」表单的默认值一致，否则同一批节点的
+	// 探测目标会一半是 3372、一半是旧默认值。
+	if !strings.Contains(body, `"node_port":3372`) {
+		t.Fatalf("imported node_port must default to 3372: %s", body)
+	}
 
 	// Importing the same document twice must not collide on ids.
 	resp, raw = postSubStore(t, ts, token, "/api/v1/substore/import", substoreBody{Text: subStoreDoc})
