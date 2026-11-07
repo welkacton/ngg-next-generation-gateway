@@ -966,22 +966,8 @@ onMounted(() => {
               </NSpace>
             </NCard>
 
-            <NCard size="small" title="流量与计费" class="host-panel">
+            <NCard size="small" title="标签与备注" class="host-panel">
               <NSpace vertical :size="10" style="width: 100%">
-                <NGrid cols="2" :x-gap="10">
-                  <NGi>
-                    <div class="kv-label">用户流量倍率</div>
-                    <NInputNumber v-model:value="form.user_ratio" :min="0.1" :max="100" :step="0.1" style="width: 100%" />
-                  </NGi>
-                  <NGi>
-                    <div class="kv-label">节点流量倍率</div>
-                    <NInputNumber v-model:value="form.node_ratio" :min="0.1" :max="100" :step="0.1" style="width: 100%" />
-                  </NGi>
-                </NGrid>
-                <div class="kv-label">网络提供商</div>
-                <NInput v-model:value="form.provider" placeholder="可选，例如 Hetzner / 阿里云" />
-                <div class="kv-label">跟踪流量使用</div>
-                <NSwitch v-model:value="form.track_traffic" />
                 <div class="kv-label">标签（逗号分隔）</div>
                 <NInput
                   v-model:value="tagInput"
@@ -1003,48 +989,10 @@ onMounted(() => {
               </NSpace>
             </NCard>
 
-            <NCard size="small" title="链式代理" class="host-panel">
-              <div class="chain" :data-count="form.chain.length">
-                <div class="chain__head">
-                  <span class="chain__summary">{{ chainLabel(chainPayload(form.chain)) }}</span>
-                  <span class="chain__count mono">{{ form.chain.length }} / {{ MAX_CHAIN_HOPS }}</span>
-                  <NButton
-                    size="tiny"
-                    quaternary
-                    type="primary"
-                    :disabled="form.chain.length >= MAX_CHAIN_HOPS"
-                    @click="addHop(form.chain)"
-                  >＋ 添加一跳</NButton>
-                </div>
-                <div v-if="!form.chain.length" class="chain__empty mono">直连</div>
-                <div v-for="(hop, i) in form.chain" :key="i" class="chain__row">
-                  <span class="chain__idx mono">{{ i + 1 }}</span>
-                  <NSelect v-model:value="hop.kind" size="small" :options="HOP_KIND_OPTIONS" />
-                  <NInput v-model:value="hop.address" size="small" placeholder="host" />
-                  <NSwitch v-model:value="hop.enabled" size="small" />
-                  <NButton size="tiny" quaternary type="error" @click="removeHop(form.chain, i)">删除</NButton>
-                  <div class="chain__auth">
-                    <NInputNumber v-model:value="hop.port" size="small" :min="1" :max="65535" placeholder="port" style="width: 100%" />
-                    <NInput v-model:value="hop.username" size="small" placeholder="user" />
-                    <NInput v-model:value="hop.password" size="small" type="password" show-password-on="click" placeholder="pass" />
-                  </div>
-                </div>
-              </div>
-            </NCard>
           </NGi>
 
           <!-- 右栏 -->
           <NGi>
-            <NCard size="small" title="核心配置" class="host-panel">
-              <div class="kv-label">绑定配置档案（来自「协议配置」）</div>
-              <NSelect v-model:value="form.profile" :options="profileOptions" clearable placeholder="不绑定" />
-              <div class="hint" style="margin-top: 8px">
-                档案决定该主机上运行的内核原生配置；NGG 不重写内核协议栈。
-              </div>
-              <div class="host-kv"><span>Node Port</span><span class="mono">{{ form.node_port }}</span></div>
-              <div class="host-kv"><span>服务端口</span><span class="mono">{{ form.svc_port || '未设置' }}</span></div>
-            </NCard>
-
             <NCard size="small" title="IP 地址" class="host-panel">
               <NSpace :size="6" style="width: 100%">
                 <NInput v-model:value="newIP" placeholder="添加该主机的 IP" @keyup.enter="addIP" />
