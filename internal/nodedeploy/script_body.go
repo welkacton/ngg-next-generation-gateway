@@ -52,6 +52,19 @@ cat > "$CONFIG" <<'` + configDelimiter + `'
 {{CONFIG}}
 ` + configDelimiter + `
 chmod 600 "$CONFIG" || die 6 "无法设置配置权限"
+
+# A custom profile may reference TLS certificate / key files by absolute path.
+# Xray resolves those on THIS machine and only complains at step 7 with a
+# nested "failed to build TLS config > open ... no such file". List the missing
+# paths right here so the operator knows what to copy (or to stop binding the
+# profile and use the built-in REALITY config instead).
+MISSING_FILES="$( { grep -oE '"(certificateFile|keyFile)"[[:space:]]*:[[:space:]]*"/[^"]+"' "$CONFIG" || true; } \
+  | sed -E 's/.*"([^"]+)"$/\1/' \
+  | while IFS= read -r f; do [ -f "$f" ] || printf '%s ' "$f"; done )"
+MISSING_FILES="${MISSING_FILES%"${MISSING_FILES##*[![:space:]]}"}"
+if [ -n "$MISSING_FILES" ]; then
+  die 6 "配置引用了节点上不存在的证书/密钥文件：${MISSING_FILES}。请先把这些文件放到服务器上，或清空「配置文件」改用内置 REALITY 模式重新生成脚本"
+fi
 ok 6
 
 # ---------------------------------------------------------------- 7 校验

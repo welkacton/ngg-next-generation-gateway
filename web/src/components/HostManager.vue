@@ -479,12 +479,16 @@ const deployProfiles = ref<api.Profile[]>([])
 const deployProfileId = ref<string | null>(null)
 let profilesLoaded = false
 
-const deployProfileOptions = computed(() =>
-  deployProfiles.value.map((p) => ({
+const deployProfileOptions = computed(() => [
+  // Without an explicit "none" row the only way back to the built-in REALITY
+  // config is a small clear icon that appears on hover. Operators kept the
+  // custom profile selected (and kept failing its external certificate paths).
+  { label: '不绑定 · 使用内置 REALITY 配置（推荐）', value: '' },
+  ...deployProfiles.value.map((p) => ({
     label: `${p.name} · ${p.kernel}/${p.format}${p.enabled ? '' : '（未启用）'}`,
     value: p.id,
   })),
-)
+])
 const selectedProfile = computed(
   () => deployProfiles.value.find((p) => p.id === deployProfileId.value) ?? null,
 )
@@ -584,6 +588,11 @@ async function loadDeployPlan(id: string): Promise<void> {
       if (plan.spec.port) deployPort.value = plan.spec.port
       if (plan.spec.node_port) deployNodePort.value = plan.spec.node_port
       if (plan.spec.sni) deploySni.value = plan.spec.sni === 'www.bing.com' ? '' : plan.spec.sni
+      // The saved plan is authoritative. Without this, opening a REALITY plan
+      // on a host that still has a profile bound on its card would silently
+      // re-select the custom profile and regenerate an unusable script.
+      deployProfileId.value =
+        plan.spec.mode === 'profile' ? (plan.spec.profile_id || null) : null
       if (plan.last_connect) connectResult.value = plan.last_connect
     }
   } catch {
@@ -1056,7 +1065,7 @@ onUnmounted(() => {
               :options="deployProfileOptions"
               clearable
               filterable
-              placeholder="选择要绑定的配置文件（推荐）"
+              placeholder="留空＝使用内置 REALITY 配置（推荐）"
             />
             <div v-if="deployProfileId" class="hint" style="margin-top: 6px">
               <template v-if="selectedProfile">
@@ -1064,6 +1073,10 @@ onUnmounted(() => {
                 脚本会写入该文件的当前内容（保存后重新生成即可更新）
               </template>
               <template v-else>已绑定配置文件 {{ deployProfileId }}（列表加载中）</template>
+            </div>
+            <div v-if="deployProfileId" class="hint" style="margin-top: 4px; color: #b26a00">
+              自定义档案会原样写入节点：档案里引用的证书 / 密钥文件必须已存在于服务器，
+              否则脚本第 7 步会校验失败。不确定就清空本项，用内置 REALITY 先部署成功。
             </div>
             <div v-else-if="!deployProfiles.length" class="hint" style="margin-top: 6px">
               还没有可用的配置文件：先到「配置引擎 → 协议配置」新建并保存，再回来绑定。

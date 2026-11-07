@@ -467,3 +467,23 @@ func TestScriptBoundsKernelValidationAndExplainsPortCollision(t *testing.T) {
 		}
 	}
 }
+
+// The install script must diagnose missing TLS files itself (step 6), not wait
+// for Xray's nested "failed to build TLS config" error at step 7.
+func TestScriptChecksReferencedCertificateFiles(t *testing.T) {
+	s := mustPrepare(t, Spec{HostID: "01", Address: "50.118.185.194"})
+	script, err := Script(s)
+	if err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	for _, want := range []string{
+		"MISSING_FILES",
+		`certificateFile|keyFile`,
+		"配置引用了节点上不存在的证书/密钥文件",
+		"改用内置 REALITY 模式重新生成脚本",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing %q", want)
+		}
+	}
+}

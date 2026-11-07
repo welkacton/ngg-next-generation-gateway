@@ -114,3 +114,41 @@ func TestFriendlyNodeErrorPointsAtPortCollision(t *testing.T) {
 		t.Fatal("generic 'regenerate the plan' advice must not be used for a port collision")
 	}
 }
+
+// A profile that points at TLS files on the node must be flagged BEFORE the
+// script is shipped: Xray only complains at step 7, by which time the operator
+// has already copied 28 KB and run it on the server.
+func TestProfileFileWarningListsMissingCertificates(t *testing.T) {
+	content := `{
+  "inbounds": [{
+    "tag": "DIRECT_Trojan",
+    "streamSettings": {"tlsSettings": {"certificates": [{
+      "certificateFile": "/etc/xray-certs/example.com/example.com.crt",
+      "keyFile": "/etc/xray-certs/example.com/example.com.key"
+    }]}}
+  }]
+}`
+	got := profileFileWarning(content)
+	for _, want := range []string{
+		"/etc/xray-certs/example.com/example.com.crt",
+		"/etc/xray-certs/example.com/example.com.key",
+		"清空「配置文件」",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("warning %q missing %q", got, want)
+		}
+	}
+	if profileFileWarning(`{"inbounds":[]}`) != "" {
+		t.Fatal("a config without external files must not produce a warning")
+	}
+	// /etc/ngg is created by our own script, so it is not an external dep.
+	if profileFileWarning(`{"inbounds":[{"certificateFile":"/etc/ngg/tls/server.crt"}]}`) != "" {
+		t.Fatal("paths owned by the deploy script must not be flagged")
+	}
+}
+
+func TestJoinWarnings(t *testing.T) {
+	if got := joinWarnings("", "a", "", "b"); got != "a b" {
+		t.Fatalf("joinWarnings = %q", got)
+	}
+}

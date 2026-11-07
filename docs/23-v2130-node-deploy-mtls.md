@@ -220,3 +220,79 @@ v2.13.1 的改动：
 
 > 已经用 2222 生成过方案的节点不会自动换端口：在弹窗里把「管理端口」改成 2244，
 > 点「生成安装脚本」，然后在服务器上重新执行一次脚本即可。不要用停掉其它面板服务的方式腾端口。
+
+
+---
+
+## 11. v2.13.2 · 自定义档案引用了节点上不存在的文件
+
+第二次现场失败与端口无关（已用 2244），终端给出的是 Xray 自己的话：
+
+```
+NGG_STEP 7 用内核校验配置
+Failed to start: main: failed to load config files: [/etc/ngg/xray/config.json] > infra/conf
+> failed to build inbound config with tag DIRECT_Trojan
+> infra/conf: failed to build TLS config
+> infra/conf: failed to parse certificate > open /etc/xray-certs/panel.welkacton.ccwu.cc/…crt: no such file or directory
+NGG_FAIL 7 配置校验未通过
+```
+
+`Default-Profile` 的 `DIRECT_Trojan` 入站引用了 `/etc/xray-certs/panel.welkacton.ccwu.cc/` 下的
+`.crt` / `.key`。这些文件在面板（Windows）上存在与否毫无意义，Xray 会在**节点**上解析它们；
+脚本因此停在第 7 步，`ngg-node` 从未安装，面板连 2244 只能超时，显示在 UI 上就是
+「无法连接节点。确认脚本已执行完成…」。
+
+**为什么用户一直没能退回默认模式**：部署弹窗的「配置文件」下拉框只有档案列表，
+没有「不绑定」这一项；一旦选中，想回到内置 REALITY 只能找到 hover 才出现的清除图标。
+placeholder 还写着「选择要绑定的配置文件（推荐）」，进一步误导。
+
+v2.13.2 的改动：
+
+| 项 | 说明 |
+| --- | --- |
+| 生成方案时预警 | `profileFileWarning()` 扫描渲染后的配置里的 `certificateFile` / `keyFile` 绝对路径（排除脚本自管的 `/etc/ngg`），把具体路径写进 `View.Warning`，弹窗在**复制脚本之前**就显示 |
+| 脚本提前失败 | 第 6 步检查这些路径是否存在，缺失则 `die 6` 并逐一列出；不再等到第 7 步被 Xray 的嵌套报错淹没 |
+| 显式「不绑定」 | 下拉框首项改为「不绑定 · 使用内置 REALITY 配置（推荐）」，placeholder 改为「留空＝使用内置 REALITY 配置（推荐）」，选中档案时显示证书文件风险提示 |
+| 方案为准 | `loadDeployPlan` 按已保存方案的 `mode` / `profile_id` 回填下拉框，REALITY 方案不会再被卡片上的档案绑定悄悄改回自定义档案 |
+
+**现场处置（不需要等升级也能做）**：把「配置文件」清空后重新生成脚本，或直接执行
+`bin/ngg-node-01-2244.sh`（REALITY 模式，不引用任何外部文件）；若确实要用该档案，
+先把 `.crt` / `.key` 放到节点服务器上对应路径，再执行脚本。
+
+
+---
+
+## 11. v2.13.2 · 自定义档案引用了节点上不存在的文件
+
+第二次现场失败与端口无关（已用 2244），终端给出的是 Xray 自己的话：
+
+```
+NGG_STEP 7 用内核校验配置
+Failed to start: main: failed to load config files: [/etc/ngg/xray/config.json] > infra/conf
+> failed to build inbound config with tag DIRECT_Trojan
+> infra/conf: failed to build TLS config
+> infra/conf: failed to parse certificate > open /etc/xray-certs/panel.welkacton.ccwu.cc/…crt: no such file or directory
+NGG_FAIL 7 配置校验未通过
+```
+
+`Default-Profile` 的 `DIRECT_Trojan` 入站引用了 `/etc/xray-certs/panel.welkacton.ccwu.cc/` 下的
+`.crt` / `.key`。这些文件在面板（Windows）上存在与否毫无意义，Xray 会在**节点**上解析它们；
+脚本因此停在第 7 步，`ngg-node` 从未安装，面板连 2244 只能超时，显示在 UI 上就是
+「无法连接节点。确认脚本已执行完成…」。
+
+**为什么用户一直没能退回默认模式**：部署弹窗的「配置文件」下拉框只有档案列表，
+没有「不绑定」这一项；一旦选中，想回到内置 REALITY 只能找到 hover 才出现的清除图标。
+placeholder 还写着「选择要绑定的配置文件（推荐）」，进一步误导。
+
+v2.13.2 的改动：
+
+| 项 | 说明 |
+| --- | --- |
+| 生成方案时预警 | `profileFileWarning()` 扫描渲染后的配置里的 `certificateFile` / `keyFile` 绝对路径（排除脚本自管的 `/etc/ngg`），把具体路径写进 `View.Warning`，弹窗在**复制脚本之前**就显示 |
+| 脚本提前失败 | 第 6 步检查这些路径是否存在，缺失则 `die 6` 并逐一列出；不再等到第 7 步被 Xray 的嵌套报错淹没 |
+| 显式「不绑定」 | 下拉框首项改为「不绑定 · 使用内置 REALITY 配置（推荐）」，placeholder 改为「留空＝使用内置 REALITY 配置（推荐）」，选中档案时显示证书文件风险提示 |
+| 方案为准 | `loadDeployPlan` 按已保存方案的 `mode` / `profile_id` 回填下拉框，REALITY 方案不会再被卡片上的档案绑定悄悄改回自定义档案 |
+
+**现场处置（不需要等升级也能做）**：把「配置文件」清空后重新生成脚本，或直接执行
+`bin/ngg-node-01-2244.sh`（REALITY 模式，不引用任何外部文件）；若确实要用该档案，
+先把 `.crt` / `.key` 放到节点服务器上对应路径，再执行脚本。

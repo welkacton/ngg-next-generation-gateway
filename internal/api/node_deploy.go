@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +42,48 @@ const nodeConnectBudget = 60 * time.Second
 // NGG's node API at the same port produces a foreign-certificate handshake
 // error that "regenerate the plan" can never fix.
 const nodePort2222Warning = "管理端口 2222 通常已被 Remnawave 的 remnanode 占用。若这台服务器上跑着 Remnawave，请把「管理端口」改成 2244 等空闲端口，再重新生成脚本并在服务器上执行。"
+
+// certPathRE matches absolute certificate / key paths inside a rendered Xray
+// profile. Xray resolves them on the NODE, not on the panel, so a Windows
+// panel cannot check them — but it can warn before shipping the script.
+var certPathRE = regexp.MustCompile(`"(?:certificateFile|keyFile|certificate|key)"\s*:\s*"(/[^"]+)"`)
+
+// profileFileWarning catches the most common profile-mode failure: a config
+// that references TLS files which are not on the target server. Xray reports
+// "failed to build TLS config > open /etc/... no such file" only at step 7,
+// after the operator has already copied and executed the whole script.
+func profileFileWarning(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	seen := map[string]bool{}
+	var paths []string
+	for _, m := range certPathRE.FindAllStringSubmatch(content, -1) {
+		p := strings.TrimSpace(m[1])
+		// /etc/ngg is owned by this deploy script and is created below.
+		if p == "" || seen[p] || strings.HasPrefix(p, "/etc/ngg/") {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	return "绑定的协议配置引用了服务器本地的证书/密钥文件：" + strings.Join(paths, "、") +
+		"。这些文件必须事先存在于节点服务器上，否则脚本会在内核校验阶段中止；若不确定，请清空「配置文件」改用内置 REALITY 模式重新生成脚本。"
+}
+
+func joinWarnings(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " ")
+}
 
 type nodeDeployRequest struct {
 	Mode string `json:"mode"`
@@ -99,12 +143,14 @@ func (s *Server) handleNodeDeploy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view := rec.View(true)
+		portHint := ""
 		if rec.Spec.NodePort == 2222 {
 			// Warn BEFORE the operator spends time running the script: on most
 			// VPS that already host Remnawave, remnanode owns 2222 and the panel
 			// would end up talking to the wrong mTLS endpoint.
-			view.Warning = nodePort2222Warning
+			portHint = nodePort2222Warning
 		}
+		view.Warning = joinWarnings(portHint, profileFileWarning(rec.Spec.ProfileContent))
 		if rec.Spec.NodePort < 1 {
 			// v2.12 used an outbound probe and had no management port. Handing
 			// that script to the operator would install a node this panel can
@@ -147,9 +193,11 @@ func (s *Server) handleNodeDeploy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view := rec.View(true)
+		portHint := ""
 		if spec.NodePort == 2222 {
-			view.Warning = nodePort2222Warning
+			portHint = nodePort2222Warning
 		}
+		view.Warning = joinWarnings(portHint, profileFileWarning(spec.ProfileContent))
 		writeJSON(w, http.StatusOK, view)
 
 	case http.MethodDelete:
