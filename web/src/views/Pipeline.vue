@@ -249,6 +249,26 @@ async function runTest(silent = false) {
   }
 }
 
+const showYaml = ref(false)
+
+/** 阻断 / 注意计数与每段状态，供顶部状态条与编号步骤共用。 */
+const blocked = computed(() => steps.value.some((s) => s.status === 'fail') || view.value?.blocked === true)
+const warnCount = computed(() => steps.value.filter((s) => s.status === 'warn').length)
+const fixSteps = computed(() => steps.value.filter((s) => s.fix_hint && s.status !== 'ok'))
+const stepMap = computed<Record<string, PipelineStep>>(() =>
+  Object.fromEntries(steps.value.map((s) => [s.key, s])),
+)
+
+/** 某一段的修复提示（只在非 ok 时返回），直接显示在对应的编号步骤下面。 */
+function stepHint(key: string): string {
+  const s = stepMap.value[key]
+  if (!s || s.status === 'ok' || s.status === 'skip') return ''
+  return s.fix_hint || s.detail || ''
+}
+function stepIsFail(key: string): boolean {
+  return stepMap.value[key]?.status === 'fail'
+}
+
 onMounted(loadAll)
 </script>
 
@@ -258,420 +278,527 @@ onMounted(loadAll)
       <div>
         <h2 class="page-title">链路编排</h2>
         <p class="page-subtitle">
-          配置引擎的六个二级页面在这里串成一条真实可运行的代理链路：协议 → 入口 → 规则 → DNS → 出口 → 用户
+          把配置引擎的六个页面串成一条真实可运行的链路：协议 → 节点 → 规则 → DNS → 用户
         </p>
       </div>
-      <NSpace :size="8">
-        <NButton size="small" :loading="busy === 'validate'" @click="runValidate">校验链路</NButton>
+      <NSpace :size="8" align="center">
+        <NTag :bordered="false" :type="blocked ? 'error' : (warnCount ? 'warning' : 'success')">
+          {{ blocked ? '存在阻断项' : warnCount ? `${warnCount} 项待确认` : '链路就绪' }}
+        </NTag>
+        <NButton size="small" :loading="busy === 'validate'" @click="runValidate">校验</NButton>
         <NButton size="small" :loading="busy === 'render'" @click="runRender">预览配置</NButton>
-        <NButton
-          size="small"
-          type="primary"
-          :loading="busy === 'apply'"
-          @click="runApply"
-        >应用并启动</NButton>
-        <NButton size="small" tertiary :loading="busy === 'test'" @click="runTest(false)">连通测试</NButton>
+        <NButton size="small" type="primary" :loading="busy === 'apply'" @click="runApply">
+          应用并启动
+        </NButton>
       </NSpace>
     </div>
 
-    <!-- 链路顺序 -->
-    <div class="chain">
-      <template v-for="(s, i) in steps" :key="s.key">
-        <div class="chain-node" :class="statusClass(s.status)">
-          <div class="chain-node__top">
-            <span class="chain-index">{{ i + 1 }}</span>
-            <span class="chain-title">{{ s.title }}</span>
-            <span class="chain-status">{{ statusText[s.status] }}</span>
-          </div>
-          <div class="chain-value" :title="s.value">{{ s.value || '—' }}</div>
-          <div class="chain-detail" :title="s.detail">{{ s.detail }}</div>
-          <button class="chain-link" type="button" @click="goto(s.page)">
-            {{ STEP_PAGE_LABEL[s.key] || s.page }} →
-          </button>
-        </div>
-        <div v-if="i < steps.length - 1" class="chain-arrow" aria-hidden="true">›</div>
-      </template>
-      <div v-if="!steps.length" class="chain-empty">正在读取链路状态…</div>
+    <!-- 链路一眼可见：六段状态条，点任意一段进入对应配置页 -->
+    <div class="pl-steps">
+      <button
+        v-for="(s, i) in steps"
+        :key="s.key"
+        type="button"
+        class="pl-step"
+        :class="`is-${s.status}`"
+        :title="`${s.detail}${s.fix_hint ? ' · ' + s.fix_hint : ''}`"
+        @click="goto(s.page)"
+      >
+        <span class="pl-step__idx">{{ i + 1 }}</span>
+        <span class="pl-step__body">
+          <span class="pl-step__head">
+            <i class="pl-step__dot" />
+            {{ s.title }}
+          </span>
+          <span class="pl-step__value">{{ s.value || '—' }}</span>
+        </span>
+      </button>
+      <div v-if="!steps.length" class="pl-steps__empty">正在读取链路状态…</div>
     </div>
 
-    <NAlert v-if="view?.blocked" type="error" :bordered="false" class="section-gap">
+    <NAlert v-if="blocked" type="error" :bordered="false" class="section-gap">
       <template #header>链路存在阻断项</template>
-      标红的环节必须修复后才能应用；其余环节的黄灯只是提醒，不会阻止启动。
+      标红的环节必须先修复才能应用；黄灯只是提醒，不阻止启动。
     </NAlert>
 
-    <div class="pipeline-grid section-gap">
-      <!-- 左：参数 -->
-      <NCard size="small" title="链路参数" class="pl-card">
-        <div class="form-grid">
-          <label class="fld">
-            <span>链路名称</span>
-            <NInput v-model:value="form.name" placeholder="默认链路" />
-          </label>
-          <label class="fld">
-            <span>承载内核</span>
-            <NSelect v-model:value="form.kernel" :options="kernelOptions" />
-          </label>
+    <div class="pl-body section-gap">
+      <!-- 左：参数，按「怎么进来 / 怎么出去 / 分流与记账」分组 -->
+      <div class="pl-col">
+        <NCard size="small" title="链路参数" class="pl-card">
+          <p class="pl-lead">
+            按 <b>1 → 6</b> 的顺序填，每一步都对应左侧链路里的一段；红字是该段当前的问题，点「去配置」直接跳转。
+          </p>
 
-          <label class="fld">
-            <span>入口节点（第一跳，可空）</span>
-            <NSelect
-              v-model:value="form.inbound.host_id"
-              :options="entryOptions"
-              placeholder="不使用：本机直接监听"
-            />
-          </label>
-          <label class="fld">
-            <span>客户端接入协议</span>
-            <NSelect
-              v-model:value="form.protocol"
-              :options="[
-                { label: '混合端口（SOCKS5 + HTTP）', value: 'mixed' },
-                { label: 'SOCKS5', value: 'socks5' },
-                { label: 'HTTP 代理', value: 'http' },
-              ]"
-            />
-          </label>
+          <div class="pl-seq">
+            <section class="pl-seq__item" :class="{ 'is-bad': stepIsFail('protocol') }">
+              <div class="pl-seq__head">
+                <span class="pl-seq__no">1</span>
+                <span class="pl-seq__title">协议</span>
+                <span class="pl-seq__desc">用什么协议对外服务</span>
+                <button class="pl-seq__go" type="button" @click="goto('protocols')">协议配置 →</button>
+              </div>
+              <div class="pl-grid">
+                <label class="fld">
+                  <span>承载内核</span>
+                  <NSelect v-model:value="form.kernel" :options="kernelOptions" />
+                </label>
+                <label class="fld">
+                  <span>接入协议</span>
+                  <NSelect
+                    v-model:value="form.protocol"
+                    :options="[
+                      { label: '混合端口（SOCKS5 + HTTP）', value: 'mixed' },
+                      { label: 'SOCKS5', value: 'socks5' },
+                      { label: 'HTTP 代理', value: 'http' },
+                    ]"
+                  />
+                </label>
+              </div>
+              <div v-if="stepHint('protocol')" class="pl-seq__warn">{{ stepHint('protocol') }}</div>
+            </section>
 
-          <label class="fld">
-            <span>监听地址</span>
-            <NSelect
-              v-model:value="form.inbound.listen"
-              :options="[
-                { label: '127.0.0.1（仅本机）', value: '127.0.0.1' },
-                { label: '0.0.0.0（局域网）', value: '0.0.0.0' },
-              ]"
-            />
-          </label>
-          <label class="fld">
-            <span>监听端口</span>
-            <NInputNumber v-model:value="form.inbound.port" :min="1" :max="65535" style="width: 100%" />
-          </label>
+            <section class="pl-seq__item" :class="{ 'is-bad': stepIsFail('inbound') }">
+              <div class="pl-seq__head">
+                <span class="pl-seq__no">2</span>
+                <span class="pl-seq__title">入口节点</span>
+                <span class="pl-seq__desc">客户端先连到哪里</span>
+                <button class="pl-seq__go" type="button" @click="goto('nodes')">节点管理 →</button>
+              </div>
+              <div class="pl-grid">
+                <label class="fld pl-fld--wide">
+                  <span>入口节点（第一跳，可留空 = 本机直接监听）</span>
+                  <NSelect
+                    v-model:value="form.inbound.host_id"
+                    :options="entryOptions"
+                    placeholder="不使用：本机直接监听"
+                  />
+                </label>
+                <label class="fld">
+                  <span>监听地址</span>
+                  <NSelect
+                    v-model:value="form.inbound.listen"
+                    :options="[
+                      { label: '127.0.0.1（仅本机）', value: '127.0.0.1' },
+                      { label: '0.0.0.0（局域网）', value: '0.0.0.0' },
+                    ]"
+                  />
+                </label>
+                <label class="fld">
+                  <span>监听端口</span>
+                  <NInputNumber v-model:value="form.inbound.port" :min="1" :max="65535" style="width: 100%" />
+                </label>
+              </div>
+              <div v-if="stepHint('inbound')" class="pl-seq__warn">{{ stepHint('inbound') }}</div>
+            </section>
 
-          <label class="fld fld--wide">
-            <span>出口节点（可多选，按顺序参与策略组）</span>
-            <NSelect
-              v-model:value="form.outbound.host_ids"
-              multiple
-              :options="hostOptions"
-              placeholder="未选择时链路直连"
-            />
-          </label>
-          <label class="fld">
-            <span>出口策略</span>
-            <NSelect v-model:value="form.outbound.mode" :options="modeOptions" />
-          </label>
-          <label class="fld fld--switch">
-            <span>保留 DIRECT 选项</span>
-            <NSwitch v-model:value="form.outbound.direct_fallback" />
-            <em>仅手动选择模式下生效，避免自动测速时绕过 VPS</em>
-          </label>
+            <section class="pl-seq__item" :class="{ 'is-bad': stepIsFail('rules') }">
+              <div class="pl-seq__head">
+                <span class="pl-seq__no">3</span>
+                <span class="pl-seq__title">规则</span>
+                <span class="pl-seq__desc">哪些流量直连、哪些走出口</span>
+                <button class="pl-seq__go" type="button" @click="goto('rules')">规则配置 →</button>
+              </div>
+              <div class="pl-grid">
+                <label class="fld pl-fld--wide">
+                  <span>参与匹配的规则集（留空 = 所有已启用）</span>
+                  <NSelect
+                    v-model:value="form.rule_set_ids"
+                    multiple
+                    :options="ruleOptions"
+                    placeholder="留空使用全部已启用规则集"
+                  />
+                </label>
+              </div>
+              <div v-if="stepHint('rules')" class="pl-seq__warn">{{ stepHint('rules') }}</div>
+            </section>
 
-          <label class="fld fld--wide">
-            <span>参与匹配的规则集（留空＝所有已启用规则集）</span>
-            <NSelect v-model:value="form.rule_set_ids" multiple :options="ruleOptions" placeholder="留空使用全部已启用规则集" />
-          </label>
+            <section class="pl-seq__item" :class="{ 'is-bad': stepIsFail('dns') }">
+              <div class="pl-seq__head">
+                <span class="pl-seq__no">4</span>
+                <span class="pl-seq__title">DNS</span>
+                <span class="pl-seq__desc">域名在哪解析</span>
+                <button class="pl-seq__go" type="button" @click="goto('dns')">DNS配置 →</button>
+              </div>
+              <div class="pl-grid">
+                <label class="fld fld--switch pl-fld--wide">
+                  <span>内核内置 DNS</span>
+                  <NSwitch v-model:value="form.dns_enabled" />
+                  <em>关闭时由 NGG DNS 与系统解析器处理，可避免端口冲突</em>
+                </label>
+              </div>
+              <div v-if="stepHint('dns')" class="pl-seq__warn">{{ stepHint('dns') }}</div>
+            </section>
 
-          <label class="fld fld--wide">
-            <span>计入配额的用户（仅记账，不参与握手）</span>
-            <NSelect v-model:value="form.user_ids" multiple :options="userOptions" placeholder="可不选" />
-          </label>
+            <section class="pl-seq__item" :class="{ 'is-bad': stepIsFail('outbound') }">
+              <div class="pl-seq__head">
+                <span class="pl-seq__no">5</span>
+                <span class="pl-seq__title">出口节点</span>
+                <span class="pl-seq__desc">流量从哪台 VPS 出去</span>
+                <button class="pl-seq__go" type="button" @click="goto('nodes')">节点管理 →</button>
+              </div>
+              <div class="pl-grid">
+                <label class="fld pl-fld--wide">
+                  <span>出口节点（可多选，按顺序进入策略组；不选 = 直连）</span>
+                  <NSelect
+                    v-model:value="form.outbound.host_ids"
+                    multiple
+                    :options="hostOptions"
+                    placeholder="未选择时链路直连"
+                  />
+                </label>
+                <label class="fld">
+                  <span>出口策略</span>
+                  <NSelect v-model:value="form.outbound.mode" :options="modeOptions" />
+                </label>
+                <label class="fld fld--switch">
+                  <span>保留 DIRECT 选项</span>
+                  <NSwitch v-model:value="form.outbound.direct_fallback" />
+                  <em>仅手动选择模式生效，避免自动测速时绕过 VPS</em>
+                </label>
+              </div>
+              <div v-if="stepHint('outbound')" class="pl-seq__warn">{{ stepHint('outbound') }}</div>
+            </section>
 
-          <label class="fld">
-            <span>测试目标（host:port）</span>
-            <NInput v-model:value="form.test_target" placeholder="www.gstatic.com:80" />
-          </label>
-          <label class="fld fld--switch">
-            <span>内核内置 DNS</span>
-            <NSwitch v-model:value="form.dns_enabled" />
-            <em>关闭时由 NGG DNS 与系统解析器处理，可避免端口冲突</em>
-          </label>
-        </div>
+            <section class="pl-seq__item" :class="{ 'is-bad': stepIsFail('users') }">
+              <div class="pl-seq__head">
+                <span class="pl-seq__no">6</span>
+                <span class="pl-seq__title">用户</span>
+                <span class="pl-seq__desc">哪些账号计入配额</span>
+                <button class="pl-seq__go" type="button" @click="goto('users')">用户管理 →</button>
+              </div>
+              <div class="pl-grid">
+                <label class="fld pl-fld--wide">
+                  <span>计入配额的用户（仅记账，不参与握手）</span>
+                  <NSelect
+                    v-model:value="form.user_ids"
+                    multiple
+                    :options="userOptions"
+                    placeholder="可不选"
+                  />
+                </label>
+              </div>
+              <div v-if="stepHint('users')" class="pl-seq__warn">{{ stepHint('users') }}</div>
+            </section>
+          </div>
 
-        <NSpace :size="8" style="margin-top: 14px">
-          <NButton size="small" :loading="busy === 'save'" @click="save">保存参数</NButton>
-          <NButton size="small" type="primary" :loading="busy === 'apply'" @click="runApply">
-            应用并启动
-          </NButton>
-          <span class="hint">保存不会影响正在运行的内核，只有「应用并启动」才会下发配置。</span>
-        </NSpace>
+          <div class="pl-actions">
+            <NButton size="small" :loading="busy === 'save'" @click="save">保存参数</NButton>
+            <span class="hint">保存不会影响运行中的内核；只有「应用并启动」才会下发配置。</span>
+          </div>
+          <div class="pl-actions">
+            <label class="fld" style="flex: 1 1 220px">
+              <span>链路名称 / 连通测试目标</span>
+              <div class="pl-actions__row">
+                <NInput v-model:value="form.name" placeholder="默认链路" />
+                <NInput v-model:value="form.test_target" placeholder="www.gstatic.com:80" />
+              </div>
+            </label>
+            <NButton size="small" :loading="busy === 'save'" @click="save">保存参数</NButton>
+            <NButton size="small" type="primary" :loading="busy === 'apply'" @click="runApply">应用并启动</NButton>
+          </div>
+        </NCard>
+      </div>
 
-        <NAlert v-if="applyError" type="error" :bordered="false" style="margin-top: 12px">
-          {{ applyError }}
-        </NAlert>
-        <NAlert v-if="applied?.ok" type="success" :bordered="false" style="margin-top: 12px">
-          已应用到 {{ applied.kernel }}，入口 {{ applied.listen }}
-          {{ applied.restarted ? '（内核已重启以加载新配置）' : '' }}
-        </NAlert>
-      </NCard>
-
-      <!-- 右：结果 -->
-      <NCard size="small" title="执行结果" class="pl-card">
-        <div class="result-block">
-          <div class="result-title">端到端连通测试</div>
-          <template v-if="testResult">
-            <div class="result-row">
-              <NTag :type="testResult.ok ? 'success' : 'error'" :bordered="false" size="small">
-                {{ testResult.ok ? '通过' : '失败' }}
-              </NTag>
-              <span class="mono">{{ testResult.listen || '—' }} → {{ testResult.target }}</span>
-              <span v-if="testResult.latency_ms" class="hint">
-                {{ testResult.latency_ms.toFixed(1) }} ms
+      <!-- 右：执行与结果 -->
+      <div class="pl-col pl-col--side">
+        <NCard size="small" title="执行" class="pl-card">
+          <div class="pl-run">
+            <div class="pl-run__row">
+              <span class="pl-run__name">校验链路</span>
+              <span class="pl-run__state" :class="blocked ? 'is-bad' : (warnCount ? 'is-warn' : 'is-ok')">
+                {{ steps.length ? (blocked ? '阻断' : warnCount ? `${warnCount} 项注意` : '通过') : '未执行' }}
               </span>
+              <NButton size="tiny" quaternary :loading="busy === 'validate'" @click="runValidate">重新校验</NButton>
             </div>
-            <div class="result-detail">{{ testResult.message || testResult.error }}</div>
+            <div class="pl-run__row">
+              <span class="pl-run__name">生成配置</span>
+              <span class="pl-run__state" :class="yaml ? 'is-ok' : 'is-idle'">
+                {{ yaml ? `${yaml.split('\n').length} 行` : '未生成' }}
+              </span>
+              <NButton size="tiny" quaternary :loading="busy === 'render'" @click="runRender">
+                {{ yaml ? '重新生成' : '预览' }}
+              </NButton>
+            </div>
+            <div class="pl-run__row">
+              <span class="pl-run__name">应用到内核</span>
+              <span class="pl-run__state" :class="applied?.ok ? 'is-ok' : (applyError ? 'is-bad' : 'is-idle')">
+                {{ applied?.ok ? '已生效' : applyError ? '失败' : '未应用' }}
+              </span>
+              <NButton size="tiny" quaternary :loading="busy === 'apply'" @click="runApply">应用</NButton>
+            </div>
+            <div class="pl-run__row">
+              <span class="pl-run__name">端到端连通</span>
+              <span class="pl-run__state" :class="testResult ? (testResult.ok ? 'is-ok' : 'is-bad') : 'is-idle'">
+                <template v-if="testResult">
+                  {{ testResult.ok ? `${(testResult.latency_ms ?? 0).toFixed(1)} ms` : '失败' }}
+                </template>
+                <template v-else>未测试</template>
+              </span>
+              <NButton size="tiny" quaternary :loading="busy === 'test'" @click="runTest(false)">测试</NButton>
+            </div>
+          </div>
+
+          <div v-if="applyError" class="pl-note is-bad">{{ applyError }}</div>
+          <div v-else-if="applied?.ok" class="pl-note is-ok">
+            已应用到 {{ applied.kernel }}，入口 {{ applied.listen }}
+          </div>
+          <div v-else-if="testResult && !testResult.ok" class="pl-note is-bad">
+            {{ testResult.message || testResult.error }}
+          </div>
+        </NCard>
+
+        <NCard size="small" class="pl-card">
+          <template #header>
+            <div class="pl-card__head">
+              <span>生成的配置</span>
+              <NButton v-if="yaml" size="tiny" quaternary @click="showYaml = !showYaml">
+                {{ showYaml ? '收起' : '展开' }}
+              </NButton>
+            </div>
           </template>
-          <div v-else class="hint">
-            尚未测试。测试会真实完成一次 SOCKS5 握手：连接入口 → 由出口节点连到目标 → 返回耗时。
+          <div v-if="renderWarnings.length" class="pl-note is-warn">
+            {{ renderWarnings.length }} 条警告：{{ renderWarnings[0] }}
+            <span v-if="renderWarnings.length > 1">…</span>
           </div>
-        </div>
+          <NCode v-if="yaml && showYaml" :code="yaml" language="yaml" word-wrap class="yaml-box" />
+          <div v-else-if="yaml" class="hint">已生成 {{ yaml.split('\n').length }} 行；点「展开」查看全文。</div>
+          <div v-else class="hint">点「预览配置」生成 mihomo YAML。节点、规则与 DNS 全部来自上面六段。</div>
+        </NCard>
 
-        <div class="result-block">
-          <div class="result-title">生成的内核配置</div>
-          <div v-if="renderWarnings.length" class="result-warnings">
-            <div v-for="(w, i) in renderWarnings" :key="i">· {{ w }}</div>
-          </div>
-          <NCode v-if="yaml" :code="yaml" language="yaml" word-wrap class="yaml-box" />
-          <div v-else class="hint">点击「预览配置」生成 mihomo YAML。所有节点、规则与 DNS 都来自上面六个页面。</div>
-        </div>
-
-        <div class="result-block">
-          <div class="result-title">代理顺序</div>
+        <NCard size="small" title="代理顺序" class="pl-card">
           <ol class="order-list">
-            <li>客户端 → <span class="mono">{{ form.inbound.listen }}:{{ form.inbound.port }}</span>（混合端口）</li>
-            <li v-if="form.inbound.host_id">→ 入口节点（第一跳 VPS，dialer-proxy）</li>
-            <li v-if="form.outbound.host_ids.length">→ 出口节点（{{ form.outbound.host_ids.length }} 个，{{ form.outbound.mode }}）</li>
+            <li>客户端 → <span class="mono">{{ form.inbound.listen }}:{{ form.inbound.port }}</span></li>
+            <li v-if="form.inbound.host_id">→ 入口节点（第一跳 VPS）</li>
+            <li v-if="form.outbound.host_ids.length">
+              → 出口节点（{{ form.outbound.host_ids.length }} 个 · {{ form.outbound.mode }}）
+            </li>
             <li v-else>→ 直连（未选择出口节点）</li>
-            <li>→ 目标站点；规则命中 DIRECT / REJECT 时提前分流</li>
+            <li>→ 目标；命中 DIRECT / REJECT 时提前分流</li>
           </ol>
-        </div>
-      </NCard>
+        </NCard>
+      </div>
     </div>
 
-    <NCard v-if="steps.some((s) => s.fix_hint)" size="small" title="待处理提示" class="section-gap">
-      <div v-for="s in steps.filter((x) => x.fix_hint)" :key="s.key" class="fix-row">
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NTag :bordered="false" size="small" :type="s.status === 'fail' ? 'error' : 'warning'">
-              {{ s.title }}
-            </NTag>
-          </template>
-          {{ s.detail }}
-        </NTooltip>
-        <span class="fix-text">{{ s.fix_hint }}</span>
-        <button class="chain-link" type="button" @click="goto(s.page)">去处理 →</button>
-      </div>
-    </NCard>
   </div>
 </template>
 
 <style scoped>
-.chain {
+/* 六段状态条：一行看完，不再用六张卡片撑满首屏 */
+.pl-steps {
   display: flex;
-  align-items: stretch;
-  gap: 5px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  padding-bottom: 6px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.chain-empty {
-  color: #8e8e93;
-  font-size: 13px;
-  padding: 18px 0;
-}
-.chain-node {
-  flex: 1 1 0;
-  min-width: 148px;
-  background: #fff;
-  border: 1px solid #e8e8ed;
-  border-radius: 14px;
-  padding: 10px 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
-}
-.chain-node:hover {
-  border-color: #d2d2d7;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
-}
-.chain-node__top {
+.pl-step {
+  flex: 1 1 150px;
+  min-width: 132px;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e8e8ed;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
-.chain-index {
-  width: 18px;
+.pl-step:hover {
+  border-color: #d7d7de;
+  box-shadow: 0 4px 14px rgba(0,0,0,.05);
+  transform: translateY(-1px);
+}
+.pl-step__idx {
+  flex: 0 0 18px;
   height: 18px;
   border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: #fff;
-  background: #0071e3;
-}
-.chain-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: #1d1d1f;
-}
-.chain-status {
-  margin-left: auto;
-  font-size: 10.5px;
+  background: #f2f2f5;
   color: #8e8e93;
+  font-size: 10.5px;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
-.chain-value {
-  font-size: 12.5px;
+.pl-step__body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pl-step__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: #6e6e73;
+}
+.pl-step__dot { width: 6px; height: 6px; border-radius: 50%; background: #c7c7cc; }
+.pl-step__value {
+  font-size: 12px;
   color: #1d1d1f;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.chain-detail {
-  font-size: 11px;
-  line-height: 1.5;
-  color: #8e8e93;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  min-height: 32px;
-}
-.chain-link {
-  border: 0;
-  background: none;
-  padding: 0;
-  font-size: 11px;
-  color: #0071e3;
-  cursor: pointer;
-  text-align: left;
-}
-.chain-link:hover {
-  text-decoration: underline;
-}
-.step--ok .chain-index {
-  background: #30a14e;
-}
-.step--warn {
-  border-color: #f2d09a;
-  background: #fffbf2;
-}
-.step--warn .chain-index {
-  background: #ff9f0a;
-}
-.step--fail {
-  border-color: #f0b6bb;
-  background: #fff6f6;
-}
-.step--fail .chain-index {
-  background: #ff453a;
-}
-.step--skip .chain-index {
-  background: #c7c7cc;
-}
-.chain-arrow {
-  display: grid;
-  place-items: center;
-  color: #c7c7cc;
-  font-size: 18px;
-  flex: 0 0 9px;
-}
+.pl-step.is-ok .pl-step__dot { background: #2fb457; }
+.pl-step.is-warn .pl-step__dot { background: #f0a020; }
+.pl-step.is-fail .pl-step__dot { background: #ff3b30; }
+.pl-step.is-fail { border-color: #f3c9c6; background: #fdf6f5; }
+.pl-step.is-skip .pl-step__dot { background: #b0b0b8; }
+.pl-steps__empty { color: #8e8e93; font-size: 12px; padding: 10px 0; }
 
-.pipeline-grid {
+/* 主体：左参数 3 组 / 右侧执行与结果 */
+.pl-body {
   display: grid;
-  grid-template-columns: minmax(420px, 1.05fr) minmax(380px, 0.95fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
 }
 @media (max-width: 1180px) {
-  .pipeline-grid {
-    grid-template-columns: 1fr;
-  }
+  .pl-body { grid-template-columns: 1fr; }
 }
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px 14px;
-}
-.fld {
-  display: grid;
-  gap: 5px;
-  font-size: 12px;
+.pl-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pl-card { min-width: 0; }
+.pl-card__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; }
+
+.pl-lead {
+  margin: 0 0 12px;
+  font-size: 11.5px;
+  line-height: 1.6;
   color: #6e6e73;
 }
-.fld--wide {
-  grid-column: 1 / -1;
+.pl-lead b { color: #1d1d1f; }
+
+/* 1 → 6 编号步骤：每一步对应链路里的一段，问题直接显示在对应步骤下面 */
+.pl-seq { display: flex; flex-direction: column; gap: 10px; }
+.pl-seq__item {
+  border: 1px solid #eeeef2;
+  border-radius: 10px;
+  padding: 9px 11px 10px;
+  background: #fcfcfd;
 }
-.fld--switch {
+.pl-seq__item.is-bad { border-color: #f3c9c6; background: #fdf6f5; }
+.pl-seq__head {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom: 8px;
   flex-wrap: wrap;
 }
-.fld--switch em {
-  font-style: normal;
-  font-size: 10.5px;
-  color: #a1a1a6;
-}
-.result-block + .result-block {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid #f0f0f2;
-}
-.result-title {
-  font-size: 12px;
+.pl-seq__no {
+  flex: 0 0 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #0071e3;
+  color: #fff;
+  font-size: 11px;
   font-weight: 600;
-  color: #1d1d1f;
+  line-height: 20px;
+  text-align: center;
+}
+.pl-seq__item.is-bad .pl-seq__no { background: #ff3b30; }
+.pl-seq__title { font-size: 12.5px; font-weight: 600; color: #1d1d1f; }
+.pl-seq__desc { flex: 1 1 auto; font-size: 10.5px; color: #8e8e93; }
+.pl-seq__go {
+  border: 0;
+  background: none;
+  color: #0071e3;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.pl-seq__warn {
+  margin-top: 7px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #b32442;
+}
+.pl-actions__row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 720px) {
+  .pl-actions__row { grid-template-columns: 1fr; }
+}
+
+.pl-group + .pl-group { margin-top: 16px; }
+.pl-group__legend {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6e6e73;
+  letter-spacing: .02em;
   margin-bottom: 8px;
 }
-.result-row {
+.pl-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+@media (max-width: 720px) {
+  .pl-grid { grid-template-columns: 1fr; }
+}
+.pl-fld--wide { grid-column: 1 / -1; }
+.fld { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.fld > span { font-size: 11.5px; color: #6e6e73; }
+.fld--switch { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 8px; }
+.fld--switch > span { grid-column: 1 / -1; }
+.fld--switch em { font-size: 10.5px; color: #8e8e93; font-style: normal; }
+.pl-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
-  font-size: 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f2;
 }
-.result-detail {
-  margin-top: 6px;
+
+/* 执行状态：一行一件事，状态与动作都在右侧 */
+.pl-run { display: flex; flex-direction: column; }
+.pl-run__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f4f4f6;
+  font-size: 12.5px;
+}
+.pl-run__row:last-child { border-bottom: 0; }
+.pl-run__name { flex: 1 1 auto; color: #1d1d1f; }
+.pl-run__state { font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.pl-run__state.is-ok { color: #1f7a3a; }
+.pl-run__state.is-warn { color: #b26a00; }
+.pl-run__state.is-bad { color: #b32442; }
+.pl-run__state.is-idle { color: #8e8e93; }
+
+.pl-note {
+  margin-top: 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
   font-size: 11.5px;
-  color: #6e6e73;
-  line-height: 1.6;
+  line-height: 1.5;
 }
-.result-warnings {
-  font-size: 11.5px;
-  color: #b26a00;
-  margin-bottom: 6px;
-}
+.pl-note.is-ok { background: #eef8f1; color: #1f7a3a; }
+.pl-note.is-warn { background: #fdf6e8; color: #8a5a00; }
+.pl-note.is-bad { background: #fdeeee; color: #b32442; }
+
 .yaml-box {
-  max-height: 320px;
+  max-height: 260px;
   overflow: auto;
-  border-radius: 10px;
-  font-size: 11.5px;
+  margin-top: 8px;
 }
-.order-list {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 11.5px;
-  line-height: 1.9;
-  color: #6e6e73;
-}
+
+.order-list { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.9; color: #1d1d1f; }
+
 .fix-row {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 6px 0;
+  border-bottom: 1px solid #f4f4f6;
+  flex-wrap: wrap;
+}
+.fix-row:last-child { border-bottom: 0; }
+.fix-text { flex: 1 1 320px; font-size: 12px; color: #4a4a4f; }
+.chain-link {
+  border: 0;
+  background: none;
+  color: #0071e3;
   font-size: 12px;
-  color: #1d1d1f;
-}
-.fix-text {
-  color: #6e6e73;
-}
-.hint {
-  font-size: 11.5px;
-  color: #8e8e93;
-  line-height: 1.7;
-}
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+  padding: 0;
 }
 </style>
