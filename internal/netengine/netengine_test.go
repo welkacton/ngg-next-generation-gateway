@@ -297,11 +297,17 @@ func TestEndToEndThroughRealSockets(t *testing.T) {
 	if res["ok"] != true {
 		t.Fatalf("self test did not pass: %+v", res)
 	}
-	if e.Metrics().Proxied.Load() == 0 {
-		t.Fatal("no proxied connection was counted")
-	}
-	if e.Metrics().BytesOut.Load() == 0 {
-		t.Fatal("no bytes were relayed")
+	// Counters are incremented by the relay goroutines, which can outlive
+	// SelfTest on a fast runner. relay_test.go already polls for this reason;
+	// do the same here instead of racing the assertion against the copy loop.
+	// The deadline is a hard failure: zero real bytes is still a broken path.
+	deadline := time.Now().Add(3 * time.Second)
+	for e.Metrics().Proxied.Load() == 0 || e.Metrics().BytesOut.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no bytes were relayed: proxied=%d bytes_out=%d",
+				e.Metrics().Proxied.Load(), e.Metrics().BytesOut.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	t.Logf("path=%s latency=%vms bytes_out=%d", res["path"], res["latency_ms"], e.Metrics().BytesOut.Load())
 }
