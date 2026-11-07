@@ -8,7 +8,34 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ngg-project/ngg/internal/nodepki"
 )
+
+// withCerts fills the transient TLS material Script needs, the way the API
+// layer does after Prepare.
+func withCerts(t *testing.T, s Spec) Spec {
+	t.Helper()
+	ca, err := nodepki.NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	leaf, err := ca.IssueNode(s.HostID, s.Address)
+	if err != nil {
+		t.Fatalf("IssueNode: %v", err)
+	}
+	s.NodeCertPEM, s.NodeKeyPEM, s.CAPEM = leaf.CertPEM, leaf.KeyPEM, ca.CAPEM()
+	return s
+}
+
+func mustPrepare(t *testing.T, s Spec) Spec {
+	t.Helper()
+	out, err := Prepare(s)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	return withCerts(t, out)
+}
 
 func TestPrepareDefaultsAndCredentials(t *testing.T) {
 	s, err := Prepare(Spec{HostID: "vps-main", HostName: "主 VPS", Address: "203.0.113.9"})
@@ -21,6 +48,9 @@ func TestPrepareDefaultsAndCredentials(t *testing.T) {
 	if s.Port != DefaultPort {
 		t.Fatalf("port = %d, want %d", s.Port, DefaultPort)
 	}
+	if s.NodePort != DefaultNodePort {
+		t.Fatalf("node port = %d, want %d", s.NodePort, DefaultNodePort)
+	}
 	if s.SNI != DefaultRealitySNI {
 		t.Fatalf("sni = %q", s.SNI)
 	}
@@ -29,6 +59,9 @@ func TestPrepareDefaultsAndCredentials(t *testing.T) {
 	}
 	if len(s.ShortID) != 8 {
 		t.Fatalf("short id = %q, want 8 hex chars", s.ShortID)
+	}
+	if !strings.HasPrefix(s.NodeBinBase, "https://github.com/") {
+		t.Fatalf("node bin base = %q", s.NodeBinBase)
 	}
 
 	// Re-preparing an existing spec must not rotate live credentials.
@@ -39,28 +72,32 @@ func TestPrepareDefaultsAndCredentials(t *testing.T) {
 	if again.UUID != s.UUID || again.RealityPrivate != s.RealityPrivate || again.ShortID != s.ShortID {
 		t.Fatal("Prepare rotated credentials on a re-run")
 	}
+	if again.NodePort != s.NodePort {
+		t.Fatal("Prepare changed the management port on a re-run")
+	}
 }
 
-// TestPrepareKeepsReportIdentity: the probe id/token are minted by the API
-// layer (agent registry), so Prepare must carry them through untouched — a
-// re-render that silently dropped the token would cut the node off the panel.
-func TestPrepareKeepsReportIdentity(t *testing.T) {
-	s, err := Prepare(Spec{HostID: "vps-main", Address: "203.0.113.9",
-		AgentID: "ag-abc123", AgentToken: "deadbeef", PanelURL: "https://panel.example.com/"})
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
+func TestPrepareRejectsCollidingPorts(t *testing.T) {
+	_, err := Prepare(Spec{HostID: "n1", Address: "203.0.113.9", Port: 2222, NodePort: 2222})
+	if !errors.Is(err, ErrInvalidSpec) {
+		t.Fatalf("err = %v, want ErrInvalidSpec when data port == management port", err)
 	}
-	if s.AgentID != "ag-abc123" || s.AgentToken != "deadbeef" {
-		t.Fatalf("report identity lost: %+v", s)
+	_, err = Prepare(Spec{HostID: "n1", Address: "203.0.113.9", NodePort: 70000})
+	if !errors.Is(err, ErrInvalidSpec) {
+		t.Fatalf("err = %v, want ErrInvalidSpec for an out-of-range port", err)
 	}
-	if s.PanelURL != "https://panel.example.com" {
-		t.Fatalf("panel url = %q, want trailing slash trimmed", s.PanelURL)
-	}
-	if got := s.PublicSpec(); got.AgentToken != "" || got.RealityPrivate != "" {
+}
+
+// TestPublicSpecHidesSecrets: the browser projection must never carry the
+// REALITY private key, the node password or the profile source.
+func TestPublicSpecHidesSecrets(t *testing.T) {
+	s := mustPrepare(t, Spec{HostID: "n1", Address: "203.0.113.9"})
+	pub := s.PublicSpec()
+	if pub.RealityPrivate != "" || pub.Password != "" {
 		t.Fatal("PublicSpec leaked a secret")
 	}
-	if _, err := Prepare(Spec{HostID: "n1", Address: "203.0.113.9", PanelURL: "panel:9191"}); !errors.Is(err, ErrInvalidSpec) {
-		t.Fatalf("err = %v, want ErrInvalidSpec for a url without scheme", err)
+	if pub.RealityPublic == "" || pub.UUID == "" {
+		t.Fatal("PublicSpec dropped client-visible parameters")
 	}
 }
 
@@ -188,28 +225,28 @@ func TestProfileModeValidation(t *testing.T) {
 }
 
 func TestScriptContainsEveryStep(t *testing.T) {
-	s, err := Prepare(Spec{HostID: "vps-main", HostName: "主 VPS", Address: "203.0.113.9", PanelURL: "http://10.0.0.2:9191"})
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
+	s := mustPrepare(t, Spec{HostID: "vps-main", HostName: "主 VPS", Address: "203.0.113.9"})
 	script, err := Script(s)
 	if err != nil {
 		t.Fatalf("Script: %v", err)
 	}
 	for _, want := range []string{
 		"#!/usr/bin/env bash",
-		`step 1 "`, `step 6 "`, `step 12 "`,
-		"ok 12",
-		"NGG_NODE_READY node=%s",
+		"set -uo pipefail",
+		// The node API and the kernel are separate units.
+		"ngg-node.service",
+		"ngg-core.service",
+		"/usr/local/bin/ngg-node",
+		"/usr/local/bin/nggctl",
 		"/etc/ngg/node.json",
 		"/etc/ngg/xray/config.json",
-		"ngg-node.service",
-		"ngg-probe.service",
-		"/usr/local/bin/ngg-node",
-		"/usr/local/bin/ngg-probe",
-		"/etc/ngg/agent.conf",
-		"/v1/agent/ping",
-		"set -uo pipefail",
+		"/etc/ngg/node/node.crt",
+		"/etc/ngg/node/node.key",
+		"/etc/ngg/node/ca.crt",
+		// The panel dials in; the node never reports out.
+		"https://127.0.0.1:${NODE_PORT}/node/xray/healthcheck",
+		"-listen :${NODE_PORT}",
+		"NGG_NODE_READY node=%s port=%s node_port=%s",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q", want)
@@ -218,127 +255,119 @@ func TestScriptContainsEveryStep(t *testing.T) {
 	if strings.Contains(script, "{{") {
 		t.Fatal("script still contains placeholders")
 	}
-	if got := len(regexp.MustCompile(`(?m)^step [0-9]+ "`).FindAllString(script, -1)); got != 12 {
-		t.Fatalf("expected 12 step calls, got %d", got)
+	if got := len(regexp.MustCompile(`(?m)^step [0-9]+ "`).FindAllString(script, -1)); got != 13 {
+		t.Fatalf("expected 13 step calls, got %d", got)
 	}
-	// The probe must learn where to report from the plan, not from a guess.
-	if !strings.Contains(script, "PANEL_URL='http://10.0.0.2:9191'") {
-		t.Fatal("agent.conf does not carry the panel url")
+	// The Nezha-style probe is gone: nothing may ship to the panel. The only
+	// remaining mention is the migration that removes it from an old node.
+	for _, unwanted := range []string{"agent.conf", "/v1/agent/report", "X-NGG-Agent-Token", "PROBE_UNIT"} {
+		if strings.Contains(script, unwanted) {
+			t.Fatalf("script still carries the outbound probe (%q)", unwanted)
+		}
 	}
-	// The panel must never ship a panel credential; only node-local secrets.
-	if strings.Contains(script, "NGG-TOKEN") || strings.Contains(script, "session=") {
-		t.Fatal("script mentions panel session material")
+	if !strings.Contains(script, "rm -f /etc/systemd/system/ngg-probe.service /usr/local/bin/ngg-probe") {
+		t.Fatal("script does not remove the v2.12 probe from an existing node")
 	}
-	// No SSH-based state collection may come back into the generated script.
-	if strings.Contains(script, "ngg-node handshake") {
-		t.Fatal("script still installs the SSH handshake path")
+	// No SSH-based execution may come back either.
+	if strings.Contains(script, "ssh ") || strings.Contains(script, "sshd_config") {
+		t.Fatal("script must not touch sshd")
 	}
 }
 
-func TestScriptQuotesConfigHeredoc(t *testing.T) {
-	s, _ := Prepare(Spec{HostID: "n1", Address: "203.0.113.9"})
+func TestScriptPinsNodeBinaryDigest(t *testing.T) {
+	s := mustPrepare(t, Spec{HostID: "n1", Address: "203.0.113.9"})
 	script, err := Script(s)
 	if err != nil {
 		t.Fatalf("Script: %v", err)
 	}
-	if !strings.Contains(script, "<<'"+configDelimiter+"'") {
-		t.Fatal("kernel config heredoc must be quoted so bash does not expand it")
+	// No embedded digest (dev build): the script must say so at run time
+	// instead of pretending it verified the download.
+	if !strings.Contains(script, "没有为 ${NGG_ARCH} 内置摘要") {
+		t.Fatal("script does not disclose the missing digest")
 	}
-	if !strings.Contains(script, "\n"+configDelimiter+"\n") {
-		t.Fatal("kernel config heredoc not terminated")
-	}
-	// A literal $ inside the config must survive: it is a real xray field
-	// (e.g. password hashes) and must not be expanded by the shell.
-	if strings.Contains(script, `"$REALITY_PUBLIC"`) == false {
-		t.Fatal("reality verification step missing")
-	}
-}
 
-func TestParseLog(t *testing.T) {
-	out := strings.Join([]string{
-		"[NGG] NGG 节点部署开始：n1（reality，203.0.113.9:3372）",
-		"",
-		"NGG_STEP 1 预检：root / systemd / 架构 / 端口 / 磁盘",
-		"NGG_NOTE ufw 未启用或未安装，跳过 ufw",
-		"NGG_OK 1",
-		"NGG_STEP 2 安装依赖（只装缺少的包）",
-		"NGG_FAIL 2 依赖安装失败：curl",
-		"[NGG] 部署中止：依赖安装失败：curl",
-	}, "\n")
-	steps, notes, ready := ParseLog(out)
-	if len(steps) != 2 {
-		t.Fatalf("steps = %d, want 2: %+v", len(steps), steps)
-	}
-	if steps[0].Status != StepDone || steps[0].Title == "" {
-		t.Fatalf("step 1 = %+v", steps[0])
-	}
-	if steps[1].Status != StepFailed || steps[1].Detail != "依赖安装失败：curl" {
-		t.Fatalf("step 2 = %+v", steps[1])
-	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "ufw") {
-		t.Fatalf("notes = %v", notes)
-	}
-	if ready != nil {
-		t.Fatal("ready must be nil for a failed run")
-	}
-}
-
-func TestParseLogReady(t *testing.T) {
-	out := "NGG_STEP 12 自检：监听 / 单元 / 上报\nNGG_OK 12\n" +
-		"NGG_NODE_READY node=vps-main port=3372 mode=reality listen=1 config_sha=abc123 probe=up\n"
-	_, _, ready := ParseLog(out)
-	if ready == nil {
-		t.Fatal("ready marker not parsed")
-	}
-	if ready.NodeID != "vps-main" || ready.Port != 3372 || ready.Mode != "reality" || !ready.Listening || ready.ConfigSHA != "abc123" {
-		t.Fatalf("ready = %+v", ready)
-	}
-	if ready.Probe != "up" {
-		t.Fatalf("probe = %q, want up", ready.Probe)
-	}
-}
-
-// TestScriptRejectsQuoteInPanelURL: the probe config is a shell file with
-// single-quoted values, so a value that could break out of the assignment must
-// be refused instead of rendered.
-func TestScriptRejectsQuoteInPanelURL(t *testing.T) {
-	s, err := Prepare(Spec{HostID: "n1", Address: "203.0.113.9", PanelURL: "http://ok.example.com"})
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	s.NodeBinSHA256AMD64 = digest
+	script, err = Script(s)
 	if err != nil {
-		t.Fatalf("Prepare: %v", err)
+		t.Fatalf("Script(digest): %v", err)
 	}
-	s.PanelURL = "http://x'; rm -rf / #"
-	if _, err := Script(s); !errors.Is(err, ErrInvalidSpec) {
-		t.Fatalf("err = %v, want ErrInvalidSpec", err)
+	if !strings.Contains(script, `SHA_AMD64="`+digest+`"`) {
+		t.Fatal("embedded digest not rendered into the script")
+	}
+	if !strings.Contains(script, `sha256sum /tmp/ngg-node.pkg`) {
+		t.Fatal("script does not verify the downloaded binary")
+	}
+	if !strings.Contains(script, `if [ -n "$WANT_SHA" ]`) {
+		t.Fatal("digest verification is not conditional on the digest being present")
 	}
 }
 
-// TestProbeIsInstalledQuoted: the probe body and its config must be written
-// byte-for-byte (quoted heredoc) and the config must be 0600.
-func TestProbeIsInstalledQuoted(t *testing.T) {
-	s, _ := Prepare(Spec{HostID: "n1", Address: "203.0.113.9", PanelURL: "http://10.0.0.2:9191"})
+func TestScriptWritesCertificatesQuoted(t *testing.T) {
+	s := mustPrepare(t, Spec{HostID: "n1", Address: "203.0.113.9"})
 	script, err := Script(s)
 	if err != nil {
 		t.Fatalf("Script: %v", err)
 	}
 	for _, want := range []string{
-		"<<'" + probeDelimiter + "'",
-		"<<'" + probeConfDelimiter + "'",
-		`chmod 600 "$PROBE_CONF"`,
-		`sh -n "$PROBE_BIN"`,
+		"<<'" + certDelimiter + "'",
+		"<<'" + keyDelimiter + "'",
+		"<<'" + caDelimiter + "'",
+		`chmod 600 "$KEY"`,
+		`openssl x509 -in "$CERT" -noout -subject`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q", want)
 		}
 	}
-	if strings.Count(script, "\n"+probeDelimiter+"\n") != 1 {
-		t.Fatal("probe heredoc not terminated exactly once")
+	for _, delim := range []string{certDelimiter, keyDelimiter, caDelimiter} {
+		if got := strings.Count(script, "\n"+delim+"\n"); got != 1 {
+			t.Fatalf("%s heredoc appears %d times, want exactly 1", delim, got)
+		}
+	}
+	if !strings.Contains(script, string(s.NodeKeyPEM)) {
+		t.Fatal("node private key not embedded")
+	}
+}
+
+// TestScriptRejectsUnsafeValues: everything that lands in a double-quoted
+// assignment or a heredoc delimiter must be refused, not escaped.
+func TestScriptRejectsUnsafeValues(t *testing.T) {
+	base := mustPrepare(t, Spec{HostID: "n1", HostName: "节点", Address: "203.0.113.9"})
+
+	cases := []struct {
+		name string
+		alt  func(*Spec)
+	}{
+		{"quote in name", func(s *Spec) { s.HostName = `x"; rm -rf / #` }},
+		{"command substitution in name", func(s *Spec) { s.HostName = "x$(id)" }},
+		{"newline in name", func(s *Spec) { s.HostName = "a\nb" }},
+		{"space in address", func(s *Spec) { s.Address = "1.2.3.4 ; id" }},
+		{"bad node bin scheme", func(s *Spec) { s.NodeBinBase = "file:///etc/passwd" }},
+		{"non-hex digest", func(s *Spec) { s.NodeBinSHA256AMD64 = "zz" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := base
+			tc.alt(&s)
+			if _, err := Script(s); !errors.Is(err, ErrInvalidSpec) {
+				t.Fatalf("err = %v, want ErrInvalidSpec", err)
+			}
+		})
+	}
+
+	// Missing certificate material is a hard error, not an empty heredoc.
+	s := base
+	s.NodeCertPEM = nil
+	if _, err := Script(s); !errors.Is(err, ErrInvalidSpec) {
+		t.Fatalf("err = %v, want ErrInvalidSpec for missing certificates", err)
 	}
 }
 
 func TestStoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir)
-	s, _ := Prepare(Spec{HostID: "vps-main", Address: "203.0.113.9", AgentID: "ag-1", AgentToken: "tok-1"})
+	s := mustPrepare(t, Spec{HostID: "vps-main", Address: "203.0.113.9"})
 	script, err := Script(s)
 	if err != nil {
 		t.Fatalf("Script: %v", err)
@@ -351,17 +380,21 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.Spec.AgentToken != s.AgentToken || got.Script != script {
-		t.Fatal("round trip changed the record")
+	if got.Script != script {
+		t.Fatal("round trip changed the script")
+	}
+	// The certificate material is transient on purpose: the script holds it.
+	if len(got.Spec.NodeKeyPEM) != 0 {
+		t.Fatal("node private key was persisted a second time")
+	}
+	if got.Spec.NodePort != s.NodePort || got.Spec.UUID != s.UUID {
+		t.Fatal("round trip lost spec fields")
 	}
 
 	// The browser projection must not leak node secrets.
 	v := got.View(true)
-	if v.Spec.AgentToken != "" || v.Spec.RealityPrivate != "" {
+	if v.Spec.RealityPrivate != "" {
 		t.Fatal("View leaked node secrets")
-	}
-	if v.Spec.AgentID == "" {
-		t.Fatal("View dropped the probe id (needed to show the report identity)")
 	}
 	if len(v.Params) == 0 {
 		t.Fatal("View lost client params")
@@ -372,6 +405,12 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if _, err := st.Load("../../etc/passwd"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("path traversal must be rejected, got %v", err)
+	}
+
+	// List is what the metrics poller iterates.
+	all := st.List()
+	if len(all) != 1 || all[0].HostID != "vps-main" {
+		t.Fatalf("List = %+v", all)
 	}
 }
 

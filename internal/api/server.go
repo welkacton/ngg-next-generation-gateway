@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,9 +21,9 @@ import (
 	"github.com/ngg-project/ngg/internal/config"
 	"github.com/ngg-project/ngg/internal/engine"
 	"github.com/ngg-project/ngg/internal/gateway"
-	"github.com/ngg-project/ngg/internal/hostmon"
 	"github.com/ngg-project/ngg/internal/netengine"
 	"github.com/ngg-project/ngg/internal/nodedeploy"
+	"github.com/ngg-project/ngg/internal/nodepki"
 	"github.com/ngg-project/ngg/internal/pipeline"
 	"github.com/ngg-project/ngg/internal/profiles"
 	"github.com/ngg-project/ngg/internal/protocols"
@@ -51,10 +52,10 @@ type Server struct {
 	clients      *clientHandlers
 	subs         *subscriptionHandlers
 	subRenderer  *subscription.Renderer
-	monitor      *hostmon.Monitor
-	// 节点部署（Remnawave 风格 控制面 → 节点）：方案与脚本落盘，执行为后台任务。
-	deploy     *nodedeploy.Store
-	deployJobs *nodeDeployJobs
+	// 节点部署（Remnawave 风格 控制面 → 节点）：方案与脚本落盘，连接走双向 TLS。
+	deploy      *nodedeploy.Store
+	pki         *nodepki.Store
+	nodeMetrics *nodeMetricsCache
 }
 
 func New(cfg *config.Config, eng *engine.Engine) *Server {
@@ -135,16 +136,17 @@ func New(cfg *config.Config, eng *engine.Engine) *Server {
 	}
 	s.sampler = newMetricsSampler(eng.NetworkStatus, tunTraffic)
 	s.sampler.Start()
-	// 节点系统信息：SSH 只读采集。凭据在 <data>/host-monitor.json（0600），
-	// 采集失败只影响这一块面板，不阻断控制面启动。
-	mon := hostmon.New(dataDir)
-	if err := mon.Load(); err != nil {
-		log.Printf("host monitor store unavailable: %v", err)
+	// 节点证书中心：CA + 面板客户端证书，落在 <data>/nodepki（0700）。
+	// 读不出来只影响节点部署这一块，不阻断控制面启动。
+	pki, err := nodepki.Open(filepath.Join(dataDir, "nodepki"))
+	if err != nil {
+		log.Printf("node pki unavailable: %v", err)
 	}
-	s.monitor = mon
-	mon.Start(hostMonitorInterval)
+	s.pki = pki
 	s.deploy = nodedeploy.NewStore(dataDir)
-	s.deployJobs = newNodeDeployJobs()
+	// 节点指标：面板主动连入每个已部署节点拉取，替代原先的 SSH 采集。
+	s.nodeMetrics = newNodeMetricsCache()
+	s.nodeMetrics.start(nodePollInterval, s.pollAllNodes)
 	s.routes()
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Listen, cfg.Server.Port),
@@ -174,8 +176,8 @@ func (s *Server) Shutdown() error {
 	if s.sampler != nil {
 		s.sampler.Stop()
 	}
-	if s.monitor != nil {
-		s.monitor.Stop()
+	if s.nodeMetrics != nil {
+		s.nodeMetrics.stopPolling()
 	}
 	return s.http.Close()
 }
@@ -323,20 +325,18 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	m.HandleFunc("POST /api/v1/hosts", s.handleHosts)
 	m.HandleFunc("GET /api/v1/hosts/stats", s.handleHostStats)
-	// 节点系统信息（SSH 只读采集）：集合路由与 /hosts/{id} 并存，字面量优先
-	m.HandleFunc("GET /api/v1/hosts/monitor", s.handleHostMonitor)
-	m.HandleFunc("PUT /api/v1/hosts/{id}/monitor", s.handleHostMonitorByID)
-	m.HandleFunc("DELETE /api/v1/hosts/{id}/monitor", s.handleHostMonitorByID)
-	m.HandleFunc("POST /api/v1/hosts/{id}/monitor/refresh", s.handleHostMonitorRefresh)
+	// 节点指标（面板连入节点 API 拉取，缓存）：集合路由与 /hosts/{id} 并存，字面量优先
+	m.HandleFunc("GET /api/v1/hosts/node-metrics", s.handleHostNodeMetrics)
 	m.HandleFunc("POST /api/v1/hosts/probe", s.handleHostProbeAll)
 	m.HandleFunc("GET /api/v1/hosts/export", s.handleHostExport)
 	m.HandleFunc("PUT /api/v1/hosts/import", s.handleHostImport)
 	m.HandleFunc("POST /api/v1/hosts/{id}/probe", s.handleHostProbe)
-	// 节点部署：方案 / 脚本下载 / 运行日志 / 节点实时状态
+	// 节点部署：方案 / 脚本下载 / 连接（下发配置）/ 节点状态
 	m.HandleFunc("GET /api/v1/hosts/{id}/deploy", s.handleNodeDeploy)
 	m.HandleFunc("POST /api/v1/hosts/{id}/deploy", s.handleNodeDeploy)
+	m.HandleFunc("DELETE /api/v1/hosts/{id}/deploy", s.handleNodeDeploy)
 	m.HandleFunc("GET /api/v1/hosts/{id}/deploy/script", s.handleNodeDeployScript)
-	m.HandleFunc("GET /api/v1/hosts/{id}/deploy/job", s.handleNodeDeployJob)
+	m.HandleFunc("POST /api/v1/hosts/{id}/node/connect", s.handleNodeConnect)
 	m.HandleFunc("GET /api/v1/hosts/{id}/node/status", s.handleNodeStatus)
 	m.HandleFunc("GET /api/v1/hosts/{id}/provision", s.handleHostProvision)
 	m.HandleFunc("POST /api/v1/hosts/{id}/provision", s.handleHostProvision)

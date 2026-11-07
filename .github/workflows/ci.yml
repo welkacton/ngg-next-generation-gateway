@@ -26,6 +26,20 @@ jobs:
             echo "building ngg-agent for ${target}"
             GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -o /tmp/ngg-agent ./cmd/ngg-agent
           done
+      - name: Cross-compile node daemon
+        run: |
+          set -e
+          # These two are the exact assets the panel installs on a node server;
+          # the deploy script verifies their SHA256 against the panel build.
+          for arch in amd64 arm64; do
+            echo "building ngg-node for linux/${arch}"
+            GOOS=linux GOARCH=${arch} CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+              -o "/tmp/ngg-node-linux-${arch}" ./cmd/ngg-node
+            file "/tmp/ngg-node-linux-${arch}"
+          done
+          # Prove the daemon actually starts on the native arch (the arm64 build
+          # cannot run here, so only the amd64 one is smoke-tested).
+          /tmp/ngg-node-linux-amd64 -version
       - name: Unit + integration tests
         run: go test -p 2 ./... -count=1 -timeout 240s
   frontend:

@@ -2427,61 +2427,45 @@ export interface HostProvision {
 }
 
 /* ------------------------------------------------------------------ *
- * 节点系统信息：后端通过 SSH 只读命令采集，未配置/未采集时显示「未采集」
+ * 节点指标：面板连入节点 API（双向 TLS）拉取，后端每 30 秒轮询一次并缓存。
+ * 未部署 / 未连上的节点不在列表里，卡片显示「未连接」而不是 0。
  * ------------------------------------------------------------------ */
 
-export interface HostMonitorConfig {
+export interface NodeMetric {
   host_id: string
-  host: string
-  port: number
-  user: string
-  has_password: boolean
-  has_private_key: boolean
-  host_key_fingerprint?: string
-}
-
-export interface HostMonitorMetrics {
-  host_id: string
-  collected_at: string
   online: boolean
+  collected_at: string
   error?: string
+  latency_ms: number
   hostname?: string
   os?: string
   kernel?: string
-  uptime_sec: number
+  arch?: string
   cpu_cores: number
+  cpu_model?: string
   cpu_usage_pct: number
   mem_total: number
   mem_used: number
   disk_total: number
   disk_used: number
+  load1: number
+  uptime_sec: number
   net_rx_bytes: number
   net_tx_bytes: number
   net_rx_rate: number
   net_tx_rate: number
+  node_version?: string
+  xray_version?: string
+  core_active: boolean
+  health?: NodeHealth
 }
 
-export interface HostMonitorResult {
-  metrics: HostMonitorMetrics[]
-  configs: HostMonitorConfig[]
+export interface NodeMetricResult {
+  nodes: NodeMetric[]
   interval_sec: number
 }
 
-export interface HostMonitorInput {
-  host?: string
-  port?: number
-  user?: string
-  password?: string
-  private_key?: string
-}
-
-export const getHostMonitor = () => get<HostMonitorResult>('/hosts/monitor')
-export const setHostMonitor = (id: string, payload: HostMonitorInput) =>
-  put<HostMonitorResult>(`/hosts/${encodeURIComponent(id)}/monitor`, payload)
-export const deleteHostMonitor = (id: string) =>
-  del<GenericResult>(`/hosts/${encodeURIComponent(id)}/monitor`)
-export const refreshHostMonitor = (id: string) =>
-  post<HostMonitorMetrics>(`/hosts/${encodeURIComponent(id)}/monitor/refresh`)
+export const getHostNodeMetrics = () => get<NodeMetricResult>('/hosts/node-metrics')
 
 export const getHostProvision = (id: string) =>
   get<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`)
@@ -2498,7 +2482,9 @@ export const provisionHost = (
 
 /* ------------------------------------------------------------------ *
  * 节点部署（Remnawave 风格：控制面 → 节点）
- * 方案由后端生成并落盘；执行是后台任务，前端轮询 job 渲染真实步骤日志。
+ *
+ * 面板生成安装脚本（含本节点的证书），在服务器上执行一次；之后面板用双向
+ * TLS 连入节点 API：下发内核配置、读取真实指标。全程没有 SSH。
  * ------------------------------------------------------------------ */
 
 export type NodeDeployMode = 'reality' | 'vless-tls' | 'trojan-tls' | 'profile'
@@ -2507,7 +2493,10 @@ export interface NodeDeploySpec {
   host_id: string
   host_name: string
   address: string
+  /** 数据端口（客户端连接）。 */
   port: number
+  /** 管理端口（面板连入，NODE_PORT）。 */
+  node_port: number
   mode: NodeDeployMode
   sni: string
   uuid?: string
@@ -2517,40 +2506,74 @@ export interface NodeDeploySpec {
   profile_id?: string
   profile_name?: string
   kernel?: string
-  panel_url?: string
+  node_bin_base?: string
   generated_at: string
 }
 
-export interface NodeDeployStep {
-  index: number
-  title: string
-  status: 'running' | 'done' | 'failed'
-  detail?: string
+/** 节点 API 的健康检查（GET /node/xray/healthcheck）。 */
+export interface NodeHealth {
+  isAlive: boolean
+  xrayInternalStatusCached: boolean
+  xrayVersion: string
+  nodeVersion: string
+  nodeId: string
+  coreActive: boolean
+  uptimeSec: number
+  configSha256: string
+  checkedAt: string
 }
 
-export interface NodeDeployReady {
-  node_id: string
-  port: number
-  mode: string
-  listening: boolean
-  config_sha: string
-  /** up=已连上面板 / down=探针在跑但连不上 / off=未配置上报地址 */
-  probe?: 'up' | 'down' | 'off'
+export interface NodeSystemInfo {
+  arch: string
+  cpus: number
+  cpuModel: string
+  memoryTotal: number
+  hostname: string
+  platform: string
+  release: string
+  type: string
+  version: string
+  networkInterfaces: string[]
 }
 
-export interface NodeDeployRun {
-  id: string
-  state: 'idle' | 'running' | 'done' | 'failed'
-  started_at: string
-  finished_at?: string
-  exit_code: number
+export interface NodeNetworkInterface {
+  interface: string
+  rxBytesPerSec: number
+  txBytesPerSec: number
+  rxTotal: number
+  txTotal: number
+}
+
+export interface NodeSystemStats {
+  memoryFree: number
+  memoryUsed: number
+  memoryTotal: number
+  uptime: number
+  loadAvg: number[]
+  interface?: NodeNetworkInterface | null
+  cpuPercent: number
+  diskTotal: number
+  diskUsed: number
+  diskMount: string
+  interfaces?: NodeNetworkInterface[]
+  sampledAt: string
+}
+
+export interface NodeSystem {
+  info: NodeSystemInfo
+  stats: NodeSystemStats
+}
+
+/** 一次连接的结果：哪一步失败、失败原因、节点自己报的数字。 */
+export interface NodeConnectResult {
+  at: string
+  ok: boolean
   duration_ms: number
-  steps: NodeDeployStep[]
-  notes?: string[]
-  ready?: NodeDeployReady
-  stdout?: string
-  stderr?: string
+  stage?: 'health' | 'start' | 'stats' | 'config'
   error?: string
+  health?: NodeHealth | null
+  system?: NodeSystem | null
+  config_pushed: boolean
 }
 
 export interface NodeDeployView {
@@ -2559,63 +2582,49 @@ export interface NodeDeployView {
   /** 仅生成接口返回；列表接口不带脚本内容。 */
   script?: string
   generated_at: string
-  last_run?: NodeDeployRun
+  last_connect?: NodeConnectResult
   /** 客户端连接参数（后端按协议生成，前端只展示）。 */
   params: string[]
+  /** 旧版本（SSH / 探针）方案：脚本已作废，必须重新生成。 */
+  legacy?: boolean
+  warning?: string
 }
 
 export interface NodeDeployRequest {
   mode?: NodeDeployMode
   port?: number
+  /** 面板连入的管理端口。 */
+  node_port?: number
   sni?: string
   profile_id?: string
-  panel_url?: string
   /** 重新生成节点凭据（会让已配置的客户端失效）。 */
   rotate?: boolean
-  /** true = 立即通过 SSH 在节点服务器上执行。 */
-  execute?: boolean
 }
 
-/** 探针上报的节点段（节点自己读 /etc/ngg/node.json 得到，非面板推测）。 */
-export interface NodeReportedState {
-  node_id: string
-  mode: string
-  protocol: string
-  port: number
-  unit: string
-  unit_state: string
-  listening: boolean
-  config_path: string
-  config_sha256: string
-  kernel_version: string
-  collected_at: string
-  error?: string
+export interface NodeConnectResponse {
+  host_id: string
+  node_url: string
+  last_connect: NodeConnectResult
+  spec: NodeDeploySpec
+  params: string[]
 }
 
 /**
- * 节点实时状态：来源是节点探针的主动上报（agent registry），
- * 面板不再通过 SSH 连进去读。
+ * 节点状态：来自后端缓存（轮询 + 每次连接的实测结果），不在请求里现场拨号。
+ * installed=false 表示还没有部署方案；online=false 表示连不上。
  */
 export interface NodeStatusResponse {
   host_id: string
   checked_at: string
   installed: boolean
-  source: 'agent'
-  verified?: boolean
-  online?: boolean
-  status?: AgentStatus
-  last_seen?: string
-  hostname?: string
-  os?: string
-  arch?: string
-  agent_version?: string
-  /** 面板为该节点分配的探针编号（远程节点列表里能看到同一条记录）。 */
-  agent_id?: string
-  /** agent.conf 里写死的上报地址。 */
-  report_url?: string
+  source: 'node-api'
+  node_url?: string
   spec?: NodeDeploySpec
-  metrics?: AgentMetrics | null
-  node?: NodeReportedState | null
+  last_connect?: NodeConnectResult
+  online?: boolean
+  latency_ms?: number
+  metrics?: NodeMetric
+  health?: NodeHealth
   warning?: string
   error?: string
 }
@@ -2624,18 +2633,19 @@ export interface NodeStatusResponse {
 export const getNodeDeploy = (id: string) =>
   get<NodeDeployView>(`/hosts/${encodeURIComponent(id)}/deploy`, { silentError: true })
 
-/** 生成方案；execute=true 时同时开始后台执行。 */
+/** 生成（或重新生成）部署方案与安装脚本。 */
 export const deployNode = (id: string, payload: NodeDeployRequest) =>
-  post<NodeDeployView | { host_id: string; spec: NodeDeploySpec; params: string[]; job: NodeDeployRun }>(
-    `/hosts/${encodeURIComponent(id)}/deploy`,
-    payload,
-  )
+  post<NodeDeployView>(`/hosts/${encodeURIComponent(id)}/deploy`, payload)
 
-/** 轮询执行进度（内存中的实时状态，结束后回落到落盘记录）。 */
-export const getNodeDeployJob = (id: string) =>
-  get<NodeDeployRun>(`/hosts/${encodeURIComponent(id)}/deploy/job`, { silentError: true })
+/** 丢弃部署方案（不影响服务器上已安装的服务）。 */
+export const deleteNodeDeploy = (id: string) =>
+  del<GenericResult>(`/hosts/${encodeURIComponent(id)}/deploy`)
 
-/** 通过 SSH 读取节点实时状态并校验节点令牌。 */
+/** 连接节点：健康检查 → 下发内核配置 → 读取指标。 */
+export const connectNode = (id: string, pushConfig = true) =>
+  post<NodeConnectResponse>(`/hosts/${encodeURIComponent(id)}/node/connect`, { push_config: pushConfig })
+
+/** 读取节点状态（来自缓存，不拨号）。 */
 export const getNodeStatus = (id: string) =>
   get<NodeStatusResponse>(`/hosts/${encodeURIComponent(id)}/node/status`, { silentError: true })
 

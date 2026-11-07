@@ -1,34 +1,34 @@
-// Package nodedeploy turns a registered host into a RUNNING node on that
-// machine, modelled on the Remnawave panel ↔ node split — with one deliberate
-// difference borrowed from Nezha (github.com/nezhahq/nezha): the node reports
-// OUT to the panel, so the panel never dials into the machine to learn its
-// state.
+// Package nodedeploy turns a registered host into a RUNNING node, following
+// Remnawave's panel ↔ node split (github.com/remnawave) as closely as the
+// stack allows.
 //
-//	Remnawave                       NGG v2.12.1
-//	------------------------------  ------------------------------------------
-//	panel → node: HTTPS :2222       panel → node: nothing. A deploy is a rendered
-//	with a shared SECRET_KEY        bash script; the operator runs it (or the
-//	                                panel pushes it once over the SSH credentials
-//	                                already saved for monitoring)
-//	node pulls its config from      the script writes a rendered kernel config and
-//	the panel on start              verifies it with the kernel's own checker
-//	node reports system + traffic   the node-side probe POSTs real metrics +
-//	over the same channel           node state to {panel}/v1/agent/report every
-//	                                10s, authenticated by X-NGG-Agent-Token
-//	node identity = SECRET_KEY      node identity = /etc/ngg/node.json + the
-//	                                agent id/token in /etc/ngg/agent.conf (0600)
+//	Remnawave                          NGG
+//	---------------------------------  ----------------------------------------
+//	node = a container running xray    node = ngg-node (control API) + a
+//	plus the node API                  separate ngg-core.service running xray
+//	panel → node over mutual TLS on    panel → node over mutual TLS on
+//	NODE_PORT (2222)                   NODE_PORT (2222), certificates issued by
+//	                                   the panel's own CA (internal/nodepki)
+//	node identity = certificate        node identity = certificate CN = node id,
+//	                                   pinned by the panel on every dial
+//	panel pushes the config with       same: POST /node/xray/start carries the
+//	POST /node/xray/start              rendered kernel config in the body
+//	panel reads stats with             same: GET /node/stats/get-system-stats
+//	GET /node/stats/get-system-stats
 //
-// The consequence that matters operationally: reading a node's state needs no
-// inbound port, no SSH, and works behind NAT — if the node can reach the panel,
-// the panel can see the node.
+// What is deliberately NOT ported: Docker. Upstream ships the node as an
+// image; this project deploys a static binary and two systemd units so a node
+// needs no container runtime and cannot disturb whatever else runs on the box.
 //
-// A deploy is therefore a REAL bash script, executed on the node, whose stdout
-// is a machine-readable step log. Nothing is simulated: every step either
-// produced output or failed, and the panel stores that output verbatim.
+// A deploy is therefore a real bash script the operator runs on the node once.
+// It installs the units, writes the certificates and starts the API; from then
+// on the panel does everything else over the network. The panel never uses
+// SSH, never runs a remote command and never needs the node's shell password —
+// the only inbound port it touches is NODE_PORT.
 //
-// The script never contains a panel credential. The only secrets in it belong
-// to the node itself (UUID / REALITY keypair / report token) and are needed by
-// the operator to configure clients or to re-install the probe.
+// The script contains the node's own secrets (REALITY private key, client
+// UUID, node certificate and key) because the operator needs them; it never
+// contains a panel credential.
 package nodedeploy
 
 import (
@@ -73,22 +73,33 @@ const (
 	// host is a bare IP (an IP cannot be a TLS server name).
 	DefaultSNIForTLS = "www.bing.com"
 
+	// DefaultNodePort is the node API port (Remnawave's NODE_PORT default).
+	// It is the ONE port the panel dials into.
+	DefaultNodePort = 2222
+
 	// NodeDir is the node's own directory on the server. It is deliberately NOT
 	// /usr/local/etc/xray: a machine may already run another panel's Xray, and
 	// the deploy must not touch it.
-	NodeDir     = "/etc/ngg"
-	NodeBin     = "/usr/local/bin/ngg-node"
+	NodeDir = "/etc/ngg"
+	// NodeBin is the node API daemon (this project's rw-node equivalent).
+	NodeBin = "/usr/local/bin/ngg-node"
+	// NodeService is the API unit; CoreService is the kernel unit. Splitting
+	// them is what lets the panel restart the kernel without dropping the API.
 	NodeService = "ngg-node.service"
-	// NodeConfigPath is the kernel config the systemd unit runs.
-	NodeConfigPath = NodeDir + "/xray/config.json"
-	// NodeManifestPath is the node identity / kernel path / report binding.
-	NodeManifestPath = NodeDir + "/node.json"
+	CoreService = "ngg-core.service"
+	// NodeCtlBin is the operator's on-box helper.
+	NodeCtlBin = "/usr/local/bin/nggctl"
 
-	// The node-side probe: the process that reports OUT to the panel. It is the
-	// only channel the panel uses to learn a node's live state.
-	NodeProbeBin  = "/usr/local/bin/ngg-probe"
-	NodeProbeConf = NodeDir + "/agent.conf"
-	NodeProbeUnit = "ngg-probe.service"
+	// PKI paths on the node.
+	NodePKIDir  = NodeDir + "/node"
+	NodeCertPEM = NodePKIDir + "/node.crt"
+	NodeKeyPEM  = NodePKIDir + "/node.key"
+	NodeCAPEM   = NodePKIDir + "/ca.crt"
+
+	// NodeConfigPath is the kernel config the core unit runs.
+	NodeConfigPath = NodeDir + "/xray/config.json"
+	// NodeManifestPath is the node identity / kernel path / port binding.
+	NodeManifestPath = NodeDir + "/node.json"
 )
 
 // SSMethod is accepted for completeness when a shadowsocks profile is bound;
@@ -125,10 +136,24 @@ type Spec struct {
 	ShortID        string `json:"short_id,omitempty"`
 	Password       string `json:"password,omitempty"`
 
-	// AgentID / AgentToken belong to the Nezha-style reporting agent that runs
-	// on the node and connects OUT to the panel. The panel never dials the node.
-	AgentID    string `json:"agent_id,omitempty"`
-	AgentToken string `json:"agent_token,omitempty"`
+	// NodePort is the API port the panel dials (NODE_PORT). It is separate
+	// from Port, which carries user traffic.
+	NodePort int `json:"node_port"`
+
+	// TLS material for the panel ↔ node channel. Minted by the panel CA on
+	// every deploy and embedded in the script, so they are deliberately NOT
+	// serialised into the record: the script already holds them, and a second
+	// copy of a private key is a second thing to leak.
+	NodeCertPEM []byte `json:"-"`
+	NodeKeyPEM  []byte `json:"-"`
+	CAPEM       []byte `json:"-"`
+
+	// Where the node downloads its API daemon from. Filled by the API layer
+	// with the release URL for this version; the per-architecture digests let
+	// the script verify what it downloaded before running it as root.
+	NodeBinBase        string `json:"node_bin_base,omitempty"`
+	NodeBinSHA256AMD64 string `json:"node_bin_sha256_amd64,omitempty"`
+	NodeBinSHA256ARM64 string `json:"node_bin_sha256_arm64,omitempty"`
 
 	// Bound 协议配置 profile (mode=profile).
 	ProfileID   string `json:"profile_id,omitempty"`
@@ -136,11 +161,6 @@ type Spec struct {
 	Kernel      string `json:"kernel,omitempty"`
 	// ProfileContent is never rendered to the frontend; the API strips it.
 	ProfileContent string `json:"profile_content,omitempty"`
-
-	// PanelURL is the agent endpoint the node reports to, e.g.
-	// http://203.0.113.5:9191. Empty means "not configured yet": the script
-	// still installs the agent, which then retries with backoff.
-	PanelURL string `json:"panel_url,omitempty"`
 
 	GeneratedAt time.Time `json:"generated_at"`
 }
@@ -187,7 +207,6 @@ func (s Spec) TLS() bool { return s.Mode != ModeReality }
 func (s Spec) PublicSpec() Spec {
 	out := s
 	out.RealityPrivate = ""
-	out.AgentToken = ""
 	out.Password = ""
 	if out.Mode == ModeProfile {
 		out.ProfileContent = ""
@@ -252,9 +271,17 @@ func Prepare(s Spec) (Spec, error) {
 		return Spec{}, fmt.Errorf("%w: SNI 需为域名（不含协议前缀与空格）", ErrInvalidSpec)
 	}
 
-	s.PanelURL = strings.TrimRight(strings.TrimSpace(s.PanelURL), "/")
-	if s.PanelURL != "" && !strings.HasPrefix(s.PanelURL, "http://") && !strings.HasPrefix(s.PanelURL, "https://") {
-		return Spec{}, fmt.Errorf("%w: 面板上报地址需为 http:// 或 https:// 开头的完整地址", ErrInvalidSpec)
+	if s.NodePort == 0 {
+		s.NodePort = DefaultNodePort
+	}
+	if s.NodePort < 1 || s.NodePort > 65535 {
+		return Spec{}, fmt.Errorf("%w: 节点管理端口需在 1..65535，当前 %d", ErrInvalidSpec, s.NodePort)
+	}
+	if s.NodePort == s.Port {
+		return Spec{}, fmt.Errorf("%w: 管理端口与数据端口不能相同（%d），面板会连不上节点", ErrInvalidSpec, s.NodePort)
+	}
+	if strings.TrimSpace(s.NodeBinBase) == "" {
+		s.NodeBinBase = DefaultNodeBinBase()
 	}
 
 	var err error

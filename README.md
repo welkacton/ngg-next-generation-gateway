@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🏷️ Generation 2 / 第二代 · Release v2.12.0
+### 🏷️ Generation 2 / 第二代 · Release v2.13.0
 
 **第二代 · 本地部署与统一控制台** — 协议配置（官网实时协议目录 + 可编辑配置文件卡片）、GitHub 规则集批量挂载、VPS / Windows 安装包、极简控制台、仓库内更新栏
 
@@ -40,11 +40,11 @@ Mihomo、Xray-core、sing-box 以及未来新增的内核都是**可插拔的协
 | Gen 2 增补 | v2.10.1 | 节点管理再精简 | 工具栏只保留「刷新 / ＋ 新增节点」，「重新探测 / 从 Sub-Store 导入 / JSON 导入导出」三个按钮移出（批量导入收进新增节点弹窗底部，功能不丢）；新增节点表单的 **Node Port 默认改为 3372**（Sub-Store 导入同步），删掉「内部名称 / 服务端口」两栏与「直连 · 添加一跳」链式代理卡片；「部署到 VPS」统一改名 **部署到 节点服务器**，弹窗里「协议 / 端口 / SNI」三栏（含选中配置文件后的「端口（可空） / SNI（可空）」）全部移除，端口与 SNI 一律由配置文件推断，未选文件时按默认 VLESS:443 生成最小配置 |
 | Gen 2 增补 | v2.11.0 | 节点管理重设计 + 真实系统信息 | 用 UI/UX 设计引擎推导的 Dashboard/Data 风格重排节点卡（身份 → 绑定 → 资源 → 操作，保留项目蓝色 token 与 P0 无障碍门禁）；**协议配置文件绑定**贯穿卡片 / 新增 / 详情，部署脚本自动沿用；新增 `internal/hostmon` 通过 SSH **只读命令**采集 VPS 的真实 CPU / 内存 / 硬盘 / 流量（累计 + 速率），TOFU 主机指纹校验、凭据 0600 本地存储且不进仓库、密码不回显不入日志，未采集时显示「未采集」而非伪造数值；用户抽屉删「连接信息 / 设备与标签 / 内部分组 / 真实状态」，表格删两列并把 scroll-x 收敛到 1240 修复操作列挤压；新增节点弹窗删掉 Sub-Store / JSON 批量导入入口（后端 API 保留） |
 
-| **Gen 2（当前）** | **v2.12.0** | 节点部署（控制面 → 节点，节点主动上报） | 参考 Remnawave 的「面板生成配置、节点只跑内核」拆分，把**信息通道**换成哪吒探针模式：节点上跑 `ngg-probe`，每 10 秒把真实指标 + 节点状态 POST 到面板 `/v1/agent/report`（`X-NGG-Agent-Token`），面板**从不连入节点** —— 不需要入站管理端口、不需要 SSH 读状态，NAT 后面也能上报；`POST /api/v1/hosts/{id}/deploy` 渲染 33 KB 自包含 bash 脚本并可**在节点上真正执行**，12 个步骤（预检 / 依赖 / 内核 / 清单 / 凭据 / 配置 / 校验 / 启动 / 放通 / 探针 / CLI / 自检）逐步回传 `NGG_STEP\|OK\|FAIL\|NODE_READY` 标记，面板后台任务 + 轮询渲染真实日志；默认 VLESS + REALITY（面板侧生成 X25519 密钥对，节点用 `xray x25519 -i` 反推公钥校验），另有 VLESS-TLS / Trojan-TLS 与「档案原样写入」模式；节点侧 `/etc/ngg` + `ngg-node.service` + `ngg-probe.service` 独立单元，不碰 `/usr/local/etc/xray` 与机器上其它面板；`GET /hosts/{id}/node/status` 读探针上报（`online/offline/never`、CPU / 内存 / 磁盘 / 累计流量、单元状态 / 端口监听 / 配置指纹），探针令牌只存 SHA-256 且恒定时间比对；幂等重部署默认不轮换凭据 |
+| **Gen 2（当前）** | **v2.13.0** | 节点部署：面板 ↔ 节点（Remnawave 原生模型，零 SSH） | 按 [Remnawave](https://github.com/remnawave) 的 `remnawave/node` 契约原样移植：节点跑 `ngg-node`（HTTPS 管理接口，`/node/xray/healthcheck`、`/node/xray/start`、`/node/xray/stop`、`/node/stats/get-system-stats`，响应统一包 `{"response": …}`），面板用**双向 TLS** 连入 `NODE_PORT`（默认 2222）下发配置、启停内核、读取节点自报的真实指标；面板自建 ECDSA CA（`data/nodepki`），为每个节点签发 CN=节点 ID 的证书，节点侧 `RequireAndVerifyClientCert` + CN 白名单（只认面板 / 自己），面板侧把服务端证书 CN 钉死到期望的节点 ID —— 同一 CA 下的兄弟节点不能互推配置；**SSH 整条链路已删除**（`internal/hostmon`、探针 `ngg-probe`、部署 job / 日志轮询、SSH 只读采集全部移除），节点不再需要能访问面板，也不需要开放给面板以外的 IP；节点侧拆成 `ngg-node.service`（控制面）+ `ngg-core.service`（内核）两个单元，重启内核不会掐断控制通道；`POST /node/xray/start` 先写 `.tmp` → `xray run -test` → 原子替换，校验失败不碰线上配置，配置哈希一致且 `forceRestart=false` 时跳过重启；部署脚本 13 步（预检 / 依赖 / 内核 / 清单 / 凭据 / 配置 / 校验 / 下载 `ngg-node` 并校验 SHA256 / 证书与两个单元 / 启动 / 放通 / `nggctl` / 双向自检），末尾同时验证「带客户端证书能通」与「不带证书必须失败」，并清理 v2.12 的旧单元与探针；发布流水线先交叉编译 `ngg-node-linux-amd64` / `-arm64`，把摘要用 `-ldflags -X` 注入面板，脚本摘要不匹配就丢弃不执行；`GET /hosts/node-metrics` 由面板每 30 秒连入采样并缓存，`POST /hosts/{id}/node/connect` 完成健康检查 → 下发配置 → 读指标，`GET /hosts/{id}/node/status` 如实区分在线 / 离线 / 从未连上；节点管理卡片与弹窗显示节点实测 CPU / 内存 / 磁盘 / 流量，连不上明说原因不填 0 |
 
 代际沿革与判定标准见 [`docs/GENERATIONS.md`](docs/GENERATIONS.md)；
 
-当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.12.0`。
+当前版本由 `internal/version` 单一来源维护，`GET /api/v1/update/status` 与界面顶栏显示同一个 `Gen 2 · v2.13.0`。
 
 本仓库已交付 **Stage 1 → Stage 5** 的完整服务端平台：统一管理中心、统一网络引擎、
 规则/DNS、VPN 协议中心、后量子控制信道、插件运行时、SD-WAN、多租户与跨平台骨架。
@@ -255,7 +255,7 @@ installer/windows/          Inno Setup 安装包、PowerShell 安装/卸载、�
 | `docs/18-v270-features.md` | **远程出口节点 / 网关总控 / 客户端接入**：Agent 插件采集系统指标、链式代理、虚拟网卡接管与智能分流、iPhone / Windows / Mac 客户端配置与订阅 |
 | `docs/19-v271-features.md` | **总控启用 / 内核可靠性 / VPS 节点 / 用户订阅**：预检与端口校准、诊断面板、VPS 部署脚本、五种订阅链接 |
 | `docs/20-v2100-substore.md` | **Sub-Store 互通**：`target=substore` 输出、`/substore/parse|import` 输入、格式差异与异常处理清单、API 契约 |
-| `docs/21-v2110-node-monitor.md` | **节点管理重设计 / 协议文件绑定 / SSH 系统信息采集**：设计系统推导与校正、采集命令与安全边界、API 契约、用户管理精简与布局修复 |
+| `docs/23-v2130-node-deploy-mtls.md` | **节点部署（Remnawave 原生模型 / 零 SSH）**：mTLS 信任模型、node API 契约、两个 systemd 单元、13 步脚本、双向自检、发布资产摘要、API 与排障 |
 | `deploy/README.md` | systemd / Nginx 手工部署模板说明 |
 | `installer/windows/` | 安装包源码（`.iss` / `.ps1`） |
 

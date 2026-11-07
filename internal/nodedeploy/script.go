@@ -4,28 +4,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
-	"github.com/ngg-project/ngg/internal/agent"
 	"github.com/ngg-project/ngg/internal/version"
 )
 
 // Bash template rendering.
 //
 // The script is assembled from one preamble (identity + helpers), one kernel
-// body per mode, a fixed middle (config / validate / start / firewall), one
-// probe installer, one management CLI and a fixed tail (self-test).
+// body per mode, a fixed middle (config / validate / install the node service /
+// start / firewall), one operator CLI and a fixed tail (self-test).
 // Placeholders are substituted with strings.NewReplacer so bash's own $, %,
 // backticks and printf format strings survive untouched.
 //
-// Machine-readable protocol on stdout — the panel parses exactly these lines:
+// Machine-readable protocol on stdout — the operator sees it, and `nggctl`
+// parses the same lines when re-running parts of the flow:
 //
 //	NGG_STEP <n> <title>     a step started
 //	NGG_OK <n>               a step finished
 //	NGG_FAIL <n> <reason>    the run aborted here (exit code 1)
-//	NGG_NOTE <text>          something the operator should know but that is
-//	                         not a failure (e.g. "port was already in use by
-//	                         the NGG unit itself")
+//	NGG_NOTE <text>          something worth knowing but not a failure
 //	NGG_NODE_READY k=v ...   the node is live; last line of a successful run
 
 // configDelimiter terminates the kernel-config heredoc. Rendered configs never
@@ -35,40 +34,50 @@ const configDelimiter = "NGG_XRAY_CONFIG"
 // manifestDelimiter terminates the node-manifest heredoc.
 const manifestDelimiter = "NGG_NODE_MANIFEST"
 
-// cliDelimiter terminates the ngg-node CLI heredoc.
-const cliDelimiter = "NGG_NODE_CLI"
+// CLI heredoc delimiter.
+const cliDelimiter = "NGG_NODE_CTL"
 
-// kernelBinPlaceholder is replaced on the node itself (step 4) because the
+// PEM heredoc delimiters.
+const (
+	certDelimiter = "NGG_NODE_CERT"
+	keyDelimiter  = "NGG_NODE_KEY"
+	caDelimiter   = "NGG_CA_CERT"
+)
+
+// kernelBinPlaceholder is replaced on the node itself (step 3) because the
 // kernel path is discovered at runtime: the machine may already have
 // /usr/local/bin/xray from another panel, in which case NGG reuses it.
 const kernelBinPlaceholder = "@KERNEL_BIN@"
 
 // manifest is the node's identity on disk: who it is, which kernel runs it,
-// and which agent identity it reports under. It never contains the probe token
-// — that lives only in NodeProbeConf (0600).
+// which port the panel dials and where the certificates live. It never
+// contains a private key — those live next to it, 0600.
 type manifest struct {
-	NodeID        string `json:"node_id"`
-	HostName      string `json:"host_name"`
-	Address       string `json:"address"`
-	Port          int    `json:"port"`
-	Mode          string `json:"mode"`
-	Protocol      string `json:"protocol"`
-	SNI           string `json:"sni"`
-	UUID          string `json:"uuid,omitempty"`
-	RealityPublic string `json:"reality_public,omitempty"`
-	ShortID       string `json:"short_id,omitempty"`
-	Password      string `json:"password,omitempty"`
-	ConfigPath    string `json:"config_path"`
-	KernelBin     string `json:"kernel_bin"`
-	Service       string `json:"service"`
-	AgentID       string `json:"agent_id,omitempty"`
-	PanelURL      string `json:"panel_url,omitempty"`
-	ProbeUnit     string `json:"probe_unit,omitempty"`
-	GeneratedAt   string `json:"generated_at"`
-	NGGVersion    string `json:"ngg_version"`
+	NodeID      string `json:"node_id"`
+	HostName    string `json:"host_name"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+	NodePort    int    `json:"node_port"`
+	Mode        string `json:"mode"`
+	Protocol    string `json:"protocol"`
+	SNI         string `json:"sni"`
+	UUID        string `json:"uuid,omitempty"`
+	RealityPub  string `json:"reality_public,omitempty"`
+	ShortID     string `json:"short_id,omitempty"`
+	Password    string `json:"password,omitempty"`
+	ConfigPath  string `json:"config_path"`
+	KernelBin   string `json:"kernel_bin"`
+	CoreService string `json:"core_service"`
+	APIService  string `json:"api_service"`
+	CertPath    string `json:"cert_path"`
+	KeyPath     string `json:"key_path"`
+	CAPath      string `json:"ca_path"`
+	GeneratedAt string `json:"generated_at"`
+	NGGVersion  string `json:"ngg_version"`
 }
 
-// Script renders the deployment script for s. s must have gone through Prepare.
+// Script renders the deployment script for s. s must have gone through Prepare
+// and must carry the certificate material the panel minted for this node.
 func Script(s Spec) (string, error) {
 	cfg, err := ConfigJSON(s)
 	if err != nil {
@@ -77,30 +86,32 @@ func Script(s Spec) (string, error) {
 	if strings.Contains(cfg, configDelimiter) {
 		return "", fmt.Errorf("内核配置包含保留标记 %s，请改名后重试", configDelimiter)
 	}
-	if err := checkProbeValues(s); err != nil {
+	if err := checkScriptValues(s, cfg); err != nil {
 		return "", err
 	}
 
 	mf := manifest{
-		NodeID:        s.HostID,
-		HostName:      s.HostName,
-		Address:       s.Address,
-		Port:          s.Port,
-		Mode:          s.Mode,
-		Protocol:      s.Protocol(),
-		SNI:           s.SNI,
-		UUID:          s.UUID,
-		RealityPublic: s.RealityPublic,
-		ShortID:       s.ShortID,
-		Password:      s.Password,
-		ConfigPath:    NodeConfigPath,
-		KernelBin:     kernelBinPlaceholder,
-		Service:       NodeService,
-		AgentID:       s.AgentID,
-		PanelURL:      s.PanelURL,
-		ProbeUnit:     NodeProbeUnit,
-		GeneratedAt:   s.GeneratedAt.Format("2006-01-02T15:04:05Z07:00"),
-		NGGVersion:    version.Release,
+		NodeID:      s.HostID,
+		HostName:    s.HostName,
+		Address:     s.Address,
+		Port:        s.Port,
+		NodePort:    s.NodePort,
+		Mode:        s.Mode,
+		Protocol:    s.Protocol(),
+		SNI:         s.SNI,
+		UUID:        s.UUID,
+		RealityPub:  s.RealityPublic,
+		ShortID:     s.ShortID,
+		Password:    s.Password,
+		ConfigPath:  NodeConfigPath,
+		KernelBin:   kernelBinPlaceholder,
+		CoreService: CoreService,
+		APIService:  NodeService,
+		CertPath:    NodeCertPEM,
+		KeyPath:     NodeKeyPEM,
+		CAPath:      NodeCAPEM,
+		GeneratedAt: s.GeneratedAt.Format("2006-01-02T15:04:05Z07:00"),
+		NGGVersion:  version.Release,
 	}
 	mfRaw, err := json.MarshalIndent(mf, "", "  ")
 	if err != nil {
@@ -115,17 +126,18 @@ func Script(s Spec) (string, error) {
 	out := fill(preambleTpl, s)
 	out += fill(body, s)
 	out += fill(configTpl, s)
+	out += fill(installServiceTpl, s)
 	out += fill(startTpl, s)
 	out += fill(firewallTpl, s)
-	out += fill(probeInstallTpl, s)
-	out += fill(nodeCLITpl, s)
+	out += fill(nodeCtlTpl, s)
 	out += fill(selfTestTpl, s)
 
 	out = strings.NewReplacer(
 		"{{CONFIG}}", cfg,
 		"{{MANIFEST}}", string(mfRaw),
-		"{{AGENT_CONF}}", probeConf(s),
-		"{{PROBE}}", fill(probeTpl, s),
+		"{{NODE_CERT_PEM}}", string(s.NodeCertPEM),
+		"{{NODE_KEY_PEM}}", string(s.NodeKeyPEM),
+		"{{CA_PEM}}", string(s.CAPEM),
 	).Replace(out)
 
 	if !strings.Contains(out, "NGG_NODE_READY node=%s") {
@@ -137,33 +149,54 @@ func Script(s Spec) (string, error) {
 	return out, nil
 }
 
-// probeConf renders NodeProbeConf. Values are single-quoted, so Script refuses
-// anything that could break out of a shell assignment (see checkProbeValues).
-func probeConf(s Spec) string {
-	return fmt.Sprintf(`# NGG 节点探针配置（由 NGG 部署脚本生成，重新部署会覆盖）
-# 这是该节点的密钥文件：0600，不要提交到任何仓库，也不要复制到其它机器。
-PANEL_URL='%s'
-AGENT_ID='%s'
-AGENT_TOKEN='%s'
-INTERVAL=%d
-NODE_MANIFEST='%s'
-`, s.PanelURL, s.AgentID, s.AgentToken, agent.DefaultIntervalSec, NodeManifestPath)
-}
+// hostNameRE keeps a display name from breaking out of a double-quoted shell
+// assignment. The name is operator input (it can be Chinese), so this allows
+// anything except the characters that are special inside "…".
+var hostNameRE = regexp.MustCompile(`^[^"'$` + "`" + `\\\r\n]*$`)
 
-// checkProbeValues rejects values that would corrupt the generated shell
-// assignments. Everything else about them is validated in Prepare.
-func checkProbeValues(s Spec) error {
-	for _, f := range []struct{ name, val string }{
-		{"面板上报地址", s.PanelURL},
-		{"探针 ID", s.AgentID},
-		{"探针令牌", s.AgentToken},
+// addressRE is deliberately strict: the address ends up in URLs and in
+// certificate SANs, so only hostname / IP characters are allowed.
+var addressRE = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
+
+var sha256RE = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// checkScriptValues rejects anything that could corrupt the generated shell or
+// smuggle a second command into it.
+func checkScriptValues(s Spec, cfg string) error {
+	if !hostNameRE.MatchString(s.HostName) {
+		return fmt.Errorf("%w: 节点名称含引号、反引号或换行，无法安全写入脚本", ErrInvalidSpec)
+	}
+	if !addressRE.MatchString(s.Address) {
+		return fmt.Errorf("%w: 节点地址只允许字母、数字、点、冒号、下划线与连字符", ErrInvalidSpec)
+	}
+	if !addressRE.MatchString(s.SNI) {
+		return fmt.Errorf("%w: SNI 只允许字母、数字、点、连字符", ErrInvalidSpec)
+	}
+	if !strings.HasPrefix(s.NodeBinBase, "http://") && !strings.HasPrefix(s.NodeBinBase, "https://") {
+		return fmt.Errorf("%w: 节点二进制地址需以 http:// 或 https:// 开头", ErrInvalidSpec)
+	}
+	for _, d := range []struct{ name, val string }{
+		{"amd64 摘要", s.NodeBinSHA256AMD64},
+		{"arm64 摘要", s.NodeBinSHA256ARM64},
 	} {
-		if strings.ContainsAny(f.val, "'\"\\ \t\r\n") {
-			return fmt.Errorf("%w: %s 含引号或空白字符", ErrInvalidSpec, f.name)
+		if d.val != "" && !sha256RE.MatchString(d.val) {
+			return fmt.Errorf("%w: %s 不是 64 位十六进制", ErrInvalidSpec, d.name)
 		}
 	}
-	if s.PanelURL != "" && !strings.HasPrefix(s.PanelURL, "http://") && !strings.HasPrefix(s.PanelURL, "https://") {
-		return fmt.Errorf("%w: 面板上报地址需以 http:// 或 https:// 开头", ErrInvalidSpec)
+	if len(s.NodeCertPEM) == 0 || len(s.NodeKeyPEM) == 0 || len(s.CAPEM) == 0 {
+		return fmt.Errorf("%w: 缺少节点证书材料，无法生成脚本", ErrInvalidSpec)
+	}
+	for _, d := range []struct {
+		name, body, delim string
+	}{
+		{"节点证书", string(s.NodeCertPEM), certDelimiter},
+		{"节点私钥", string(s.NodeKeyPEM), keyDelimiter},
+		{"面板 CA", string(s.CAPEM), caDelimiter},
+		{"内核配置", cfg, configDelimiter},
+	} {
+		if strings.Contains(d.body, d.delim) {
+			return fmt.Errorf("%w: %s 包含保留标记 %s", ErrInvalidSpec, d.name, d.delim)
+		}
 	}
 	return nil
 }
@@ -175,6 +208,7 @@ func fill(tpl string, s Spec) string {
 		"{{HOST_NAME}}", s.HostName,
 		"{{ADDRESS}}", s.Address,
 		"{{PORT}}", itoa(s.Port),
+		"{{NODE_PORT}}", itoa(s.NodePort),
 		"{{MODE}}", s.Mode,
 		"{{PROTOCOL}}", s.Protocol(),
 		"{{SNI}}", s.SNI,
@@ -183,19 +217,21 @@ func fill(tpl string, s Spec) string {
 		"{{REALITY_PUBLIC}}", s.RealityPublic,
 		"{{SHORT_ID}}", s.ShortID,
 		"{{PASSWORD}}", s.Password,
-		"{{AGENT_ID}}", s.AgentID,
-		"{{AGENT_TOKEN}}", s.AgentToken,
-		"{{PANEL_URL}}", s.PanelURL,
 		"{{PROFILE_NAME}}", s.ProfileName,
 		"{{NODE_DIR}}", NodeDir,
 		"{{NODE_CONFIG}}", NodeConfigPath,
 		"{{NODE_MANIFEST}}", NodeManifestPath,
 		"{{NODE_BIN}}", NodeBin,
-		"{{NODE_SERVICE}}", NodeService,
-		"{{PROBE_BIN}}", NodeProbeBin,
-		"{{PROBE_CONF}}", NodeProbeConf,
-		"{{PROBE_UNIT}}", NodeProbeUnit,
-		"{{PROBE_INTERVAL}}", itoa(agent.DefaultIntervalSec),
+		"{{NODE_CTL}}", NodeCtlBin,
+		"{{API_UNIT}}", NodeService,
+		"{{CORE_UNIT}}", CoreService,
+		"{{PKI_DIR}}", NodePKIDir,
+		"{{NODE_CERT}}", NodeCertPEM,
+		"{{NODE_KEY}}", NodeKeyPEM,
+		"{{NODE_CA}}", NodeCAPEM,
+		"{{NODE_BIN_BASE}}", s.NodeBinBase,
+		"{{SHA_AMD64}}", s.NodeBinSHA256AMD64,
+		"{{SHA_ARM64}}", s.NodeBinSHA256ARM64,
 		"{{KERNEL_BIN_PLACEHOLDER}}", kernelBinPlaceholder,
 		"{{NGG_VERSION}}", version.Release,
 		"{{GENERATED_AT}}", s.GeneratedAt.Format("2006-01-02 15:04:05 UTC"),
@@ -240,43 +276,47 @@ func modeBody(s Spec) (string, error) {
 
 const preambleTpl = `#!/usr/bin/env bash
 # ============================================================================
-# NGG 节点部署脚本 · 节点主动上报（面板不需要 SSH 进来）
+# NGG 节点安装脚本 · 面板下发 / 节点执行（双向 TLS，节点不需要 SSH）
 # ----------------------------------------------------------------------------
-# 节点 ID  : {{HOST_ID}}
-# 节点名称 : {{HOST_NAME}}
-# 模式     : {{MODE}}（{{PROTOCOL}}）
-# 监听     : {{ADDRESS}}:{{PORT}}
-# 上报到   : {{PANEL_URL}}
-# 生成时间 : {{GENERATED_AT}}
-# 生成版本 : NGG {{NGG_VERSION}}
+# 节点 ID   : {{HOST_ID}}
+# 节点名称  : {{HOST_NAME}}
+# 模式      : {{MODE}}（{{PROTOCOL}}）
+# 数据端口  : {{ADDRESS}}:{{PORT}}（客户端连这个）
+# 管理端口  : {{NODE_PORT}}（面板连这个，只对面板开放）
+# 生成时间  : {{GENERATED_AT}}
+# 生成版本  : NGG {{NGG_VERSION}}
+#
+# 架构（与 Remnawave 的 panel ↔ node 一致）
+#   面板 → 节点：双向 TLS 调 https://{{ADDRESS}}:{{NODE_PORT}}/node/*
+#                 下发配置 POST /node/xray/start、读取指标 GET /node/stats/get-system-stats
+#   节点 → 面板：从不主动连接。节点不需要能访问面板，也不需要 SSH 密码。
+#   节点身份   ：证书 CN = {{HOST_ID}}，由面板自己的 CA 签发；面板每次拨号都会校验
 #
 # 这个脚本会做什么
 #   1  预检：root / systemd / 架构 / 端口占用 / 磁盘
 #   2  安装依赖（只装缺少的包，已装则跳过 apt）
 #   3  准备 Xray 内核（已有可用内核直接复用，否则只下载二进制，不动任何 service）
-#   4  写入节点清单 {{NODE_MANIFEST}}（节点身份 + 内核路径 + 探针编号，0600）
+#   4  写入节点清单 {{NODE_MANIFEST}}（节点身份 + 端口 + 单元名，0600）
 #   5  生成传输层凭据（REALITY 校验密钥对 / TLS 自签证书）
 #   6  写入内核配置 {{NODE_CONFIG}}（0600）
 #   7  用内核自带的校验器验证配置（失败即中止，不留半启动状态）
-#   8  注册并启动独立单元 {{NODE_SERVICE}}（不重启、不改写别人的服务）
-#   9  放通 {{PORT}} 端口（仅当 ufw 已启用时动 ufw；iptables 规则不持久化）
-#  10  安装上报探针 {{PROBE_BIN}}（每 {{PROBE_INTERVAL}} 秒主动上报到面板，无需入站端口）
-#  11  安装管理命令 {{NODE_BIN}}（params / status / logs / restart / uninstall）
-#  12  自检：端口监听、单元状态、探针上报，并打印客户端参数
-#
-# 信息怎么回到面板（与哪吒探针同一模式）
-#   节点 → 面板：POST {{PANEL_URL}}/v1/agent/report（带 X-NGG-Agent-Token）
-#   面板 → 节点：从不主动连接，不需要 SSH，不需要开管理端口
-#   面板断连时探针按 1s→60s 退避重试，恢复后自动续报。
+#   8  安装节点控制服务 {{NODE_BIN}}（下载 + SHA256 校验，校验不过不执行）
+#   9  写入节点证书并启动 {{API_UNIT}}（面板拨号的管理接口，双向认证）
+#  10  注册并启动 {{CORE_UNIT}}（内核，与 API 分离，面板可单独重启它）
+#  11  放通 {{PORT}}（数据）与 {{NODE_PORT}}（管理）
+#  12  安装管理命令 {{NODE_CTL}}
+#  13  自检：本机用 mTLS 调一次 /node/xray/healthcheck，并确认无证书会被拒绝
 #
 # 这个脚本不会做什么
 #   - 不修改 /usr/local/etc/xray 与其它面板（Remnawave / Marzban）的配置和单元
 #   - 不改 sshd，不改防火墙默认策略，不安装 docker
+#   - 不往面板推任何数据（没有探针，没有上报）
 #
 # 幂等：可重复执行，会用同一套凭据覆盖 {{NODE_DIR}} 下的配置并重启单元。
-# 卸载：{{NODE_BIN}} uninstall
+# 卸载：{{NODE_CTL}} uninstall
 #
-# 警告：脚本包含该节点自己的凭据，请勿公开或提交到版本库。
+# 警告：脚本包含该节点自己的凭据（UUID / REALITY 私钥 / 节点证书私钥），
+#       请勿公开或提交到版本库。重新生成方案会签发新的节点证书。
 # ============================================================================
 set -uo pipefail
 
@@ -284,24 +324,31 @@ NODE_ID="{{HOST_ID}}"
 NODE_NAME="{{HOST_NAME}}"
 ADDRESS="{{ADDRESS}}"
 PORT="{{PORT}}"
+NODE_PORT="{{NODE_PORT}}"
 MODE="{{MODE}}"
 SNI="{{SNI}}"
 CONFIG="{{NODE_CONFIG}}"
-UNIT="{{NODE_SERVICE}}"
-PANEL_URL="{{PANEL_URL}}"
-AGENT_ID="{{AGENT_ID}}"
-PROBE_BIN="{{PROBE_BIN}}"
-PROBE_CONF="{{PROBE_CONF}}"
-PROBE_UNIT="{{PROBE_UNIT}}"
+MANIFEST="{{NODE_MANIFEST}}"
+CORE_UNIT="{{CORE_UNIT}}"
+API_UNIT="{{API_UNIT}}"
+NODE_BIN="{{NODE_BIN}}"
+NODE_CTL="{{NODE_CTL}}"
+PKI_DIR="{{PKI_DIR}}"
+CERT="{{NODE_CERT}}"
+KEY="{{NODE_KEY}}"
+CA="{{NODE_CA}}"
+NODE_BIN_BASE="{{NODE_BIN_BASE}}"
+SHA_AMD64="{{SHA_AMD64}}"
+SHA_ARM64="{{SHA_ARM64}}"
 STEP=""
 
 log()  { printf '[NGG] %s\n' "$*"; }
 note() { printf 'NGG_NOTE %s\n' "$*"; }
 step() { STEP="$1"; printf '\nNGG_STEP %s %s\n' "$1" "$2"; }
 ok()   { printf 'NGG_OK %s\n' "$1"; }
-die()  { printf 'NGG_FAIL %s %s\n' "$1" "$2"; printf '[NGG] 部署中止：%s\n' "$2" >&2; exit 1; }
+die()  { printf 'NGG_FAIL %s %s\n' "$1" "$2"; printf '[NGG] 安装中止：%s\n' "$2" >&2; exit 1; }
 
-log "NGG 节点部署开始：$NODE_ID（$MODE，$ADDRESS:$PORT）"
+log "NGG 节点安装开始：$NODE_ID（$MODE，数据 :$PORT / 管理 :$NODE_PORT）"
 
 # ---------------------------------------------------------------- 1 预检
 step 1 "预检：root / systemd / 架构 / 端口 / 磁盘"
@@ -314,12 +361,21 @@ case "$(uname -m)" in
 esac
 
 # 端口被占用时区分「是不是 NGG 自己」：自己的单元允许覆盖重启，别人的直接中止。
-if ss -lntH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${PORT}$"; then
-  if systemctl is-active --quiet "$UNIT" 2>/dev/null; then
-    note "端口 ${PORT} 当前由 ${UNIT} 占用，将重启该单元"
+port_busy() { ss -lntH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
+if port_busy "$PORT"; then
+  if systemctl is-active --quiet "$CORE_UNIT" 2>/dev/null; then
+    note "数据端口 ${PORT} 当前由 ${CORE_UNIT} 占用，将重启该单元"
   else
     OWNER="$(ss -lntpH 2>/dev/null | awk -v p=":${PORT}" '$4 ~ p"$" {print $6; exit}')"
-    die 1 "端口 ${PORT} 已被其它进程占用${OWNER:+（$OWNER）}，请换端口或先停止该服务"
+    die 1 "数据端口 ${PORT} 已被其它进程占用${OWNER:+（$OWNER）}，请换端口或先停止该服务"
+  fi
+fi
+if port_busy "$NODE_PORT"; then
+  if systemctl is-active --quiet "$API_UNIT" 2>/dev/null; then
+    note "管理端口 ${NODE_PORT} 当前由 ${API_UNIT} 占用，将重启该单元"
+  else
+    OWNER="$(ss -lntpH 2>/dev/null | awk -v p=":${NODE_PORT}" '$4 ~ p"$" {print $6; exit}')"
+    die 1 "管理端口 ${NODE_PORT} 已被其它进程占用${OWNER:+（$OWNER）}，请换管理端口"
   fi
 fi
 
@@ -331,9 +387,10 @@ ok 1
 # ---------------------------------------------------------------- 2 依赖
 step 2 "安装依赖（只装缺少的包）"
 NEED=""
-for pkg in curl ca-certificates openssl unzip; do
+for pkg in curl ca-certificates openssl unzip iproute2; do
   case "$pkg" in
     curl)          command -v curl >/dev/null 2>&1 || NEED="$NEED curl" ;;
+    iproute2)      command -v ss >/dev/null 2>&1 || NEED="$NEED iproute2" ;;
     openssl)       command -v openssl >/dev/null 2>&1 || NEED="$NEED openssl" ;;
     unzip)         command -v unzip >/dev/null 2>&1 || NEED="$NEED unzip" ;;
     ca-certificates) [ -f /etc/ssl/certs/ca-certificates.crt ] || NEED="$NEED ca-certificates" ;;
@@ -383,19 +440,15 @@ KERNEL_VERSION="$("$KERNEL_BIN" version 2>/dev/null | head -1)"
 ok 3
 
 # ---------------------------------------------------------------- 4 清单
-step 4 "写入节点清单 {{NODE_MANIFEST}}"
+step 4 "写入节点清单 ${MANIFEST}"
 install -d -m 0750 "{{NODE_DIR}}" "{{NODE_DIR}}/xray" || die 4 "无法创建 {{NODE_DIR}}"
-cat > "{{NODE_MANIFEST}}" <<'` + manifestDelimiter + `'
+cat > "$MANIFEST" <<'` + manifestDelimiter + `'
 {{MANIFEST}}
 ` + manifestDelimiter + `
 # 内核路径只有运行时才知道（可能复用机器上已有的 Xray）
-sed -i "s|{{KERNEL_BIN_PLACEHOLDER}}|${KERNEL_BIN}|" "{{NODE_MANIFEST}}" || die 4 "无法写入内核路径"
-chmod 600 "{{NODE_MANIFEST}}" || die 4 "无法设置清单权限"
-if [ -n "$PANEL_URL" ]; then
-  log "节点身份已写入，上报目标：$PANEL_URL"
-else
-  log "节点身份已写入（未配置面板上报地址）"
-fi
+sed -i "s|{{KERNEL_BIN_PLACEHOLDER}}|${KERNEL_BIN}|" "$MANIFEST" || die 4 "无法写入内核路径"
+chmod 600 "$MANIFEST" || die 4 "无法设置清单权限"
+log "节点身份：$NODE_ID · 管理端口 :$NODE_PORT · 面板通过 https://${ADDRESS}:${NODE_PORT} 连入"
 ok 4
 
 `

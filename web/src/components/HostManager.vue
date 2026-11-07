@@ -22,15 +22,12 @@ import {
 import * as api from '../api/ngg'
 import type {
   HostChainHop,
-  HostProvision,
   HostRole,
   HostStats,
   HostView,
   NodeDeployMode,
-  NodeDeployRun,
   NodeDeployView,
   NodeStatusResponse,
-  ProvisionProtocol,
   RemoteHost,
 } from '../api/ngg'
 import client from '../api/client'
@@ -260,11 +257,10 @@ async function refresh() {
   if (res) {
     hosts.value = res.hosts ?? []
     stats.value = res.stats ?? null
-    void loadAllProvisions()
   }
   const m = await run('metrics', () => api.getHostStats())
   if (m) metrics.value = m
-  await loadMonitor()
+  await loadNodeMetrics()
 }
 
 async function loadOptions() {
@@ -280,98 +276,33 @@ async function loadOptions() {
 }
 
 /* ------------------------------------------------------------------ *
- * 协议配置绑定 + SSH 系统信息（真实采集，未配置时一律显示「未采集」）
+ * 协议配置绑定 + 节点指标（面板连入节点 API 拉取，未连接即显示未连接）
  * ------------------------------------------------------------------ */
-const monitorMetrics = ref<Record<string, api.HostMonitorMetrics>>({})
-const monitorConfigs = ref<api.HostMonitorConfig[]>([])
-const monitorIntervalSec = ref(30)
-let monitorTimer: number | undefined
+const nodeMetrics = ref<Record<string, api.NodeMetric>>({})
+const nodeMetricIntervalSec = ref(30)
+let metricsTimer: number | undefined
 
-function monitorOf(h: HostView): api.HostMonitorMetrics | null {
-  return monitorMetrics.value[h.id] ?? null
+function metricsOf(h: HostView): api.NodeMetric | null {
+  return nodeMetrics.value[h.id] ?? null
 }
 
-function monitorConfigOf(h: HostView): api.HostMonitorConfig | null {
-  return (
-    monitorConfigs.value.find((c) => c.host_id === h.id || (!c.host_id && c.host === h.address)) ?? null
-  )
-}
-
-/** 后端按 host_id 存指标；host_id 为空的预置配置按其地址回填到对应节点。 */
-async function loadMonitor(): Promise<void> {
-  const res = await run('monitor', () => api.getHostMonitor())
-  if (!res) return
-  monitorConfigs.value = res.configs ?? []
-  monitorIntervalSec.value = res.interval_sec || 30
-  const map: Record<string, api.HostMonitorMetrics> = {}
-  for (const m of res.metrics ?? []) {
-    if (m.host_id) {
-      map[m.host_id] = m
-      continue
-    }
-    const cfg = (res.configs ?? []).find((c) => !c.host_id && !!c.host)
-    const target = cfg ? hosts.value.find((h) => h.address === cfg.host) : null
-    if (target) map[target.id] = { ...m, host_id: target.id }
+/** 后端缓存了每个已部署节点的最近一次实测结果；一次请求刷新整个网格。 */
+async function loadNodeMetrics(): Promise<void> {
+  try {
+    const res = await api.getHostNodeMetrics()
+    nodeMetricIntervalSec.value = res.interval_sec || 30
+    const map: Record<string, api.NodeMetric> = {}
+    for (const m of res.nodes ?? []) map[m.host_id] = m
+    nodeMetrics.value = map
+  } catch {
+    // 指标端点不可用时保留上一份数据，不回填 0
   }
-  monitorMetrics.value = map
 }
 
 async function bindProfile(h: HostView, profileId: string): Promise<void> {
   const payload = { ...h, profile: profileId } as api.RemoteHost
   const res = await run('bind:' + h.id, () => api.updateHost(h.id, payload), '配置文件已绑定')
   if (res) await refresh()
-}
-
-const showMonitor = ref(false)
-const monitorHost = ref<HostView | null>(null)
-const monitorForm = ref({ host: '', port: 22, user: 'root', password: '' })
-
-function openMonitor(h: HostView): void {
-  monitorHost.value = h
-  const c = monitorConfigOf(h)
-  monitorForm.value = {
-    host: c?.host || h.address,
-    port: c?.port || 22,
-    user: c?.user || 'root',
-    password: '',
-  }
-  showMonitor.value = true
-}
-
-async function saveMonitor(): Promise<void> {
-  const h = monitorHost.value
-  if (!h) return
-  const payload: api.HostMonitorInput = {
-    host: monitorForm.value.host.trim(),
-    port: Number(monitorForm.value.port) || 22,
-    user: monitorForm.value.user.trim() || 'root',
-  }
-  // 留空表示沿用已保存的密码，避免每次编辑都被清空。
-  if (monitorForm.value.password) payload.password = monitorForm.value.password
-  const res = await run(
-    'monitor-save',
-    () => api.setHostMonitor(h.id, payload),
-    'SSH 监控已保存并开始采集',
-  )
-  if (res) {
-    showMonitor.value = false
-    await loadMonitor()
-  }
-}
-
-async function removeMonitor(): Promise<void> {
-  const h = monitorHost.value
-  if (!h) return
-  const res = await run('monitor-del', () => api.deleteHostMonitor(h.id), 'SSH 监控已停用')
-  if (res) {
-    showMonitor.value = false
-    await loadMonitor()
-  }
-}
-
-async function refreshMonitorNow(h: HostView): Promise<void> {
-  await run('monitor-refresh:' + h.id, () => api.refreshHostMonitor(h.id))
-  await loadMonitor()
 }
 
 function barPct(used: number, total: number): number {
@@ -536,29 +467,14 @@ function cardStatusClass(h: HostView): string {
 }
 
 /* ------------------------------------------------------------------ *
- * VPS 部署（provision）：把已登记的主机真正绑定成可用节点
- * 脚本由后端生成，只含该节点自己的凭据；NGG 的会话凭据不会进入脚本。
+ * 节点部署：把已登记的主机真正绑定成可用节点。
+ * 脚本由后端生成，只含该节点自己的证书与凭据；面板会话凭据不会进入脚本。
  * ------------------------------------------------------------------ */
 
-const PROVISION_DEFAULT_PORT: Record<ProvisionProtocol, number> = {
-  vless: 443,
-  trojan: 443,
-  shadowsocks: 8388,
-}
-
-const provisions = ref<Record<string, HostProvision>>({})
-const showDeploy = ref(false)
 const deployHost = ref<HostView | null>(null)
-const deployProtocol = ref<ProvisionProtocol>('vless')
-/** 绑定档案时协议可能是 hysteria2 / anytls 等，不在最小配置模式的枚举里。 */
-function isProvisionProtocol(v: string): v is ProvisionProtocol {
-  return Object.prototype.hasOwnProperty.call(PROVISION_DEFAULT_PORT, v)
-}
-const deployPort = ref<number | null>(443)
-const deploySni = ref('')
-const deployProvision = ref<HostProvision | null>(null)
+const showDeploy = ref(false)
 
-/* 部署时可绑定「协议配置」里的档案：脚本会安装该内核并原样写入该文件。 */
+/* 绑定的「协议配置」档案：脚本会安装该内核并把文件原样写入节点。 */
 const deployProfiles = ref<api.Profile[]>([])
 const deployProfileId = ref<string | null>(null)
 let profilesLoaded = false
@@ -584,86 +500,6 @@ async function loadDeployProfiles(): Promise<void> {
   }
 }
 
-function provisionLabel(h: HostView): string {
-  const p = provisions.value[h.id]
-  return p ? `${p.protocol.toUpperCase()} :${p.port}` : '未部署'
-}
-
-/** 读取已保存的部署脚本：404 表示「还没生成过」，必须静默，不能弹全局错误。 */
-async function loadProvision(id: string): Promise<void> {
-  try {
-    const res = await client.get<HostProvision>(`/hosts/${encodeURIComponent(id)}/provision`, {
-      silentError: true,
-    })
-    provisions.value = { ...provisions.value, [id]: res.data }
-    if (deployHost.value?.id === id) deployProvision.value = res.data
-  } catch {
-    // 无已保存的部署脚本
-  }
-}
-
-async function loadAllProvisions(): Promise<void> {
-  await Promise.allSettled(hosts.value.map((h) => loadProvision(h.id)))
-}
-
-function openDeploy(h: HostView): void {
-  deployHost.value = h
-  const saved = provisions.value[h.id]
-  deployProvision.value = saved ?? null
-  deployProfileId.value = saved?.profile_id || h.profile || null
-  if (saved) {
-    if (isProvisionProtocol(saved.protocol)) deployProtocol.value = saved.protocol
-    deployPort.value = saved.port
-    deploySni.value = saved.endpoint.sni === 'www.bing.com' ? '' : saved.endpoint.sni
-  } else {
-    deployProtocol.value = 'vless'
-    // 默认用节点登记的端口（新增节点时默认 3372）：443 往往已被网站或别家面板占用。
-    deployPort.value = h.node_port || PROVISION_DEFAULT_PORT.vless
-    deploySni.value = ''
-  }
-  showDeploy.value = true
-  deployPlan.value = null
-  deployJob.value = null
-  nodeStatus.value = null
-  deployPanelURL.value = ''
-  stopJobPolling()
-  void loadDeployProfiles()
-  void loadProvision(h.id)
-  void loadDeployPlan(h.id).then(() => loadPanelURLDefault())
-  void loadNodeStatus(h.id)
-}
-
-async function generateProvision(): Promise<void> {
-  const h = deployHost.value
-  if (!h) return
-  const profileId = deployProfileId.value ?? ''
-  const port = Number(deployPort.value ?? 0)
-  // 绑定档案时端口可留空（由文件内容推断）；最小配置模式必须给端口。
-  if (!profileId && (!Number.isInteger(port) || port < 1 || port > 65535)) {
-    window.$message?.warning('端口需在 1–65535')
-    return
-  }
-  if (profileId && port !== 0 && (!Number.isInteger(port) || port < 1 || port > 65535)) {
-    window.$message?.warning('端口需在 1–65535，或留空让脚本从配置文件推断')
-    return
-  }
-  const res = await run(
-    'deploy-gen',
-    () =>
-      api.provisionHost(
-        h.id,
-        profileId
-          ? { profile_id: profileId, port: port || undefined, sni: deploySni.value.trim() }
-          : { protocol: deployProtocol.value, port, sni: deploySni.value.trim() },
-      ),
-    profileId ? '部署脚本已按绑定的配置文件生成' : '部署脚本已生成',
-  )
-  if (res) {
-    deployProvision.value = res
-    provisions.value = { ...provisions.value, [h.id]: res }
-  }
-}
-
 async function copyText(text: string, ok: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -674,64 +510,68 @@ async function copyText(text: string, ok: string): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ *
- * 节点部署（Remnawave 风格：控制面 → 节点）
- * 面板生成方案 → 在节点上执行 → 节点装好探针后主动上报。
- * 进度完全来自 NGG_STEP / NGG_OK / NGG_FAIL 行，状态来自探针上报。
+ * 节点部署（Remnawave 风格：面板下发脚本 → 面板连入节点）
+ *
+ * 1) 生成方案与安装脚本（含本节点证书）
+ * 2) 在服务器上以 root 执行一次脚本
+ * 3) 面板用双向 TLS 连入节点：健康检查 → 下发内核配置 → 读取真实指标
+ * 全程没有 SSH，也不需要节点能访问面板。
  * ------------------------------------------------------------------ */
 
-const DEPLOY_MODE_OPTIONS: Array<{ label: string; value: NodeDeployMode }> = [
+const DEPLOY_MODE_OPTIONS: Array<{ label: string; value: api.NodeDeployMode }> = [
   { label: 'VLESS + REALITY（推荐 · 无需证书）', value: 'reality' },
   { label: 'VLESS + TLS（自签证书）', value: 'vless-tls' },
   { label: 'Trojan + TLS（自签证书）', value: 'trojan-tls' },
 ]
 
-const deployMode = ref<NodeDeployMode>('reality')
-const deployPlan = ref<NodeDeployView | null>(null)
-const deployJob = ref<NodeDeployRun | null>(null)
-const nodeStatus = ref<NodeStatusResponse | null>(null)
-const deployStatusBusy = ref(false)
-/** 面板上报地址：节点探针 POST 的目标，必须是节点能访问到的地址。 */
-const deployPanelURL = ref('')
-let jobTimer: number | undefined
+const deployMode = ref<api.NodeDeployMode>('reality')
+const deployPort = ref<number | null>(443)
+/** 管理端口：面板连入这个端口，与客户端用的数据端口分开。 */
+const deployNodePort = ref<number | null>(2222)
+const deploySni = ref('')
+const deployPlan = ref<api.NodeDeployView | null>(null)
+const nodeStatus = ref<api.NodeStatusResponse | null>(null)
+const connectResult = ref<api.NodeConnectResult | null>(null)
+let statusTimer: number | undefined
 
 const deployHasProfile = computed(() => !!deployProfileId.value)
+const deployLegacy = computed(() => deployPlan.value?.legacy === true)
 const deployProfileKernel = computed(() => (selectedProfile.value?.kernel ?? '').toLowerCase())
-/** 在线部署只支持 xray-core：mihomo / sing-box 档案走手动脚本。 */
+/** 在线部署只支持 xray-core：mihomo / sing-box 档案走手动部署脚本。 */
 const deployKernelOk = computed(() => !deployHasProfile.value || deployProfileKernel.value === 'xray-core')
 
-const jobRunning = computed(() => deployJob.value?.state === 'running')
-const jobDone = computed(() => deployJob.value?.state === 'done')
-const jobFailed = computed(() => deployJob.value?.state === 'failed')
+const nodeOnline = computed(() => nodeStatus.value?.online === true)
+const nodeApiURL = computed(() => nodeStatus.value?.node_url || '')
+const nodeMetricsLive = computed(() => nodeStatus.value?.metrics ?? null)
 
-function stopJobPolling(): void {
-  if (jobTimer !== undefined) {
-    window.clearInterval(jobTimer)
-    jobTimer = undefined
+function stopStatusPolling(): void {
+  if (statusTimer !== undefined) {
+    window.clearInterval(statusTimer)
+    statusTimer = undefined
   }
 }
 
-function startJobPolling(id: string): void {
-  stopJobPolling()
-  jobTimer = window.setInterval(() => void pollJob(id), 1500)
+/** 打开弹窗时轮询状态：数据来自后端缓存，不在这里现场拨号。 */
+function startStatusPolling(id: string): void {
+  stopStatusPolling()
+  statusTimer = window.setInterval(() => void loadNodeStatus(id), 15000)
 }
 
-async function pollJob(id: string): Promise<void> {
-  try {
-    const run = await api.getNodeDeployJob(id)
-    if (!run || run.state === 'idle') return
-    deployJob.value = run
-    if (run.state === 'running') return
-    stopJobPolling()
-    if (run.state === 'done') {
-      window.$message?.success(`节点已就绪：${run.ready?.node_id ?? id} : ${run.ready?.port ?? ''}`)
-      void loadNodeStatus(id)
-      void refresh()
-    } else {
-      window.$message?.error(run.error || '部署失败，请查看步骤日志')
-    }
-  } catch {
-    stopJobPolling()
-  }
+function openDeploy(h: HostView): void {
+  deployHost.value = h
+  deployProfileId.value = h.profile || null
+  deployMode.value = 'reality'
+  deployPort.value = h.node_port || 443
+  deployNodePort.value = 2222
+  deploySni.value = ''
+  deployPlan.value = null
+  nodeStatus.value = null
+  connectResult.value = null
+  showDeploy.value = true
+  void loadDeployProfiles()
+  void loadDeployPlan(h.id)
+  void loadNodeStatus(h.id)
+  startStatusPolling(h.id)
 }
 
 /** 读取已保存的方案；404 表示还没生成过，必须静默。 */
@@ -739,96 +579,114 @@ async function loadDeployPlan(id: string): Promise<void> {
   try {
     const plan = await api.getNodeDeploy(id)
     deployPlan.value = plan ?? null
-    if (plan?.spec?.mode && plan.spec.mode !== 'profile') deployMode.value = plan.spec.mode
-    if (plan?.spec?.panel_url) deployPanelURL.value = plan.spec.panel_url
-    if (plan?.last_run && plan.last_run.state !== 'idle') {
-      deployJob.value = plan.last_run
-      if (plan.last_run.state === 'running') startJobPolling(id)
+    if (plan?.spec) {
+      if (plan.spec.mode && plan.spec.mode !== 'profile') deployMode.value = plan.spec.mode
+      if (plan.spec.port) deployPort.value = plan.spec.port
+      if (plan.spec.node_port) deployNodePort.value = plan.spec.node_port
+      if (plan.spec.sni) deploySni.value = plan.spec.sni === 'www.bing.com' ? '' : plan.spec.sni
+      if (plan.last_connect) connectResult.value = plan.last_connect
     }
   } catch {
     deployPlan.value = null
   }
 }
 
-/**
- * 预填面板上报地址：优先用「远程节点 → 服务设置」里的 public_url，
- * 监听在具体 IP 上时退回 http://ip:port；0.0.0.0 不作猜测（节点连不上）。
- */
-async function loadPanelURLDefault(): Promise<void> {
-  if (deployPanelURL.value) return
-  try {
-    const cfg = await api.getAgentServer()
-    if (cfg.public_url) {
-      deployPanelURL.value = cfg.public_url
-    } else if (cfg.listen && cfg.listen !== '0.0.0.0' && cfg.listen !== '::') {
-      deployPanelURL.value = `http://${cfg.listen}:${cfg.port}`
-    }
-  } catch {
-    // 面板端点未初始化：留空，方案里会标注「未配置上报地址」
-  }
-}
-
 async function loadNodeStatus(id: string): Promise<void> {
   if (!id) return
-  deployStatusBusy.value = true
   try {
     nodeStatus.value = await api.getNodeStatus(id)
   } catch {
     nodeStatus.value = null
-  } finally {
-    deployStatusBusy.value = false
   }
 }
 
-async function startNodeDeploy(execute: boolean): Promise<void> {
+/** 生成（或重新生成）方案：签发新证书并渲染安装脚本。 */
+async function generatePlan(): Promise<void> {
   const h = deployHost.value
   if (!h) return
   const port = Number(deployPort.value ?? 0)
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    window.$message?.warning('端口需在 1–65535')
+    window.$message?.warning('数据端口需在 1–65535')
     return
   }
-  if (execute && !deployKernelOk.value) {
-    window.$message?.warning('绑定的配置文件内核不是 xray-core，请改用「生成部署脚本」手动执行')
+  const nodePort = Number(deployNodePort.value ?? 0)
+  if (!Number.isInteger(nodePort) || nodePort < 1 || nodePort > 65535) {
+    window.$message?.warning('管理端口需在 1–65535')
     return
   }
-  const payload: api.NodeDeployRequest = {
-    mode: deployHasProfile.value ? 'profile' : deployMode.value,
-    port,
-    sni: deploySni.value.trim(),
-    profile_id: deployProfileId.value ?? '',
-    panel_url: deployPanelURL.value.trim(),
-    execute,
+  if (nodePort === port) {
+    window.$message?.warning('管理端口不能与数据端口相同')
+    return
+  }
+  if (!deployKernelOk.value) {
+    window.$message?.warning('绑定的配置文件内核不是 xray-core，无法在线部署')
+    return
   }
   const res = await run(
-    execute ? 'deploy-run' : 'deploy-plan',
-    () => api.deployNode(h.id, payload),
-    execute ? '已开始在节点服务器上执行' : '部署方案已生成',
+    'plan',
+    () =>
+      api.deployNode(h.id, {
+        mode: deployHasProfile.value ? 'profile' : deployMode.value,
+        port,
+        node_port: nodePort,
+        sni: deploySni.value.trim(),
+        profile_id: deployProfileId.value ?? '',
+      }),
+    '安装方案已生成：复制脚本到服务器上执行',
   )
-  if (!res) return
-  if ('job' in res) {
-    deployJob.value = res.job
-    deployPlan.value = {
-      host_id: h.id,
-      spec: res.spec,
-      params: res.params,
-      generated_at: res.spec.generated_at,
-    }
-    startJobPolling(h.id)
+  if (res) {
+    deployPlan.value = res
+    void loadNodeStatus(h.id)
+  }
+}
+
+/** 连接节点：健康检查 → 下发内核配置 → 读取指标。 */
+async function connectToNode(): Promise<void> {
+  const h = deployHost.value
+  if (!h) return
+  if (deployLegacy.value) {
+    window.$message?.warning('旧方案已作废：先重新生成安装脚本，并在服务器上重新执行')
     return
   }
-  deployPlan.value = res
+  if (!deployPlan.value) {
+    window.$message?.warning('先在服务器上执行安装脚本，再点连接')
+    return
+  }
+  const res = await run('connect', () => api.connectNode(h.id, true))
+  if (!res) return
+  connectResult.value = res.last_connect
+  await loadNodeStatus(h.id)
+  await loadNodeMetrics()
+  if (res.last_connect.ok) {
+    window.$message?.success('已连上节点：内核配置已下发，指标为节点实测')
+  } else {
+    window.$message?.error(res.last_connect.error || '连接失败')
+  }
+}
+
+async function forgetPlan(): Promise<void> {
+  const h = deployHost.value
+  if (!h) return
+  const res = await run('forget', () => api.deleteNodeDeploy(h.id), '部署方案已删除')
+  if (res) {
+    deployPlan.value = null
+    connectResult.value = null
+    await loadNodeStatus(h.id)
+  }
 }
 
 onMounted(() => {
   void refresh()
   void loadOptions()
-  monitorTimer = window.setInterval(() => void loadMonitor(), Math.max(10, monitorIntervalSec.value) * 1000)
+  metricsTimer = window.setInterval(
+    () => void loadNodeMetrics(),
+    Math.max(10, nodeMetricIntervalSec.value) * 1000,
+  )
 })
 
 onUnmounted(() => {
-  if (monitorTimer !== undefined) window.clearInterval(monitorTimer)
-  stopJobPolling()
+  if (metricsTimer !== undefined) window.clearInterval(metricsTimer)
+  stopStatusPolling()
 })
 </script>
 
@@ -934,7 +792,7 @@ onUnmounted(() => {
           <div class="node-card__id">
             <span class="mono">{{ h.address }}:{{ h.node_port }}</span>
             <span class="node-card__os">{{ h.protocol || '未设协议' }}</span>
-            <span v-if="monitorOf(h)?.online" class="node-card__os">{{ monitorOf(h)?.os || 'Linux' }}</span>
+            <span v-if="metricsOf(h)?.online" class="node-card__os">{{ metricsOf(h)?.os || 'Linux' }}</span>
           </div>
 
           <!-- 协议配置：直接在这里绑定，部署脚本会沿用这个选择 -->
@@ -951,50 +809,55 @@ onUnmounted(() => {
             />
           </div>
 
-          <!-- 真实系统信息：全部来自 SSH 只读采集，未配置时不伪造数值 -->
-          <div v-if="monitorOf(h)?.online" class="node-res">
+          <!-- 真实系统信息：面板连入节点管理端口（双向 TLS）读取，连不上就明说，不伪造数值 -->
+          <div v-if="metricsOf(h)?.online" class="node-res">
             <div class="node-res__item">
-              <div class="node-res__top"><span>CPU</span><b>{{ Math.round(monitorOf(h)?.cpu_usage_pct ?? 0) }}%</b></div>
+              <div class="node-res__top"><span>CPU</span><b>{{ Math.round(metricsOf(h)?.cpu_usage_pct ?? 0) }}%</b></div>
               <div class="node-res__track">
-                <i :class="levelClass(monitorOf(h)?.cpu_usage_pct ?? 0)" :style="{ width: barPct(monitorOf(h)?.cpu_usage_pct ?? 0, 100) + '%' }" />
+                <i :class="levelClass(metricsOf(h)?.cpu_usage_pct ?? 0)" :style="{ width: barPct(metricsOf(h)?.cpu_usage_pct ?? 0, 100) + '%' }" />
               </div>
-              <div class="node-res__sub">{{ monitorOf(h)?.cpu_cores ?? 0 }} 核 · {{ monitorOf(h)?.kernel || '—' }}</div>
+              <div class="node-res__sub">{{ metricsOf(h)?.cpu_cores ?? 0 }} 核 · {{ metricsOf(h)?.kernel || '—' }}</div>
             </div>
             <div class="node-res__item">
-              <div class="node-res__top"><span>内存</span><b>{{ barPct(monitorOf(h)?.mem_used ?? 0, monitorOf(h)?.mem_total ?? 0) }}%</b></div>
+              <div class="node-res__top"><span>内存</span><b>{{ barPct(metricsOf(h)?.mem_used ?? 0, metricsOf(h)?.mem_total ?? 0) }}%</b></div>
               <div class="node-res__track">
-                <i :class="levelClass(barPct(monitorOf(h)?.mem_used ?? 0, monitorOf(h)?.mem_total ?? 0))" :style="{ width: barPct(monitorOf(h)?.mem_used ?? 0, monitorOf(h)?.mem_total ?? 0) + '%' }" />
+                <i :class="levelClass(barPct(metricsOf(h)?.mem_used ?? 0, metricsOf(h)?.mem_total ?? 0))" :style="{ width: barPct(metricsOf(h)?.mem_used ?? 0, metricsOf(h)?.mem_total ?? 0) + '%' }" />
               </div>
-              <div class="node-res__sub">{{ formatBytes(Number(monitorOf(h)?.mem_used ?? 0)) }} / {{ formatBytes(Number(monitorOf(h)?.mem_total ?? 0)) }}</div>
+              <div class="node-res__sub">{{ formatBytes(Number(metricsOf(h)?.mem_used ?? 0)) }} / {{ formatBytes(Number(metricsOf(h)?.mem_total ?? 0)) }}</div>
             </div>
             <div class="node-res__item">
-              <div class="node-res__top"><span>硬盘</span><b>{{ barPct(monitorOf(h)?.disk_used ?? 0, monitorOf(h)?.disk_total ?? 0) }}%</b></div>
+              <div class="node-res__top"><span>硬盘</span><b>{{ barPct(metricsOf(h)?.disk_used ?? 0, metricsOf(h)?.disk_total ?? 0) }}%</b></div>
               <div class="node-res__track">
-                <i :class="levelClass(barPct(monitorOf(h)?.disk_used ?? 0, monitorOf(h)?.disk_total ?? 0))" :style="{ width: barPct(monitorOf(h)?.disk_used ?? 0, monitorOf(h)?.disk_total ?? 0) + '%' }" />
+                <i :class="levelClass(barPct(metricsOf(h)?.disk_used ?? 0, metricsOf(h)?.disk_total ?? 0))" :style="{ width: barPct(metricsOf(h)?.disk_used ?? 0, metricsOf(h)?.disk_total ?? 0) + '%' }" />
               </div>
-              <div class="node-res__sub">{{ formatBytes(Number(monitorOf(h)?.disk_used ?? 0)) }} / {{ formatBytes(Number(monitorOf(h)?.disk_total ?? 0)) }}</div>
+              <div class="node-res__sub">{{ formatBytes(Number(metricsOf(h)?.disk_used ?? 0)) }} / {{ formatBytes(Number(metricsOf(h)?.disk_total ?? 0)) }}</div>
             </div>
             <div class="node-res__item">
-              <div class="node-res__top"><span>流量</span><b>↓{{ rateText(Number(monitorOf(h)?.net_rx_rate ?? 0)) }} ↑{{ rateText(Number(monitorOf(h)?.net_tx_rate ?? 0)) }}</b></div>
+              <div class="node-res__top"><span>流量</span><b>↓{{ rateText(Number(metricsOf(h)?.net_rx_rate ?? 0)) }} ↑{{ rateText(Number(metricsOf(h)?.net_tx_rate ?? 0)) }}</b></div>
               <div class="node-res__sub node-res__sub--wide">
-                累计 ↓{{ formatBytes(Number(monitorOf(h)?.net_rx_bytes ?? 0)) }} · ↑{{ formatBytes(Number(monitorOf(h)?.net_tx_bytes ?? 0)) }}
+                累计 ↓{{ formatBytes(Number(metricsOf(h)?.net_rx_bytes ?? 0)) }} · ↑{{ formatBytes(Number(metricsOf(h)?.net_tx_bytes ?? 0)) }}
               </div>
             </div>
           </div>
           <div v-else class="node-res__empty">
-            <span class="hint">{{ monitorOf(h)?.error ? '采集失败：' + monitorOf(h)?.error : '系统信息未采集（CPU / 内存 / 硬盘 / 流量）' }}</span>
-            <NButton size="tiny" quaternary type="primary" @click="openMonitor(h)">配置 SSH 监控</NButton>
+            <span class="hint">
+              {{
+                metricsOf(h)?.error
+                  ? '连接失败：' + metricsOf(h)?.error
+                  : '节点未连接：CPU / 内存 / 硬盘 / 流量 需要面板连入节点读取'
+              }}
+            </span>
+            <NButton size="tiny" quaternary type="primary" @click="openDeploy(h)">去部署 / 连接</NButton>
           </div>
 
           <div class="node-card__foot">
             <NSpace :size="6" :wrap="true">
               <NButton size="tiny" type="primary" @click="openDetail(h)">详情</NButton>
-              <NButton size="tiny" type="info" @click="openDeploy(h)">部署到 节点服务器</NButton>
-              <NButton size="tiny" @click="openMonitor(h)">系统信息</NButton>
-              <NButton size="tiny" :loading="isBusy('monitor-refresh:' + h.id)" @click="refreshMonitorNow(h)">刷新</NButton>
+              <NButton size="tiny" type="info" @click="openDeploy(h)">部署 / 连接</NButton>
+              <NButton size="tiny" :loading="isBusy('node-metrics')" @click="loadNodeMetrics">刷新</NButton>
               <NButton size="tiny" quaternary type="error" @click="confirmDelete(h)">删除</NButton>
             </NSpace>
-            <span class="node-card__time">{{ monitorOf(h) ? '采集于 ' + formatTime(monitorOf(h)?.collected_at ?? '') : '' }}</span>
+            <span class="node-card__time">{{ metricsOf(h) ? '读取于 ' + formatTime(metricsOf(h)?.collected_at ?? '') : '' }}</span>
           </div>
         </NCard>
       </NGi>
@@ -1160,58 +1023,53 @@ onUnmounted(() => {
       </template>
     </NModal>
 
-    <!-- 部署到 节点服务器：生成可粘贴执行的脚本，并展示真实连接参数 -->
+    <!-- 部署到 节点服务器：面板下发脚本 → 面板连入节点（双向 TLS，无 SSH） -->
     <NModal
       v-model:show="showDeploy"
       preset="card"
       :title="`部署到 节点服务器 · ${deployHost?.name ?? ''}`"
-      style="width: 760px"
+      style="width: 820px"
       :bordered="false"
     >
       <NSpace vertical :size="12" style="width: 100%">
         <div class="hint">
-          选择「协议配置」里已保存的配置文件并绑定到这台节点，脚本会安装对应内核并把该文件原样写进去，
-          端口与 SNI 直接从文件推断；复制到节点服务器上以 root 执行即可。
-          不选配置文件时按默认 VLESS:443 生成最小配置。
+          面板生成安装脚本 → 在服务器上以 root 执行一次 → 面板用双向 TLS 连入节点：下发内核配置、读取真实指标。
+          不需要 SSH，也不需要节点能访问面板；面板只需要能连上节点的管理端口。
         </div>
+        <NAlert v-if="deployLegacy" type="warning" :bordered="false">
+          {{ deployPlan?.warning || '旧版本方案已作废，请重新生成安装脚本并在服务器上重新执行。' }}
+        </NAlert>
 
-        <div>
-          <div class="kv-label">配置文件（来自「协议配置」）</div>
-          <NSelect
-            v-model:value="deployProfileId"
-            :options="deployProfileOptions"
-            clearable
-            filterable
-            placeholder="选择要绑定的配置文件（推荐）"
-          />
-          <div v-if="deployProfileId" class="hint" style="margin-top: 6px">
-            <template v-if="selectedProfile">
-              已绑定 · 内核 {{ selectedProfile.kernel }} / {{ selectedProfile.format }} ·
-              脚本会写入该文件的当前内容（保存后重新生成即可更新）
-            </template>
-            <template v-else>已绑定配置文件 {{ deployProfileId }}（列表加载中）</template>
+        <!-- 1 方案 -->
+        <div class="deploy-block">
+          <div class="deploy-block__head">
+            <span class="deploy-block__title">1 · 部署方案</span>
+            <NTag v-if="nodeStatus?.online" size="tiny" type="success">已连接</NTag>
+            <NTag v-else-if="deployPlan" size="tiny" type="warning">待连接</NTag>
+            <NTag v-else size="tiny">未部署</NTag>
           </div>
-          <div v-else-if="!deployProfiles.length" class="hint" style="margin-top: 6px">
-            还没有可用的配置文件：先到「配置引擎 → 协议配置」新建并保存，再回来绑定。
-          </div>
-        </div>
 
-        <!-- 节点主动上报：面板不连入，节点把真实状态推上来（哪吒探针同模式） -->
-        <div class="deploy-online">
-          <div class="deploy-online__head">
-            <span class="deploy-block__title">在线部署（节点主动上报 · 无需 SSH 读取）</span>
-            <NTag v-if="nodeStatus?.status === 'online'" size="tiny" type="success">探针在线</NTag>
-            <NTag v-else-if="nodeStatus?.status === 'offline'" size="tiny" type="warning">探针离线</NTag>
-            <NTag v-else-if="nodeStatus?.status === 'never'" size="tiny">未上报</NTag>
-            <NTag v-else-if="nodeStatus && !nodeStatus.installed" size="tiny">未部署</NTag>
-            <NTag v-if="jobRunning" size="tiny" type="info">部署中</NTag>
+          <div>
+            <div class="kv-label">配置文件（来自「协议配置」，可选）</div>
+            <NSelect
+              v-model:value="deployProfileId"
+              :options="deployProfileOptions"
+              clearable
+              filterable
+              placeholder="选择要绑定的配置文件（推荐）"
+            />
+            <div v-if="deployProfileId" class="hint" style="margin-top: 6px">
+              <template v-if="selectedProfile">
+                已绑定 · 内核 {{ selectedProfile.kernel }} / {{ selectedProfile.format }} ·
+                脚本会写入该文件的当前内容（保存后重新生成即可更新）
+              </template>
+              <template v-else>已绑定配置文件 {{ deployProfileId }}（列表加载中）</template>
+            </div>
+            <div v-else-if="!deployProfiles.length" class="hint" style="margin-top: 6px">
+              还没有可用的配置文件：先到「配置引擎 → 协议配置」新建并保存，再回来绑定。
+            </div>
           </div>
-          <div class="hint">
-            「部署并执行」会用已保存的 SSH 凭据在节点上跑这一次脚本（仅执行，不用它读状态）；
-            也可以只生成脚本，复制到节点上以 root 执行。脚本会装独立内核（ngg-node.service）与上报探针
-            （ngg-probe.service），不修改机器上已有的服务。之后节点每 10 秒把真实指标与节点状态推给面板
-            —— 面板从不连进来，不需要入站管理端口，节点在 NAT 后面也能上报。
-          </div>
+
           <NGrid cols="1 m:3" responsive="screen" :x-gap="10" :y-gap="8" style="margin-top: 8px">
             <NGi>
               <div class="kv-label">传输方式</div>
@@ -1226,35 +1084,29 @@ onUnmounted(() => {
               </div>
             </NGi>
             <NGi>
-              <div class="kv-label">节点端口（客户端连接端口）</div>
+              <div class="kv-label">数据端口（客户端连接）</div>
               <NInputNumber v-model:value="deployPort" size="small" :min="1" :max="65535" style="width: 100%" />
               <div class="hint" style="margin-top: 4px">默认取节点登记的端口；443 常被已有网站占用</div>
             </NGi>
             <NGi>
-              <div class="kv-label">面板上报地址</div>
-              <NInput v-model:value="deployPanelURL" size="small" placeholder="http://面板公网IP:9191" />
+              <div class="kv-label">管理端口（面板连入）</div>
+              <NInputNumber v-model:value="deployNodePort" size="small" :min="1" :max="65535" style="width: 100%" />
               <div class="hint" style="margin-top: 4px">
-                节点必须能访问该地址（默认取「远程节点 → 服务设置」的 public_url）；留空则节点不上报
+                对应 Remnawave 的 NODE_PORT，默认 2222；只对面板 IP 开放
               </div>
             </NGi>
           </NGrid>
+
           <NAlert v-if="!deployKernelOk" type="warning" :bordered="false" style="margin-top: 8px">
-            绑定的配置文件内核是 {{ deployProfileKernel }}，在线部署只支持 xray-core；
-            请改用下面的「生成部署脚本」手动执行。
+            绑定的配置文件内核是 {{ deployProfileKernel }}，在线部署只支持 xray-core。
           </NAlert>
+
           <NSpace align="center" :size="10" :wrap="true" style="margin-top: 10px">
-            <NButton
-              size="small"
-              type="primary"
-              :disabled="!deployKernelOk || jobRunning"
-              :loading="isBusy('deploy-run')"
-              @click="startNodeDeploy(true)"
-            >
-              部署并执行
+            <NButton size="small" type="primary" :loading="isBusy('plan')" @click="generatePlan">
+              生成安装脚本
             </NButton>
-            <NButton size="small" :loading="isBusy('deploy-plan')" @click="startNodeDeploy(false)">只生成方案</NButton>
             <NButton
-              v-if="deployPlan"
+              v-if="deployPlan && !deployLegacy"
               size="small"
               text
               tag="a"
@@ -1263,223 +1115,126 @@ onUnmounted(() => {
             >
               下载脚本
             </NButton>
+            <NButton v-if="deployPlan" size="small" text type="error" :loading="isBusy('forget')" @click="forgetPlan">
+              丢弃方案
+            </NButton>
             <span class="hint">
-              上报目标：<span class="mono">{{ deployPanelURL || '未配置' }}</span>
+              目标：<span class="mono">{{ deployHost?.address ?? '—' }}</span> ·
+              管理端口 <span class="mono">{{ deployNodePort }}</span>
             </span>
           </NSpace>
+        </div>
 
-          <!-- 执行日志：全是节点输出，失败时给出原文 -->
-          <div v-if="deployJob && deployJob.state !== 'idle'" class="deploy-steps">
-            <div class="deploy-steps__head">
-              <span class="deploy-block__title">执行日志</span>
-              <NTag size="tiny" :type="jobFailed ? 'error' : jobDone ? 'success' : 'info'">
-                {{ jobFailed ? '失败' : jobDone ? '完成' : '执行中' }} · {{ deployJob.steps.length }} 步
-              </NTag>
-              <span class="hint">{{ formatTime(deployJob.started_at) }}</span>
-            </div>
-            <ol class="deploy-step-list">
-              <li v-for="s in deployJob.steps" :key="s.index" :class="`is-${s.status}`">
-                <span class="deploy-step__idx">{{ s.status === 'done' ? '✓' : s.status === 'failed' ? '✕' : s.index }}</span>
-                <span class="deploy-step__title">{{ s.title }}</span>
-                <span v-if="s.detail" class="deploy-step__detail">{{ s.detail }}</span>
-              </li>
-            </ol>
-            <div v-if="deployJob.notes?.length" class="deploy-notes-wrap">
-              <div v-for="(n, i) in deployJob.notes" :key="i" class="deploy-note">{{ n }}</div>
-            </div>
-            <div v-if="deployJob.error" class="deploy-error">{{ deployJob.error }}</div>
-            <pre v-if="jobFailed && deployJob.stdout" class="mono deploy-pre deploy-pre--small">{{ deployJob.stdout }}</pre>
+        <!-- 2 脚本 -->
+        <div v-if="deployPlan && !deployLegacy" class="deploy-block">
+          <div class="deploy-block__head">
+            <span class="deploy-block__title">2 · 在服务器上执行</span>
+            <NButton size="tiny" @click="copyText(deployPlan.script ?? '', '安装脚本已复制')">复制脚本</NButton>
           </div>
+          <div class="hint">
+            以 root 执行（保存为 ngg-node-{{ deployPlan.host_id }}.sh 后
+            <span class="mono">bash ngg-node-{{ deployPlan.host_id }}.sh</span>）。
+            脚本会安装 ngg-node（管理接口）与 ngg-core（内核）、写入本节点证书，并在最后自检双向认证。
+          </div>
+          <pre class="mono deploy-pre">{{ deployPlan.script }}</pre>
+        </div>
 
-          <!-- 节点实时状态：全部来自探针最近一次上报，面板不连入节点 -->
-          <NCard v-if="nodeStatus?.installed" size="small" title="节点实时状态（探针上报）" class="deploy-status">
-            <NDescriptions
-              :column="2"
+        <!-- 3 连接 -->
+        <div class="deploy-block">
+          <div class="deploy-block__head">
+            <span class="deploy-block__title">3 · 连接节点</span>
+            <NTag :type="nodeOnline ? 'success' : 'default'" size="tiny">
+              {{ nodeOnline ? '在线' : '未连接' }}
+            </NTag>
+          </div>
+          <div class="hint">
+            连接会把当前内核配置写入节点并启动 ngg-core，然后读取节点自己报的指标。
+            节点证书的 CN 与节点 ID 不一致时会拒绝连接（不会把配置推到别的机器上）。
+          </div>
+          <NSpace align="center" :size="10" :wrap="true" style="margin-top: 8px">
+            <NButton
               size="small"
-              label-placement="left"
-              :label-style="{ whiteSpace: 'nowrap' }"
-              bordered
+              type="primary"
+              :loading="isBusy('connect')"
+              :disabled="!deployPlan || deployLegacy"
+              @click="connectToNode"
             >
-              <NDescriptionsItem label="上报状态">
-                <NTag
-                  size="tiny"
-                  :type="nodeStatus.status === 'online' ? 'success' : nodeStatus.status === 'offline' ? 'warning' : 'error'"
-                >
-                  {{ nodeStatus.status === 'online' ? '在线' : nodeStatus.status === 'offline' ? '离线' : '从未上报' }}
-                </NTag>
-              </NDescriptionsItem>
-              <NDescriptionsItem label="最近上报">
-                {{ nodeStatus.last_seen ? formatTime(nodeStatus.last_seen) : '—' }}
-              </NDescriptionsItem>
-              <NDescriptionsItem label="节点单元">
-                <NTag
-                  size="tiny"
-                  :type="nodeStatus.node?.unit_state === 'active' ? 'success' : 'default'"
-                >
-                  {{ nodeStatus.node?.unit_state || '未知' }}
-                </NTag>
-              </NDescriptionsItem>
-              <NDescriptionsItem label="端口监听">
-                {{ nodeStatus.node ? (nodeStatus.node.listening ? `是 · ${nodeStatus.node.port}` : '否') : '—' }}
-              </NDescriptionsItem>
-              <NDescriptionsItem label="配置指纹">
-                <span class="mono">{{ (nodeStatus.node?.config_sha256 || '').slice(0, 16) || '—' }}</span>
-              </NDescriptionsItem>
-              <NDescriptionsItem label="内核版本">
-                <span class="mono">{{ nodeStatus.node?.kernel_version || '—' }}</span>
-              </NDescriptionsItem>
-              <NDescriptionsItem label="主机" :span="2">
-                <span class="mono">{{ nodeStatus.hostname || '—' }}</span>
-                <span v-if="nodeStatus.os" class="hint">
-                  · {{ nodeStatus.os }}/{{ nodeStatus.arch }} · 探针 {{ nodeStatus.agent_version || '—' }}
-                </span>
-              </NDescriptionsItem>
-              <template v-if="nodeStatus.metrics">
-                <NDescriptionsItem label="CPU">
-                  {{ nodeStatus.metrics.cpu_pct.toFixed(1) }}%
-                  <span class="hint"> · {{ nodeStatus.metrics.cpu_cores }} 核 · load {{ nodeStatus.metrics.load1 }}</span>
-                </NDescriptionsItem>
-                <NDescriptionsItem label="内存">
-                  {{ formatBytes(nodeStatus.metrics.mem_used) }} / {{ formatBytes(nodeStatus.metrics.mem_total) }}
-                </NDescriptionsItem>
-                <NDescriptionsItem label="累计流量">
-                  ↓ {{ formatBytes(nodeStatus.metrics.rx_bytes) }} · ↑ {{ formatBytes(nodeStatus.metrics.tx_bytes) }}
-                </NDescriptionsItem>
-                <NDescriptionsItem label="运行时长">{{ formatUptime(nodeStatus.metrics.uptime_sec) }}</NDescriptionsItem>
-              </template>
-              <NDescriptionsItem label="上报地址" :span="2">
-                <span class="mono">{{ nodeStatus.report_url || '未配置' }}</span>
-                <span v-if="nodeStatus.agent_id" class="hint"> · 探针 {{ nodeStatus.agent_id }}</span>
-              </NDescriptionsItem>
-              <NDescriptionsItem v-if="nodeStatus.warning" label="提示" :span="2">{{ nodeStatus.warning }}</NDescriptionsItem>
-              <NDescriptionsItem v-if="nodeStatus.error" label="错误" :span="2">{{ nodeStatus.error }}</NDescriptionsItem>
-            </NDescriptions>
-            <NSpace :size="8" style="margin-top: 8px">
-              <NButton size="tiny" :loading="deployStatusBusy" @click="loadNodeStatus(deployHost?.id ?? '')">
-                刷新状态
-              </NButton>
-              <span class="hint">数据来自探针最近一次上报，面板不连入节点</span>
-            </NSpace>
-          </NCard>
-          <NAlert v-else type="info" :bordered="false" class="deploy-status">
-            {{ nodeStatus?.error || '还没有为该节点生成部署方案：先生成方案并执行一次部署' }}
+              连接节点并下发配置
+            </NButton>
+            <span class="hint mono">{{ nodeApiURL || '—' }}</span>
+          </NSpace>
+          <NAlert
+            v-if="connectResult"
+            :type="connectResult.ok ? 'success' : 'error'"
+            :bordered="false"
+            style="margin-top: 8px"
+          >
+            <template v-if="connectResult.ok">
+              已连接（{{ connectResult.duration_ms }} ms）· 内核
+              {{ connectResult.health?.xrayVersion || '—' }} · 配置{{ connectResult.config_pushed ? '已下发' : '未下发' }}
+            </template>
+            <template v-else>
+              连接失败（{{ connectResult.stage || '未知' }} 阶段）：{{ connectResult.error }}
+            </template>
           </NAlert>
         </div>
 
-        <div class="deploy-sep"><span>或手动执行</span></div>
-
-        <NSpace align="center" :size="10" :wrap="true">
-          <NButton size="small" :loading="isBusy('deploy-gen')" @click="generateProvision">
-            生成部署脚本
-          </NButton>
-          <span class="hint">目标机器：<span class="mono">{{ deployHost?.address ?? '—' }}</span></span>
-        </NSpace>
-
-        <template v-if="deployProvision">
-          <div class="deploy-block">
-            <div class="deploy-block__head">
-              <span class="deploy-block__title">部署脚本（bash）</span>
-              <NButton size="tiny" @click="copyText(deployProvision.script, '脚本已复制')">复制</NButton>
-            </div>
-            <pre class="mono deploy-pre">{{ deployProvision.script }}</pre>
-          </div>
-
-          <NCard size="small" title="连接参数（客户端按此填写）">
-            <NDescriptions :column="2" size="small" label-placement="left" bordered>
-              <NDescriptionsItem v-if="deployProvision.profile_name" label="绑定配置文件" :span="2">
-                {{ deployProvision.profile_name }}
-                <span class="mono hint">（{{ deployProvision.kernel }}）</span>
-              </NDescriptionsItem>
-              <NDescriptionsItem label="协议">{{ deployProvision.endpoint.protocol.toUpperCase() }}</NDescriptionsItem>
-              <NDescriptionsItem label="地址"><span class="mono">{{ deployProvision.endpoint.address }}</span></NDescriptionsItem>
-              <NDescriptionsItem label="端口">{{ deployProvision.endpoint.port }}</NDescriptionsItem>
-              <NDescriptionsItem label="传输">{{ deployProvision.endpoint.transport }}</NDescriptionsItem>
-              <NDescriptionsItem label="TLS">{{ deployProvision.endpoint.tls ? '开启（自签证书）' : '关闭' }}</NDescriptionsItem>
-              <NDescriptionsItem label="SNI">{{ deployProvision.endpoint.sni }}</NDescriptionsItem>
-              <NDescriptionsItem label="凭据" :span="2">
-                <div class="deploy-cred">
-                  <span class="mono">{{ deployProvision.endpoint.credential }}</span>
-                  <NButton size="tiny" quaternary @click="copyText(deployProvision.endpoint.credential, '凭据已复制')">
-                    复制凭据
-                  </NButton>
-                </div>
-              </NDescriptionsItem>
-              <NDescriptionsItem label="生成时间" :span="2">{{ formatTime(deployProvision.generated_at) }}</NDescriptionsItem>
-            </NDescriptions>
-          </NCard>
-
-          <div>
-            <div class="kv-label">部署说明（脚本实际行为与限制）</div>
-            <ul class="deploy-notes">
-              <li v-for="(n, i) in deployProvision.notes" :key="i">{{ n }}</li>
-            </ul>
-          </div>
-        </template>
+        <!-- 4 节点信息 -->
+        <NCard v-if="nodeMetricsLive" size="small" title="节点信息（面板连入读取）">
+          <NDescriptions :column="2" size="small" label-placement="left" :label-style="{ whiteSpace: 'nowrap' }" bordered>
+            <NDescriptionsItem label="连接状态">
+              <NTag size="tiny" :type="nodeOnline ? 'success' : 'warning'">
+                {{ nodeOnline ? '在线' : '离线' }}
+              </NTag>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="往返延迟">{{ nodeMetricsLive.latency_ms }} ms</NDescriptionsItem>
+            <NDescriptionsItem label="主机" :span="2">
+              <span class="mono">{{ nodeMetricsLive.hostname || '—' }}</span>
+              <span class="hint">
+                · {{ nodeMetricsLive.os || '—' }} {{ nodeMetricsLive.kernel || '' }} · {{ nodeMetricsLive.arch || '—' }}
+              </span>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="CPU">
+              {{ nodeMetricsLive.cpu_usage_pct.toFixed(1) }}%
+              <span class="hint"> · {{ nodeMetricsLive.cpu_cores }} 核 · load {{ nodeMetricsLive.load1 }}</span>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="内存">
+              {{ formatBytes(nodeMetricsLive.mem_used) }} / {{ formatBytes(nodeMetricsLive.mem_total) }}
+            </NDescriptionsItem>
+            <NDescriptionsItem label="磁盘">
+              {{ formatBytes(nodeMetricsLive.disk_used) }} / {{ formatBytes(nodeMetricsLive.disk_total) }}
+            </NDescriptionsItem>
+            <NDescriptionsItem label="运行时长">{{ formatUptime(nodeMetricsLive.uptime_sec) }}</NDescriptionsItem>
+            <NDescriptionsItem label="累计流量">
+              ↓ {{ formatBytes(nodeMetricsLive.net_rx_bytes) }} · ↑ {{ formatBytes(nodeMetricsLive.net_tx_bytes) }}
+            </NDescriptionsItem>
+            <NDescriptionsItem label="实时速率">
+              ↓ {{ rateText(nodeMetricsLive.net_rx_rate) }} · ↑ {{ rateText(nodeMetricsLive.net_tx_rate) }}
+            </NDescriptionsItem>
+            <NDescriptionsItem label="节点服务">
+              <span class="mono">{{ nodeMetricsLive.node_version || '—' }}</span>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="内核">
+              <span class="mono">{{ nodeMetricsLive.xray_version || '—' }}</span>
+              <NTag size="tiny" :type="nodeMetricsLive.core_active ? 'success' : 'default'" style="margin-left: 6px">
+                {{ nodeMetricsLive.core_active ? 'ngg-core active' : 'ngg-core 未运行' }}
+              </NTag>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="采集时间" :span="2">
+              {{ formatTime(nodeMetricsLive.collected_at) }}
+              <span class="hint"> · 面板每 {{ nodeMetricIntervalSec }} 秒连入读取一次</span>
+            </NDescriptionsItem>
+            <NDescriptionsItem v-if="nodeMetricsLive.error" label="错误" :span="2">
+              {{ nodeMetricsLive.error }}
+            </NDescriptionsItem>
+          </NDescriptions>
+        </NCard>
         <NAlert v-else type="info" :bordered="false">
-          该节点尚未生成部署脚本。选择配置文件后点「生成部署脚本」。
+          {{ nodeStatus?.warning || nodeStatus?.error || '还没有连上过该节点：执行脚本后点「连接节点并下发配置」' }}
         </NAlert>
       </NSpace>
     </NModal>
 
-    <!-- 系统信息采集（SSH 只读） -->
-    <NModal
-      v-model:show="showMonitor"
-      preset="card"
-      :title="`系统信息采集 · ${monitorHost?.name ?? ''}`"
-      style="width: 560px"
-      :bordered="false"
-    >
-      <NSpace vertical :size="12" style="width: 100%">
-        <NAlert type="info" :bordered="false">
-          通过 SSH 执行只读命令采集 CPU / 内存 / 硬盘 / 流量，不会在服务器上安装或写入任何东西。
-          凭据只保存在本机数据目录，页面不会回显密码。
-        </NAlert>
-        <NGrid cols="2" :x-gap="10" :y-gap="8">
-          <NGi>
-            <div class="kv-label">SSH 主机</div>
-            <NInput v-model:value="monitorForm.host" placeholder="IP 或域名" />
-          </NGi>
-          <NGi>
-            <div class="kv-label">端口</div>
-            <NInputNumber v-model:value="monitorForm.port" :min="1" :max="65535" style="width: 100%" />
-          </NGi>
-          <NGi>
-            <div class="kv-label">用户名</div>
-            <NInput v-model:value="monitorForm.user" placeholder="root" />
-          </NGi>
-          <NGi>
-            <div class="kv-label">密码（留空沿用已保存的）</div>
-            <NInput v-model:value="monitorForm.password" type="password" show-password-on="click" placeholder="不修改请留空" />
-          </NGi>
-        </NGrid>
-        <div class="hint">
-          首次连接会记录服务器 SSH 指纹并校验后续连接，指纹变化会拒绝连接。
-          每 {{ monitorIntervalSec }} 秒自动采集一次。
-        </div>
-        <NAlert
-          v-if="monitorHost && monitorOf(monitorHost) && !monitorOf(monitorHost)?.online"
-          type="warning"
-          :bordered="false"
-        >{{ monitorOf(monitorHost)?.error || '尚未采集到数据' }}</NAlert>
-      </NSpace>
-      <template #footer>
-        <NSpace justify="space-between" style="width: 100%">
-          <NButton
-            size="small"
-            type="error"
-            quaternary
-            :loading="isBusy('monitor-del')"
-            @click="removeMonitor"
-          >停用监控</NButton>
-          <NSpace :size="8">
-            <NButton size="small" @click="showMonitor = false">取消</NButton>
-            <NButton size="small" type="primary" :loading="isBusy('monitor-save')" @click="saveMonitor">
-              保存并开始采集
-            </NButton>
-          </NSpace>
-        </NSpace>
-      </template>
-    </NModal>
   </div>
 </template>
 

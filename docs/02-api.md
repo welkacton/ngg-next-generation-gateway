@@ -237,12 +237,12 @@
 
 ### `GET /system`
 ```json
-{ "ngg_version":"2.12.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
+{ "ngg_version":"2.13.0", "os":"linux", "arch":"amd64", "platform":"linux/amd64",
   "go_version":"go1.27.3", "started_at":"...", "listen_addr":"127.0.0.1:9090",
   "stage":1, "mode":"multi-core-parallel", "data_dir":"data" }
 ```
 
-> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.12.0），不再硬编码 Phase 1 字样。
+> `ngg_version` 现在来自 `internal/version.Release`（Gen 2 / v2.13.0），不再硬编码 Phase 1 字样。
 > 代际字段与仓库更新端点见 [`10-updates.md`](10-updates.md) / [`GENERATIONS.md`](GENERATIONS.md)。
 
 ### `GET /health`
@@ -467,6 +467,10 @@ wscat -c "ws://127.0.0.1:9090/api/v1/ws?token=$TOKEN"
 一台主机 = 任意位置的 VPS / 电脑 / 软路由，角色 `role` 可为 `inbound` / `outbound` / `both`，
 随时可切换；`both` 会同时出现在入站和出站视图中。
 
+> **v2.13.0 起没有 SSH，也没有节点侧探针**：节点上跑 `ngg-node`（管理接口）+ `ngg-core`（内核），
+> 面板用双向 TLS 连入节点（`/node/xray/healthcheck`、`/node/xray/start`、`/node/stats/get-system-stats`），
+> 与 Remnawave 的 node API 同一套形状。地址、端口、证书都在部署方案里，见 `docs/23-v2130-node-deploy-mtls.md`。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/v1/hosts?role=inbound\|outbound\|both\|all` | `{hosts,count,stats,path}`，每项含 `probe`（最后一次真实探测） |
@@ -476,10 +480,11 @@ wscat -c "ws://127.0.0.1:9090/api/v1/ws?token=$TOKEN"
 | `POST` | `/api/v1/hosts/{id}/probe` | 单主机真实 TCP 探测 |
 | `POST` | `/api/v1/hosts/{id}/role` | body `{"role":"outbound"}`，任意切换入站 / 出站 / 双向 |
 | `GET` / `PUT` / `DELETE` | `/api/v1/hosts/{id}` | 读取 / 修改 / 删除 |
-| `GET` / `POST` | `/api/v1/hosts/{id}/deploy` | 读取 / 生成节点部署方案（`execute=true` 时 202 + job，在节点上真正执行） |
-| `GET` | `/api/v1/hosts/{id}/deploy/script` | 下载部署脚本（`text/x-shellscript`，含节点凭据） |
-| `GET` | `/api/v1/hosts/{id}/deploy/job` | 轮询执行进度（`NGG_STEP/OK/FAIL/NOTE/NODE_READY` 解析结果） |
-| `GET` | `/api/v1/hosts/{id}/node/status` | 节点实时状态，**读探针上报**（不 SSH）：`status` / `last_seen` / `metrics` / `node` |
+| `GET` / `POST` / `DELETE` | `/api/v1/hosts/{id}/deploy` | 读取 / 生成 / 丢弃节点部署方案（生成时签发节点证书，脚本由面板渲染） |
+| `GET` | `/api/v1/hosts/{id}/deploy/script` | 下载部署脚本（`text/x-shellscript`，含节点证书与私钥） |
+| `POST` | `/api/v1/hosts/{id}/node/connect` | 连入节点（双向 TLS）：健康检查 → 下发内核配置 → 读指标，结果落盘 |
+| `GET` | `/api/v1/hosts/{id}/node/status` | 节点状态（读缓存 + 最近一次连接结果）：`node_url` / `online` / `metrics` / `health` / `warning` |
+| `GET` | `/api/v1/hosts/node-metrics` | 所有已部署节点的指标快照 `{nodes,interval_sec}`，后端每 30 秒连入各节点采样 |
 | `GET` | `/api/v1/hosts/export` | 导出全量 JSON |
 | `PUT` | `/api/v1/hosts/import` | 全量替换，任一条校验失败则整个节点库保持不变 |
 

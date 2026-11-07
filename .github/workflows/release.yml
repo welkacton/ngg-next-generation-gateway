@@ -1,8 +1,14 @@
 name: Release
 
-# NGG targets Windows PC ONLY. Every release publishes one package format: an
-# Inno Setup .exe (plus the standalone daemon/agent .exe and checksums).
-# No Linux/macOS/FreeBSD builds, no tar.gz/zip packaging.
+# NGG's control plane is Windows PC ONLY, so the panel ships as one package
+# format: an Inno Setup .exe (plus the standalone daemon/agent .exe and
+# checksums). No Linux/macOS/FreeBSD panel builds, no tar.gz packaging.
+#
+# The one exception is the node daemon (ngg-node), which is Linux-only by
+# nature: it is what the panel installs onto a node server over HTTPS. It is
+# built first, so its SHA256 can be baked into the panel — the deploy script
+# refuses a download whose digest does not match, which means the panel and the
+# node binaries must come from the same tag.
 
 on:
   push:
@@ -12,7 +18,57 @@ permissions:
   contents: write
 
 jobs:
+  # Node daemon first: the panel build needs its digests.
+  node-binaries:
+    runs-on: ubuntu-latest
+    outputs:
+      sha_amd64: ${{ steps.digest.outputs.sha_amd64 }}
+      sha_arm64: ${{ steps.digest.outputs.sha_arm64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Cross-compile ngg-node (linux/amd64, linux/arm64)
+        run: |
+          set -euo pipefail
+          mkdir -p dist/node
+          for arch in amd64 arm64; do
+            echo "building ngg-node for linux/${arch}"
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+              -o "dist/node/ngg-node-linux-${arch}" ./cmd/ngg-node
+            file "dist/node/ngg-node-linux-${arch}"
+          done
+
+      - name: Digest
+        id: digest
+        run: |
+          set -euo pipefail
+          cd dist/node
+          for arch in amd64 arm64; do
+            sha=$(sha256sum "ngg-node-linux-${arch}" | cut -d' ' -f1)
+            case "$sha" in
+              [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+              *) echo "bad digest for ${arch}: $sha" >&2; exit 1 ;;
+            esac
+            [ "${#sha}" -eq 64 ] || { echo "bad digest length for ${arch}" >&2; exit 1; }
+            echo "sha_${arch}=${sha}" >> "$GITHUB_OUTPUT"
+            echo "${arch} ${sha}"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ngg-node-linux
+          if-no-files-found: error
+          path: |
+            dist/node/ngg-node-linux-amd64
+            dist/node/ngg-node-linux-arm64
+
   build:
+    needs: node-binaries
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +84,12 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Fetch node daemons
+        uses: actions/download-artifact@v4
+        with:
+          name: ngg-node-linux
+          path: dist/node
+
       - name: Build Web UI
         shell: pwsh
         run: |
@@ -37,12 +99,25 @@ jobs:
 
       - name: Build Windows executables
         shell: pwsh
+        env:
+          NODE_SHA_AMD64: ${{ needs.node-binaries.outputs.sha_amd64 }}
+          NODE_SHA_ARM64: ${{ needs.node-binaries.outputs.sha_arm64 }}
         run: |
+          # The panel embeds the node digests; an empty one would make the deploy
+          # script downgrade to "https only", so fail loudly here instead.
+          foreach ($pair in @(@('amd64', $env:NODE_SHA_AMD64), @('arm64', $env:NODE_SHA_ARM64))) {
+            if (-not $pair[1] -or $pair[1].Length -ne 64) {
+              throw "missing ngg-node digest for $($pair[0]): refusing to build a panel that cannot verify its node"
+            }
+          }
           $env:GOOS = 'windows'
           $env:GOARCH = 'amd64'
           $env:CGO_ENABLED = '0'
+          $ldflags = "-s -w " +
+            "-X github.com/ngg-project/ngg/internal/nodedeploy.NodeBinSHA256AMD64=$env:NODE_SHA_AMD64 " +
+            "-X github.com/ngg-project/ngg/internal/nodedeploy.NodeBinSHA256ARM64=$env:NODE_SHA_ARM64"
           New-Item -ItemType Directory -Force -Path dist/ngg | Out-Null
-          go build -trimpath -ldflags="-s -w" -o dist/ngg/nggd.exe ./cmd/nggd
+          go build -trimpath -ldflags="$ldflags" -o dist/ngg/nggd.exe ./cmd/nggd
           if ($LASTEXITCODE -ne 0) { throw 'go build nggd failed' }
           go build -trimpath -ldflags="-s -w" -o dist/ngg/ngg-agent.exe ./cmd/ngg-agent
           if ($LASTEXITCODE -ne 0) { throw 'go build ngg-agent failed' }
@@ -82,23 +157,30 @@ jobs:
             throw 'installer .exe was not produced'
           }
 
-      - name: Add standalone Windows executables
+      - name: Add standalone executables and node daemons
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
           Copy-Item -Force "dist/ngg/nggd.exe"      "out/NGG-Core-$tag-windows-amd64.exe"
           Copy-Item -Force "dist/ngg/ngg-agent.exe" "out/NGG-Agent-$tag-windows-amd64.exe"
+          foreach ($arch in @('amd64', 'arm64')) {
+            $src = "dist/node/ngg-node-linux-$arch"
+            if (-not (Test-Path $src)) { throw "missing node daemon: $src" }
+            Copy-Item -Force $src "out/ngg-node-linux-$arch"
+          }
           Get-ChildItem out -File | Select-Object Name, Length | Format-Table -AutoSize
 
-      - name: Checksums (.exe only)
+      - name: Checksums
         shell: pwsh
         run: |
-          $exes = Get-ChildItem out -Filter *.exe -File | Sort-Object Name
-          foreach ($f in $exes) {
+          $assets = Get-ChildItem out -File |
+            Where-Object { $_.Name -ne 'SHA256SUMS' -and $_.Extension -ne '.sha256' } |
+            Sort-Object Name
+          foreach ($f in $assets) {
             $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             [IO.File]::WriteAllText("$($f.FullName).sha256", "$hash  $($f.Name)`r`n")
           }
-          $lines = foreach ($f in $exes) {
+          $lines = foreach ($f in $assets) {
             $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($f.Name)"
           }
@@ -107,29 +189,48 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ngg-windows-exe
+          name: ngg-release-assets
           path: |
             out/*.exe
+            out/ngg-node-linux-amd64
+            out/ngg-node-linux-arm64
             out/*.sha256
             out/SHA256SUMS
 
   publish:
-    needs: build
+    needs: [node-binaries, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: ngg-windows-exe
+          name: ngg-release-assets
           path: artifacts
 
-      - name: Refuse anything that is not an .exe
+      - name: Refuse unexpected assets
         run: |
           cd artifacts
-          bad=$(find . -maxdepth 1 -type f ! -name '*.exe' ! -name '*.sha256' ! -name 'SHA256SUMS')
+          bad=$(find . -maxdepth 1 -type f \
+            ! -name '*.exe' \
+            ! -name '*.sha256' \
+            ! -name 'SHA256SUMS' \
+            ! -name 'ngg-node-linux-amd64' \
+            ! -name 'ngg-node-linux-arm64')
           if [ -n "$bad" ]; then
-            echo "unexpected non-exe assets: $bad" >&2
+            echo "unexpected assets: $bad" >&2
             exit 1
           fi
+          # The panel downloads the node daemon by name; both must be present,
+          # and their bytes must be the ones the panel embedded.
+          for arch in amd64 arm64; do
+            test -f "ngg-node-linux-${arch}" || { echo "missing ngg-node-linux-${arch}" >&2; exit 1; }
+            if [ "$arch" = arm64 ]; then
+              want="${{ needs.node-binaries.outputs.sha_arm64 }}"
+            else
+              want="${{ needs.node-binaries.outputs.sha_amd64 }}"
+            fi
+            got=$(sha256sum "ngg-node-linux-${arch}" | cut -d' ' -f1)
+            [ "$got" = "$want" ] || { echo "digest drift for ${arch}: $got != $want" >&2; exit 1; }
+          done
           ls -lh
           cat SHA256SUMS
 
@@ -137,6 +238,8 @@ jobs:
         with:
           files: |
             artifacts/*.exe
+            artifacts/ngg-node-linux-amd64
+            artifacts/ngg-node-linux-arm64
             artifacts/SHA256SUMS
             artifacts/*.sha256
           generate_release_notes: true
