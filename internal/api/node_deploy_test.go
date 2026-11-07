@@ -132,7 +132,7 @@ func TestProfileFileWarningListsMissingCertificates(t *testing.T) {
 	for _, want := range []string{
 		"/etc/xray-certs/example.com/example.com.crt",
 		"/etc/xray-certs/example.com/example.com.key",
-		"清空「配置文件」",
+		"自动签发同域名的自签证书",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("warning %q missing %q", got, want)

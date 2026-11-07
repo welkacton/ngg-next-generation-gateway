@@ -72,7 +72,7 @@ func profileFileWarning(content string) string {
 	}
 	sort.Strings(paths)
 	return "绑定的协议配置引用了服务器本地的证书/密钥文件：" + strings.Join(paths, "、") +
-		"。这些文件必须事先存在于节点服务器上，否则脚本会在内核校验阶段中止；若不确定，请清空「配置文件」改用内置 REALITY 模式重新生成脚本。"
+		"。部署脚本会在这些文件缺失时自动签发同域名的自签证书（客户端需允许不安全证书）；若要用真实证书，请先把文件放到节点上的对应路径，再执行脚本。"
 }
 
 func joinWarnings(parts ...string) string {

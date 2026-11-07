@@ -62,8 +62,43 @@ MISSING_FILES="$( { grep -oE '"(certificateFile|keyFile)"[[:space:]]*:[[:space:]
   | sed -E 's/.*"([^"]+)"$/\1/' \
   | while IFS= read -r f; do [ -f "$f" ] || printf '%s ' "$f"; done )"
 MISSING_FILES="${MISSING_FILES%"${MISSING_FILES##*[![:space:]]}"}"
+
+# profile 模式的入站端口由档案决定，面板里填的数据端口只作参考；后面放通和
+# 自检都以档案声明的端口为准，否则 6691 和档案里的 33927/43804 会对不上。
+TLS_SELF_SIGNED=0
+CFG_PORTS="$PORT"
+if [ "$MODE" = "profile" ]; then
+  CFG_PORTS="$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "$CONFIG" | grep -oE '[0-9]+' | awk '$1>0 && $1<65536' | sort -un | tr '\n' ' ')"
+  CFG_PORTS="${CFG_PORTS%"${CFG_PORTS##*[![:space:]]}"}"
+  [ -n "$CFG_PORTS" ] || CFG_PORTS="$PORT"
+  note "档案声明监听的端口：${CFG_PORTS}"
+fi
+
 if [ -n "$MISSING_FILES" ]; then
-  die 6 "配置引用了节点上不存在的证书/密钥文件：${MISSING_FILES}。请先把这些文件放到服务器上，或清空「配置文件」改用内置 REALITY 模式重新生成脚本"
+  if [ "$MODE" != "profile" ]; then
+    die 6 "配置引用了节点上不存在的证书/密钥文件：${MISSING_FILES}。请先把这些文件放到服务器上，或清空「配置文件」改用内置 REALITY 模式重新生成脚本"
+  fi
+  # 档案自带 TLS 入站时，证书本来就是节点侧的事。缺失就签发同域名的自签证书，
+  # 让内核校验能通过；同时用 NOTE 说明客户端需要 allowInsecure 或换真证书。
+  CERT_PAIRS="$(grep -oE '"(certificateFile|keyFile)"[[:space:]]*:[[:space:]]*"[^"]+"' "$CONFIG" \
+    | sed -E 's/.*"([^"]+)"$/\1/' | paste - - )"
+  while IFS="$(printf '\t')" read -r CRT KEYFILE; do
+    [ -n "$CRT" ] || continue
+    [ -n "$KEYFILE" ] || continue
+    if [ -f "$CRT" ] && [ -f "$KEYFILE" ]; then continue; fi
+    mkdir -p "$(dirname "$CRT")" "$(dirname "$KEYFILE")"
+    CN="$(basename "$CRT")"
+    CN="${CN%.*}"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+      -subj "/CN=${CN}" -addext "subjectAltName=DNS:${CN}" \
+      -keyout "$KEYFILE" -out "$CRT" >/dev/null 2>&1 \
+      || die 6 "无法为 ${CN} 生成自签证书（${CRT}）"
+    chmod 600 "$KEYFILE"
+    TLS_SELF_SIGNED=1
+    note "已生成自签证书 ${CRT}（CN=${CN}，3650 天）：客户端需允许不安全证书，或替换为真实证书后重跑脚本"
+  done <<NGG_CERT_PAIRS
+${CERT_PAIRS}
+NGG_CERT_PAIRS
 fi
 ok 6
 
@@ -243,7 +278,7 @@ ok 10
 `
 
 const firewallTpl = `# ---------------------------------------------------------------- 11 放通
-step 11 "放通 TCP ${PORT}（数据）与 TCP ${NODE_PORT}（管理）"
+step 11 "放通 TCP ${CFG_PORTS}（数据）与 TCP ${NODE_PORT}（管理）"
 open_port() {
   p="$1"
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
@@ -261,9 +296,9 @@ open_port() {
     fi
   fi
 }
-open_port "$PORT"
+for p in $CFG_PORTS; do open_port "$p"; done
 open_port "$NODE_PORT"
-note "云服务器安全组需另行放通 TCP ${PORT}；管理端口 ${NODE_PORT} 建议只对面板 IP 开放"
+note "云服务器安全组需另行放通 TCP ${CFG_PORTS}；管理端口 ${NODE_PORT} 建议只对面板 IP 开放"
 ok 11
 
 `
@@ -360,10 +395,12 @@ const selfTestTpl = `# ---------------------------------------------------------
 step 13 "自检：mTLS 调节点 API / 端口监听 / 单元状态"
 sleep 1
 LISTEN=0
-if port_busy "$PORT"; then LISTEN=1; fi
+for p in $CFG_PORTS; do
+  if port_busy "$p"; then LISTEN=1; fi
+done
 if [ "$LISTEN" -ne 1 ]; then
   journalctl -u "$CORE_UNIT" -n 20 --no-pager 2>/dev/null | tail -20 || true
-  die 13 "数据端口 ${PORT} 没有处于监听状态"
+  die 13 "档案声明的端口（${CFG_PORTS}）都没有处于监听状态"
 fi
 API_LISTEN=0
 if port_busy "$NODE_PORT"; then API_LISTEN=1; fi
@@ -396,7 +433,7 @@ ok 13
 CONFIG_SHA="$(sha256sum "$CONFIG" | awk '{print $1}')"
 printf '\n------------------------------------------------------------\n'
 printf '节点已就绪（%s）\n' "$NODE_ID"
-printf '  数据端口 : %s（客户端连接）\n' "$PORT"
+printf '  数据端口 : %s（客户端连接）\n' "$CFG_PORTS"
 printf '  管理端口 : %s（面板以 mTLS 连入，请只对面板 IP 开放）\n' "$NODE_PORT"
 printf '  单元     : %s（内核）/ %s（API）\n' "$CORE_UNIT" "$API_UNIT"
 printf '  内核     : %s\n' "$KERNEL_VERSION"
@@ -408,6 +445,6 @@ printf '管理命令：%s {status|params|api|logs|restart|uninstall}\n' "$NODE_C
 printf '目录配置：%s（配置 0600，清单 0600，节点私钥 0600）\n' "{{NODE_DIR}}"
 printf '下一步  ：回到面板 → 节点管理 → 该节点的部署窗口，点「连接节点并下发配置」\n'
 
-printf 'NGG_NODE_READY node=%s port=%s node_port=%s mode=%s listen=%s api=%s config_sha=%s\n' \
-  "$NODE_ID" "$PORT" "$NODE_PORT" "$MODE" "$LISTEN" "$API_STATE" "$CONFIG_SHA"
+printf 'NGG_NODE_READY node=%s port=%s ports=%s node_port=%s mode=%s listen=%s api=%s tls_self_signed=%s config_sha=%s\n' \
+  "$NODE_ID" "$PORT" "$CFG_PORTS" "$NODE_PORT" "$MODE" "$LISTEN" "$API_STATE" "$TLS_SELF_SIGNED" "$CONFIG_SHA"
 `

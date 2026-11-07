@@ -14,7 +14,7 @@ const (
 	GenerationName  = "第二代 · 本地部署与统一控制台"
 
 	// Release is the product version shown in the UI and on GitHub.
-	Release = "2.13.2"
+	Release = "2.13.3"
 
 	RepoOwner = "welkacton"
 	RepoName  = "ngg-next-generation-gateway"

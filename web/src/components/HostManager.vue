@@ -1075,8 +1075,8 @@ onUnmounted(() => {
               <template v-else>已绑定配置文件 {{ deployProfileId }}（列表加载中）</template>
             </div>
             <div v-if="deployProfileId" class="hint" style="margin-top: 4px; color: #b26a00">
-              自定义档案会原样写入节点：档案里引用的证书 / 密钥文件必须已存在于服务器，
-              否则脚本第 7 步会校验失败。不确定就清空本项，用内置 REALITY 先部署成功。
+              自定义档案会原样写入节点：档案里引用的证书 / 密钥文件若在服务器上不存在，
+              脚本会自动签发同域名的自签证书（客户端需允许不安全证书）。建议先用内置 REALITY 跑通。
             </div>
             <div v-else-if="!deployProfiles.length" class="hint" style="margin-top: 6px">
               还没有可用的配置文件：先到「配置引擎 → 协议配置」新建并保存，再回来绑定。

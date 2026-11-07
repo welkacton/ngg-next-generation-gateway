@@ -247,7 +247,7 @@ func TestScriptContainsEveryStep(t *testing.T) {
 		// The panel dials in; the node never reports out.
 		"https://127.0.0.1:${NODE_PORT}/node/xray/healthcheck",
 		"-listen :${NODE_PORT}",
-		"NGG_NODE_READY node=%s port=%s node_port=%s",
+		"NGG_NODE_READY node=%s port=%s ports=%s",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q", want)
@@ -481,6 +481,32 @@ func TestScriptChecksReferencedCertificateFiles(t *testing.T) {
 		`certificateFile|keyFile`,
 		"配置引用了节点上不存在的证书/密钥文件",
 		"改用内置 REALITY 模式重新生成脚本",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing %q", want)
+		}
+	}
+}
+
+// A profile decides its own listen ports and may reference TLS files that only
+// exist on the node. The script must follow the profile's ports (not the number
+// typed in the panel) and self-sign missing certificates, otherwise the install
+// either aborts at step 6 or fails its port check at step 13.
+func TestScriptFollowsProfilePortsAndSelfSignsCertificates(t *testing.T) {
+	s := mustPrepare(t, Spec{HostID: "01", Address: "50.118.185.194"})
+	script, err := Script(s)
+	if err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	for _, want := range []string{
+		`CFG_PORTS="$(grep -oE '"port"`,
+		`档案声明监听的端口`,
+		`NGG_CERT_PAIRS`,
+		`openssl req -x509`,
+		`TLS_SELF_SIGNED=1`,
+		`for p in $CFG_PORTS; do`,
+		`档案声明的端口（${CFG_PORTS}）都没有处于监听状态`,
+		`tls_self_signed=%s`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q", want)
