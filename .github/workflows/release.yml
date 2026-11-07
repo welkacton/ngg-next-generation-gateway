@@ -240,29 +240,6 @@ jobs:
           ls -lh
           cat SHA256SUMS
 
-      - name: Prune stale assets
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // Earlier builds hashed the Inno Setup intermediate script. Drop
-            // that one stray checksum so SHA256SUMS only lists published files.
-            const { owner, repo } = context.repo;
-            const tag = context.ref.replace('refs/tags/', '');
-            let rel;
-            try {
-              rel = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
-            } catch (e) {
-              // A freshly (re)created tag has no release yet — nothing to prune.
-              if (e.status === 404) { core.info('no existing release; nothing to prune'); return; }
-              throw e;
-            }
-            for (const a of rel.data.assets) {
-              if (a.name === 'NGG.build.iss.sha256') {
-                core.info(`deleting stale asset ${a.name}`);
-                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
-              }
-            }
-
       - uses: softprops/action-gh-release@v2
         with:
           files: |
