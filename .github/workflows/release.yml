@@ -248,8 +248,15 @@ jobs:
             // that one stray checksum so SHA256SUMS only lists published files.
             const { owner, repo } = context.repo;
             const tag = context.ref.replace('refs/tags/', '');
-            const { data: rel } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
-            for (const a of rel.assets) {
+            let rel;
+            try {
+              rel = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            } catch (e) {
+              // A freshly (re)created tag has no release yet — nothing to prune.
+              if (e.status === 404) { core.info('no existing release; nothing to prune'); return; }
+              throw e;
+            }
+            for (const a of rel.data.assets) {
               if (a.name === 'NGG.build.iss.sha256') {
                 core.info(`deleting stale asset ${a.name}`);
                 await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
