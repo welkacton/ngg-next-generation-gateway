@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,12 @@ import (
 // Pushing a config restarts the kernel, so this is not a quick ping.
 const nodeConnectBudget = 60 * time.Second
 
+// nodePort2222Warning is shown on both GET and POST so the caveat survives a
+// regenerated plan. Remnawave's remnanode listens on 2222 by default; pointing
+// NGG's node API at the same port produces a foreign-certificate handshake
+// error that "regenerate the plan" can never fix.
+const nodePort2222Warning = "管理端口 2222 通常已被 Remnawave 的 remnanode 占用。若这台服务器上跑着 Remnawave，请把「管理端口」改成 2244 等空闲端口，再重新生成脚本并在服务器上执行。"
+
 type nodeDeployRequest struct {
 	Mode string `json:"mode"`
 	Port int    `json:"port"`
@@ -59,8 +66,7 @@ func (s *Server) nodeDeployOrErr(w http.ResponseWriter) (*nodedeploy.Store, bool
 // while making it impossible to mistake its script for a usable one.
 type legacyDeployView struct {
 	nodedeploy.View
-	Legacy  bool   `json:"legacy"`
-	Warning string `json:"warning"`
+	Legacy bool `json:"legacy"`
 }
 
 // handleNodeDeploy serves GET (last plan) and POST (render / re-render), and
@@ -93,17 +99,20 @@ func (s *Server) handleNodeDeploy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view := rec.View(true)
+		if rec.Spec.NodePort == 2222 {
+			// Warn BEFORE the operator spends time running the script: on most
+			// VPS that already host Remnawave, remnanode owns 2222 and the panel
+			// would end up talking to the wrong mTLS endpoint.
+			view.Warning = nodePort2222Warning
+		}
 		if rec.Spec.NodePort < 1 {
 			// v2.12 used an outbound probe and had no management port. Handing
 			// that script to the operator would install a node this panel can
 			// never talk to, so hide the script and say what to do instead.
 			view.Script = ""
 			view.LastConnect = nil
-			writeJSON(w, http.StatusOK, legacyDeployView{
-				View:    view,
-				Legacy:  true,
-				Warning: "这是旧版本（SSH / 探针）生成的部署方案，当前面板无法连接。请点「生成安装脚本」重新签发节点证书，然后在服务器上重新执行一次脚本。",
-			})
+			view.Warning = "这是旧版本（SSH / 探针）生成的部署方案，当前面板无法连接。请点「生成安装脚本」重新签发节点证书，然后在服务器上重新执行一次脚本。"
+			writeJSON(w, http.StatusOK, legacyDeployView{View: view, Legacy: true})
 			return
 		}
 		writeJSON(w, http.StatusOK, view)
@@ -137,7 +146,11 @@ func (s *Server) handleNodeDeploy(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "保存部署方案失败: "+err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, rec.View(true))
+		view := rec.View(true)
+		if spec.NodePort == 2222 {
+			view.Warning = nodePort2222Warning
+		}
+		writeJSON(w, http.StatusOK, view)
 
 	case http.MethodDelete:
 		if err := store.Delete(id); err != nil {
@@ -358,6 +371,16 @@ func (s *Server) connectNode(ctx context.Context, rec nodedeploy.Record, pushCon
 	if err != nil {
 		res.Stage = "health"
 		res.Error = friendlyNodeError(err)
+		// On a TLS failure, show the certificate that is ACTUALLY listening on
+		// that port. Seeing "CN=MkLEM48… 签发者=YADMa8Y…" makes it obvious the
+		// panel dialled another product's node API instead of our own.
+		var ne *nodeapi.Error
+		if errors.As(err, &ne) && ne.Kind == nodeapi.KindTLS {
+			if peer := nodeapi.InspectPeer(ctx, rec.Spec.Address, rec.Spec.NodePort); peer != "" {
+				res.Error += "；当前 " + rec.Spec.Address + ":" +
+					strconv.Itoa(rec.Spec.NodePort) + " 上的实际证书：" + peer
+			}
+		}
 		res.DurationMS = time.Since(started).Milliseconds()
 		return res
 	}
@@ -435,6 +458,8 @@ func (s *Server) nodeClient(spec nodedeploy.Spec) (*nodeapi.Client, error) {
 }
 
 // friendlyNodeError keeps the node's own words and adds what to do about them.
+// The advice has to match the failure: telling the operator to "regenerate the
+// plan" when a foreign service owns the port just sends them in circles.
 func friendlyNodeError(err error) string {
 	var ne *nodeapi.Error
 	if !errors.As(err, &ne) {
@@ -444,7 +469,18 @@ func friendlyNodeError(err error) string {
 	case nodeapi.KindUnreachable:
 		return ne.Msg + "。确认脚本已执行完成（nggctl status）、云安全组放通了管理端口"
 	case nodeapi.KindTLS:
-		return ne.Msg + "。重新生成方案并在服务器上重新执行脚本即可换发证书"
+		switch ne.Reason {
+		case nodeapi.ReasonForeignCA:
+			return ne.Msg + "。管理端口多半被其它程序占用了（Remnawave 的 remnanode 默认占用 2222）：把「管理端口」改成空闲端口（例如 2244），重新生成脚本并在服务器上重新执行一次；同时确认脚本已跑完 13 步、ngg-node.service 处于 active"
+		case nodeapi.ReasonCertExpired:
+			return ne.Msg + "。重新生成方案并在服务器上重新执行脚本换发证书，并校准服务器系统时间"
+		case nodeapi.ReasonWrongNode:
+			return ne.Msg + "。核对该地址是否指向这台节点；若节点重装过，重新执行当前方案生成的脚本"
+		case nodeapi.ReasonClientRejected:
+			return ne.Msg + "。服务器上的 ca.crt 与本面板不一致：重新生成方案并在服务器上重新执行脚本"
+		default:
+			return ne.Msg + "。确认脚本已执行完成，或换一个空闲管理端口后重新生成方案并重新执行脚本"
+		}
 	case nodeapi.KindAuth:
 		return ne.Msg + "。重新生成方案并在服务器上重新执行脚本即可恢复面板信任"
 	case nodeapi.KindNode:

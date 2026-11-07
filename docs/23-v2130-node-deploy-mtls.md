@@ -30,7 +30,7 @@ NGG 保留这套**路由、动词、语义、响应包装**，只把运行形态
 | 维度 | Remnawave | NGG v2.13.0 |
 | --- | --- | --- |
 | 节点侧进程 | Docker 容器 `remnanode` | 单个静态 Go 二进制 `ngg-node`（无 Docker） |
-| 传输 | mTLS HTTPS :2222，TLS 1.3 | mTLS HTTPS `NODE_PORT`（默认 2222），TLS 1.2+ |
+| 传输 | mTLS HTTPS :2222，TLS 1.3 | mTLS HTTPS `NODE_PORT`（**默认 2244**，见 §10），TLS 1.2+ |
 | 信任根 | 外部 PKI / 容器注入证书 | 面板自签 ECDSA P-256 CA（`data/nodepki`），按节点签发 |
 | 节点身份 | 容器环境 | 服务端证书 `CN = 节点 ID`，面板把对端 CN 钉死 |
 | 内核 | 同一容器内管理 Xray | 独立 `ngg-core.service`，由 `ngg-node` 通过 systemctl 重启 |
@@ -177,6 +177,7 @@ Release 资产：Windows 安装包 / 独立 `.exe`（一如既往）**加上两�
 | --- | --- |
 | 「该方案是旧版本（SSH / 探针）生成的，没有节点管理端口」 | v2.12 及更早的方案没有 mTLS 材料：点「丢弃方案」→ 重新生成 → **在服务器上重新执行一次脚本** |
 | `unreachable` / 连接超时 | 管理端口没放通，或云安全组没放行；确认 `nggctl status`，并确认面板 IP 在允许列表里 |
+| 「该端口上的服务不是本面板签发的节点」 | **管理端口被别的程序占用**（最常见：Remnawave 的 remnanode 占用 2222）。面板会把该端口上的实际证书 CN / 签发者附在错误里；把方案里的管理端口改成 2244 等空闲端口，重新生成脚本并在服务器上执行一次 |
 | `tls` / 证书 CN 不一致 | 地址指向了别的节点；或服务器上的证书是旧方案签的 → 重新生成方案并重新执行脚本 |
 | `auth` / 401 403 | 客户端证书不是面板签发的；检查 `/etc/ngg/node/` 下的 `ca.crt`、`node.crt` |
 | 连接成功但 `core_active=false` | 看 `nggctl core-logs`；配置 `-test` 通过后仍起不来时，节点会返回 journal 尾部 |
@@ -190,8 +191,32 @@ Release 资产：Windows 安装包 / 独立 `.exe`（一如既往）**加上两�
   这是 Remnawave 模型的固有前提，v2.12 的探针模式能绕过它但已按需求移除。
 - 脚本只支持 systemd 的 Debian / Ubuntu 系；其他发行版在预检阶段明确拒绝。
 - 管理端口默认对所有人开放到 TCP 层（mTLS 会拒绝无证书的握手），**强烈建议**在云安全组里
-  只对面板出口 IP 放行 2222。
+  只对面板出口 IP 放行 2244（或方案里选的管理端口）。
 - 在线部署只支持 `xray-core` 档案；mihomo / sing-box 档案仍走手动配置，API 明确返回 422。
 - 端口放通只处理本机防火墙；iptables 规则不持久化，脚本会提示。
 - CA 私钥在面板本机 `data/nodepki/ca.key`（0600）。**备份它**；丢了只能重新生成方案并逐台重部署。
 - 不再有「节点主动上报」，因此面板离线期间节点指标不会被补录；重新上线后由下一轮 30 s 轮询补齐当前值。
+
+
+---
+
+## 10. v2.13.1 · 管理端口冲突与可诊断的失败
+
+真实现场：一台 VPS 上本来就跑着 Remnawave，`remnanode` 占有 **2222**。
+按上游默认值给 NGG 也配 2222 时，面板连过去拿到的是 remnanode 的 mTLS 证书
+（`CN=MkLEM48…`，签发者 `YADMa8Y…`），旧版只回一句笼统的
+「证书不匹配或已过期，重新生成方案并部署即可」—— 用户反复重新生成方案也不可能解决端口被占。
+
+v2.13.1 的改动：
+
+| 项 | 说明 |
+| --- | --- |
+| 默认管理端口 | `2222` → **`2244`**（`nodeapi.DefaultPort` / `nodedeploy.DefaultNodePort` / `ngg-node -listen` / 前端一致）。上游仍可用 2222，NGG 不再与它撞车 |
+| 事前提醒 | 方案里仍用 2222 时，GET/POST `/deploy` 返回 `warning`，弹窗在生成脚本前就提示换端口 |
+| 脚本预检 | 管理端口被非 NGG 进程占用时，报错直接点名「2222 通常已被 Remnawave remnanode 占用」并给出 2244 建议 |
+| 错误分类 | `nodeapi.classify()` 区分 `foreign-ca` / `cert-expired` / `wrong-node` / `client-rejected`，`friendlyNodeError()` 按原因给不同处置，不再一律叫用户重新生成方案 |
+| 对端证书诊断 | 连接握 TLS 失败时，`nodeapi.InspectPeer()` 以只读方式读出该端口实际证书的 CN / 签发者 / 有效期并附在错误里，一眼看出连错了服务 |
+| 内核校验超时 | 第 7 步 `xray run -test` 加 45 秒 `timeout`；之前配置卡住会让整个安装停在 step 7 且没有任何输出 |
+
+> 已经用 2222 生成过方案的节点不会自动换端口：在弹窗里把「管理端口」改成 2244，
+> 点「生成安装脚本」，然后在服务器上重新执行一次脚本即可。不要用停掉其它面板服务的方式腾端口。

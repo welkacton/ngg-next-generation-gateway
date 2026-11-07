@@ -527,7 +527,7 @@ const DEPLOY_MODE_OPTIONS: Array<{ label: string; value: api.NodeDeployMode }> =
 const deployMode = ref<api.NodeDeployMode>('reality')
 const deployPort = ref<number | null>(443)
 /** 管理端口：面板连入这个端口，与客户端用的数据端口分开。 */
-const deployNodePort = ref<number | null>(2222)
+const deployNodePort = ref<number | null>(2244)
 const deploySni = ref('')
 const deployPlan = ref<api.NodeDeployView | null>(null)
 const nodeStatus = ref<api.NodeStatusResponse | null>(null)
@@ -562,7 +562,7 @@ function openDeploy(h: HostView): void {
   deployProfileId.value = h.profile || null
   deployMode.value = 'reality'
   deployPort.value = h.node_port || 443
-  deployNodePort.value = 2222
+  deployNodePort.value = 2244
   deploySni.value = ''
   deployPlan.value = null
   nodeStatus.value = null
@@ -1036,8 +1036,8 @@ onUnmounted(() => {
           面板生成安装脚本 → 在服务器上以 root 执行一次 → 面板用双向 TLS 连入节点：下发内核配置、读取真实指标。
           不需要 SSH，也不需要节点能访问面板；面板只需要能连上节点的管理端口。
         </div>
-        <NAlert v-if="deployLegacy" type="warning" :bordered="false">
-          {{ deployPlan?.warning || '旧版本方案已作废，请重新生成安装脚本并在服务器上重新执行。' }}
+        <NAlert v-if="deployPlan?.warning" :type="deployLegacy ? 'warning' : 'info'" :bordered="false">
+          {{ deployPlan.warning }}
         </NAlert>
 
         <!-- 1 方案 -->
@@ -1092,7 +1092,7 @@ onUnmounted(() => {
               <div class="kv-label">管理端口（面板连入）</div>
               <NInputNumber v-model:value="deployNodePort" size="small" :min="1" :max="65535" style="width: 100%" />
               <div class="hint" style="margin-top: 4px">
-                对应 Remnawave 的 NODE_PORT，默认 2222；只对面板 IP 开放
+                默认 2244；2222 常被 Remnawave remnanode 占用，冲突时换空闲端口；只对面板 IP 开放
               </div>
             </NGi>
           </NGrid>

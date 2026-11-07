@@ -4,7 +4,7 @@
 // minimum, per-node certificate issued by the panel).
 //
 // Why certificates instead of the SECRET_KEY in the docker-compose docs: the
-// node API listens on a port the whole internet can reach (NODE_PORT, 2222).
+// node API listens on a port the whole internet can reach (NODE_PORT, 2244).
 // A shared secret in a URL query/header is replayable by anyone who reads one
 // packet, and it is the same string for every node. Certificates make each
 // node's identity distinct, keep the panel's credential off the wire, and let

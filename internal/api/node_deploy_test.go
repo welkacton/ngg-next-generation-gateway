@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ngg-project/ngg/internal/nodeapi"
 	"github.com/ngg-project/ngg/internal/nodedeploy"
 	"github.com/ngg-project/ngg/internal/nodepki"
 )
@@ -50,7 +51,7 @@ func TestNodeClientWorksAfterStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connecting a persisted plan must work: %v", err)
 	}
-	if got, want := client.BaseURL(), "https://127.0.0.1:2222"; got != want {
+	if got, want := client.BaseURL(), "https://127.0.0.1:2244"; got != want {
 		t.Fatalf("base URL = %q, want %q", got, want)
 	}
 }
@@ -93,5 +94,23 @@ func TestLegacyScriptIsNotDownloadable(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "ngg-probe.service") {
 		t.Fatal("legacy script leaked through the download endpoint")
+	}
+}
+
+// The advice must match the diagnosis: a foreign certificate means "change the
+// management port", not "regenerate the plan" (which cannot free a port).
+func TestFriendlyNodeErrorPointsAtPortCollision(t *testing.T) {
+	got := friendlyNodeError(&nodeapi.Error{
+		Kind:   nodeapi.KindTLS,
+		Reason: nodeapi.ReasonForeignCA,
+		Msg:    "该端口上的服务不是本面板签发的节点",
+	})
+	for _, want := range []string{"2244", "remnanode", "重新执行"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("advice %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "重新生成方案并在服务器上重新执行脚本即可换发证书") {
+		t.Fatal("generic 'regenerate the plan' advice must not be used for a port collision")
 	}
 }

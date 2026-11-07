@@ -56,10 +56,23 @@ ok 6
 
 # ---------------------------------------------------------------- 7 校验
 step 7 "用内核校验配置"
-TEST_OUT="$("$KERNEL_BIN" run -test -config "$CONFIG" 2>&1)" || {
+# A -test run that hangs used to leave the whole install stuck here forever with
+# no output at all, which looks exactly like a broken deploy. Bound it and say
+# which config failed, so the operator can see the kernel's complaint.
+if command -v timeout >/dev/null 2>&1; then
+  TEST_OUT="$(timeout 45 "$KERNEL_BIN" run -test -config "$CONFIG" 2>&1)"
+  TEST_RC=$?
+else
+  TEST_OUT="$("$KERNEL_BIN" run -test -config "$CONFIG" 2>&1)"
+  TEST_RC=$?
+fi
+if [ "$TEST_RC" -ne 0 ]; then
   printf '%s\n' "$TEST_OUT" | tail -8
-  die 7 "配置校验未通过（见上方内核输出）"
-}
+  if [ "$TEST_RC" -eq 124 ]; then
+    die 7 "内核校验超时（45 秒）：配置里可能有需要联网/加载大文件的规则，或内核本身卡住"
+  fi
+  die 7 "配置校验未通过（见上方内核输出）：可在面板里改用默认 REALITY 模式，或修正「协议配置」文件内容后重新生成脚本"
+fi
 log "校验通过：$(printf '%s' "$TEST_OUT" | tail -1)"
 ok 7
 

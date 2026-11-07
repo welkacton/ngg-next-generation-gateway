@@ -16,6 +16,7 @@ package nodeapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,9 +30,12 @@ import (
 	"github.com/ngg-project/ngg/internal/nodepki"
 )
 
-// DefaultPort is the node API port — Remnawave's NODE_PORT default. It is the
-// port ngg-node listens on and the port the panel dials.
-const DefaultPort = 2222
+// DefaultPort is the node API port (NODE_PORT). Remnawave itself defaults to
+// 2222, but that port is very often already taken by remnanode on the very VPS
+// an operator is adding — pointing NGG at it produces a baffling "certificate
+// mismatch" because the panel is then talking to another product's mTLS API.
+// 2244 keeps the shape of the upstream contract without colliding with it.
+const DefaultPort = 2244
 
 // Timeouts: health and stats are cheap, start has to validate the config with
 // the kernel and restart the unit, which on a 1-vCPU VPS takes seconds.
@@ -60,11 +64,24 @@ const (
 	KindProtocol Kind = "protocol"
 )
 
+// TLS failure reasons. A handshake failure is not one problem: a port taken
+// by another mTLS product, an expired certificate and a wrong node id need
+// three completely different fixes. Keeping the reason lets the console give
+// the actionable one instead of a generic "regenerate the plan".
+const (
+	ReasonForeignCA      = "foreign-ca"      // server cert is not signed by our CA
+	ReasonCertExpired    = "cert-expired"    // our cert, but outside its validity
+	ReasonWrongNode      = "wrong-node"      // our CA, but a different node id
+	ReasonClientRejected = "client-rejected" // server refused the panel cert
+	ReasonOtherTLS       = "other-tls"
+)
+
 // Error carries the classification plus a message that is safe to show.
 type Error struct {
-	Kind Kind
-	Msg  string
-	Err  error
+	Kind   Kind
+	Reason string
+	Msg    string
+	Err    error
 }
 
 func (e *Error) Error() string {
@@ -77,6 +94,8 @@ func (e *Error) Error() string {
 func (e *Error) Unwrap() error { return e.Err }
 
 func newErr(kind Kind, msg string, err error) *Error { return &Error{Kind: kind, Msg: msg, Err: err} }
+
+func (e *Error) withReason(reason string) *Error { e.Reason = reason; return e }
 
 // Endpoint is everything needed to reach one node.
 type Endpoint struct {
@@ -249,6 +268,11 @@ func (c *Client) call(ctx context.Context, method, path string, body []byte, tim
 }
 
 // classify turns transport errors into something an operator can act on.
+//
+// A TLS error used to be reported as "证书不匹配或已过期，重新生成方案" no
+// matter what happened. That is actively harmful when the management port is
+// occupied by a DIFFERENT product (very common: Remnawave's remnanode owns
+// 2222): regenerating the plan a hundred times cannot fix a port collision.
 func classify(err error) *Error {
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
@@ -256,11 +280,28 @@ func classify(err error) *Error {
 	}
 	msg := err.Error()
 	switch {
+	case strings.Contains(msg, "unknown authority"),
+		strings.Contains(msg, "unknown certificate authority"),
+		strings.Contains(msg, "self-signed certificate in certificate chain"):
+		return newErr(KindTLS, "该端口上的服务不是本面板签发的节点（服务端证书由其它 CA 签发）", err).
+			withReason(ReasonForeignCA)
+	case strings.Contains(msg, "has expired"),
+		strings.Contains(msg, "not yet valid"),
+		strings.Contains(msg, "certificate expired"):
+		return newErr(KindTLS, "节点证书已过期或尚未生效（检查服务器时间）", err).
+			withReason(ReasonCertExpired)
+	case strings.Contains(msg, "与期望的"),
+		strings.Contains(msg, "节点证书 CN="):
+		return newErr(KindTLS, "该地址上的节点证书属于另一台节点", err).
+			withReason(ReasonWrongNode)
 	case strings.Contains(msg, "certificate required"),
 		strings.Contains(msg, "bad certificate"),
-		strings.Contains(msg, "unknown certificate"),
-		strings.Contains(msg, "tls:"):
-		return newErr(KindTLS, "与节点握手失败：证书不匹配或已过期，重新生成方案并部署即可", err)
+		strings.Contains(msg, "client didn't provide a certificate"):
+		return newErr(KindTLS, "节点拒绝了面板的客户端证书（节点装的是别的面板签发的 CA）", err).
+			withReason(ReasonClientRejected)
+	case strings.Contains(msg, "tls:"):
+		return newErr(KindTLS, "与节点 TLS 握手失败（证书或协议不匹配）", err).
+			withReason(ReasonOtherTLS)
 	case strings.Contains(msg, "no such host"):
 		return newErr(KindUnreachable, "节点地址无法解析", err)
 	case strings.Contains(msg, "connection refused"):
@@ -269,6 +310,45 @@ func classify(err error) *Error {
 		return newErr(KindUnreachable, "连接节点超时：确认安全组 / 防火墙放通了管理端口", err)
 	}
 	return newErr(KindUnreachable, "无法连接节点", err)
+}
+
+// InspectPeer reports the certificate actually served on address:port, even
+// when it is not ours. It is DIAGNOSTIC ONLY: verification is skipped on
+// purpose because we are reading an unauthenticated endpoint's identity, not
+// trusting it. A server that demands a client certificate still sends its own
+// certificate before rejecting us, so we ignore the handshake error and read
+// whatever peer certificates arrived.
+func InspectPeer(ctx context.Context, address string, port int) string {
+	if strings.TrimSpace(address) == "" || port < 1 || port > 65535 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	addr := net.JoinHostPort(address, strconv.Itoa(port))
+	raw, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return ""
+	}
+	defer raw.Close()
+	_ = raw.SetDeadline(time.Now().Add(4 * time.Second))
+	conn := tls.Client(raw, &tls.Config{
+		// #nosec G402 -- read-only diagnosis of a foreign certificate; no trust decision.
+		InsecureSkipVerify: true,
+		ServerName:         address,
+		MinVersion:         tls.VersionTLS12,
+	})
+	_ = conn.HandshakeContext(ctx)
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return ""
+	}
+	c := certs[0]
+	issuer := c.Issuer.CommonName
+	if issuer == "" {
+		issuer = c.Issuer.String()
+	}
+	return fmt.Sprintf("CN=%s，签发者=%s，有效期至 %s",
+		c.Subject.CommonName, issuer, c.NotAfter.UTC().Format("2006-01-02"))
 }
 
 func firstNonEmpty(vals ...string) string {

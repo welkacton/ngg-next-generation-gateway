@@ -7,7 +7,7 @@
 //	node = a container running xray    node = ngg-node (control API) + a
 //	plus the node API                  separate ngg-core.service running xray
 //	panel → node over mutual TLS on    panel → node over mutual TLS on
-//	NODE_PORT (2222)                   NODE_PORT (2222), certificates issued by
+//	NODE_PORT (2222)                   NODE_PORT (2244), certificates issued by
 //	                                   the panel's own CA (internal/nodepki)
 //	node identity = certificate        node identity = certificate CN = node id,
 //	                                   pinned by the panel on every dial
@@ -73,9 +73,10 @@ const (
 	// host is a bare IP (an IP cannot be a TLS server name).
 	DefaultSNIForTLS = "www.bing.com"
 
-	// DefaultNodePort is the node API port (Remnawave's NODE_PORT default).
-	// It is the ONE port the panel dials into.
-	DefaultNodePort = 2222
+	// DefaultNodePort is the node API port. Remnawave defaults to 2222, but
+	// remnanode usually already owns that port on a VPS; NGG uses 2244 so the
+	// two control planes can coexist. It is the ONE port the panel dials into.
+	DefaultNodePort = 2244
 
 	// NodeDir is the node's own directory on the server. It is deliberately NOT
 	// /usr/local/etc/xray: a machine may already run another panel's Xray, and

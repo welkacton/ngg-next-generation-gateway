@@ -1,6 +1,6 @@
 // Command ngg-node is the node-side control daemon (Linux).
 //
-//	ngg-node -listen :2222 -cert /etc/ngg/node/node.crt -key /etc/ngg/node/node.key \
+//	ngg-node -listen :2244 -cert /etc/ngg/node/node.crt -key /etc/ngg/node/node.key \
 //	         -ca /etc/ngg/node/ca.crt -kernel /usr/local/bin/ngg-xray \
 //	         -config /etc/ngg/xray/config.json -core-unit ngg-core.service
 //
@@ -20,7 +20,7 @@ import (
 
 func main() {
 	var (
-		listen    = flag.String("listen", ":2222", "节点 API 监听地址（NODE_PORT）")
+		listen    = flag.String("listen", ":2244", "节点 API 监听地址（NODE_PORT）")
 		certFile  = flag.String("cert", "/etc/ngg/node/node.crt", "节点证书（PEM）")
 		keyFile   = flag.String("key", "/etc/ngg/node/node.key", "节点私钥（PEM，0600）")
 		caFile    = flag.String("ca", "/etc/ngg/node/ca.crt", "面板 CA 证书（PEM）")

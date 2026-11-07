@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ngg-project/ngg/internal/nodeapi"
 	"github.com/ngg-project/ngg/internal/nodepki"
 )
 
@@ -430,5 +431,39 @@ func TestShareURIUsesReadableFragment(t *testing.T) {
 	}
 	if !strings.Contains(uri, "security=reality") || !strings.Contains(uri, s.RealityPublic) {
 		t.Fatalf("uri missing reality parameters: %s", uri)
+	}
+}
+
+// Remnawave's remnanode listens on 2222 by default. If NGG used the same port,
+// a VPS running both products would always fail the mTLS handshake against the
+// wrong service, so the defaults must stay apart.
+func TestDefaultNodePortAvoidsRemnawave(t *testing.T) {
+	if DefaultNodePort == 2222 {
+		t.Fatal("default node port must not collide with remnanode's 2222")
+	}
+	if DefaultNodePort != nodeapi.DefaultPort {
+		t.Fatalf("nodedeploy default %d != nodeapi default %d", DefaultNodePort, nodeapi.DefaultPort)
+	}
+}
+
+// A hung `xray run -test` used to leave the install sitting at step 7 with no
+// output at all, which is exactly what an operator reported. It must be bounded
+// with a readable failure, and a busy management port must name the cause.
+func TestScriptBoundsKernelValidationAndExplainsPortCollision(t *testing.T) {
+	s := mustPrepare(t, Spec{HostID: "01", Address: "50.118.185.194"})
+	script, err := Script(s)
+	if err != nil {
+		t.Fatalf("Script: %v", err)
+	}
+	for _, want := range []string{
+		"timeout 45",
+		"内核校验超时（45 秒）",
+		"改用默认 REALITY 模式",
+		"2222 通常已被 Remnawave remnanode 占用",
+		"把管理端口改为 2244",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing %q", want)
+		}
 	}
 }

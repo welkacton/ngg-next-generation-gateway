@@ -59,6 +59,9 @@ type View struct {
 	GeneratedAt time.Time      `json:"generated_at"`
 	LastConnect *ConnectResult `json:"last_connect,omitempty"`
 	Params      []string       `json:"params"`
+	// Warning is an operator-facing caveat about this plan (for example a
+	// management port that is usually occupied by another product).
+	Warning string `json:"warning,omitempty"`
 }
 
 // View builds the browser-safe projection.

@@ -286,6 +286,10 @@ const preambleTpl = `#!/usr/bin/env bash
 # 生成时间  : {{GENERATED_AT}}
 # 生成版本  : NGG {{NGG_VERSION}}
 #
+# 注意：2222 通常已被 Remnawave 的 remnanode 占用。若本脚本在「预检」阶段
+#       报管理端口被占用，请回面板把管理端口改成 2244 等空闲端口，重新生成
+#       脚本后再执行；不要去停止其它面板的服务。
+#
 # 架构（与 Remnawave 的 panel ↔ node 一致）
 #   面板 → 节点：双向 TLS 调 https://{{ADDRESS}}:{{NODE_PORT}}/node/*
 #                 下发配置 POST /node/xray/start、读取指标 GET /node/stats/get-system-stats
@@ -375,7 +379,12 @@ if port_busy "$NODE_PORT"; then
     note "管理端口 ${NODE_PORT} 当前由 ${API_UNIT} 占用，将重启该单元"
   else
     OWNER="$(ss -lntpH 2>/dev/null | awk -v p=":${NODE_PORT}" '$4 ~ p"$" {print $6; exit}')"
-    die 1 "管理端口 ${NODE_PORT} 已被其它进程占用${OWNER:+（$OWNER）}，请换管理端口"
+    if [ "$NODE_PORT" = "2222" ]; then
+      HINT="（2222 通常已被 Remnawave remnanode 占用）"
+    else
+      HINT=""
+    fi
+    die 1 "管理端口 ${NODE_PORT} 已被其它进程占用${OWNER:+（$OWNER）}${HINT}：请在面板部署方案里把管理端口改为 2244 等空闲端口，重新生成脚本后再执行"
   fi
 fi
 

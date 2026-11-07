@@ -60,7 +60,7 @@ const (
 
 // Config is the daemon's runtime configuration (all flags, see cmd/ngg-node).
 type Config struct {
-	Listen       string // ":2222"
+	Listen       string // ":2244"
 	CertFile     string // node certificate (PEM)
 	KeyFile      string // node private key (PEM)
 	CAFile       string // panel CA (PEM)
@@ -90,7 +90,7 @@ func New(cfg Config) (*Service, error) {
 		cfg.Logger = log.New(os.Stderr, "ngg-node ", log.LstdFlags|log.LUTC)
 	}
 	if cfg.Listen == "" {
-		cfg.Listen = ":2222"
+		cfg.Listen = ":2244"
 	}
 	certPEM, err := os.ReadFile(cfg.CertFile)
 	if err != nil {
